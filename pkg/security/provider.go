@@ -3,7 +3,6 @@ package security
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -47,45 +46,38 @@ func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Typ
 	return str
 }
 
-// Callback function types for customizing security behavior
-type (
-	// AuthenticateFunc extracts user ID and roles from HTTP request
-	// Return userID, roles, error. If error is not nil, request will be rejected.
-	AuthenticateFunc func(r *http.Request) (userID int, roles string, err error)
-
-	// LoadColumnSecurityFunc loads column security rules for a user and entity
-	// Override this to customize how column security is loaded from your data source
-	LoadColumnSecurityFunc func(pUserID int, pSchema, pTablename string) ([]ColumnSecurity, error)
-
-	// LoadRowSecurityFunc loads row security rules for a user and entity
-	// Override this to customize how row security is loaded from your data source
-	LoadRowSecurityFunc func(pUserID int, pSchema, pTablename string) (RowSecurity, error)
-)
-
+// SecurityList manages security state and caching
+// It wraps a SecurityProvider and provides caching and utility methods
 type SecurityList struct {
+	provider SecurityProvider
+
 	ColumnSecurityMutex sync.RWMutex
 	ColumnSecurity      map[string][]ColumnSecurity
 	RowSecurityMutex    sync.RWMutex
 	RowSecurity         map[string]RowSecurity
-
-	// Overridable callbacks
-	AuthenticateCallback       AuthenticateFunc
-	LoadColumnSecurityCallback LoadColumnSecurityFunc
-	LoadRowSecurityCallback    LoadRowSecurityFunc
 }
+
+// NewSecurityList creates a new security list with the given provider
+func NewSecurityList(provider SecurityProvider) *SecurityList {
+	if provider == nil {
+		panic("security provider cannot be nil")
+	}
+
+	return &SecurityList{
+		provider:       provider,
+		ColumnSecurity: make(map[string][]ColumnSecurity),
+		RowSecurity:    make(map[string]RowSecurity),
+	}
+}
+
+// Provider returns the underlying security provider
+func (m *SecurityList) Provider() SecurityProvider {
+	return m.provider
+}
+
 type CONTEXT_KEY string
 
 const SECURITY_CONTEXT_KEY CONTEXT_KEY = "SecurityList"
-
-var GlobalSecurity SecurityList
-
-// SetSecurityMiddleware adds security context to requests
-func SetSecurityMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), SECURITY_CONTEXT_KEY, &GlobalSecurity)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
 
 func maskString(pString string, maskStart, maskEnd int, maskChar string, invert bool) string {
 	strLen := len(pString)
@@ -372,10 +364,9 @@ func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType refl
 	return records, nil
 }
 
-func (m *SecurityList) LoadColumnSecurity(pUserID int, pSchema, pTablename string, pOverwrite bool) error {
-	// Use the callback if provided
-	if m.LoadColumnSecurityCallback == nil {
-		return fmt.Errorf("LoadColumnSecurityCallback not set - you must provide a callback function")
+func (m *SecurityList) LoadColumnSecurity(ctx context.Context, pUserID int, pSchema, pTablename string, pOverwrite bool) error {
+	if m.provider == nil {
+		return fmt.Errorf("security provider not set")
 	}
 
 	m.ColumnSecurityMutex.Lock()
@@ -390,10 +381,10 @@ func (m *SecurityList) LoadColumnSecurity(pUserID int, pSchema, pTablename strin
 		m.ColumnSecurity[secKey] = make([]ColumnSecurity, 0)
 	}
 
-	// Call the user-provided callback to load security rules
-	colSecList, err := m.LoadColumnSecurityCallback(pUserID, pSchema, pTablename)
+	// Call the provider to load security rules
+	colSecList, err := m.provider.GetColumnSecurity(ctx, pUserID, pSchema, pTablename)
 	if err != nil {
-		return fmt.Errorf("LoadColumnSecurityCallback failed: %v", err)
+		return fmt.Errorf("GetColumnSecurity failed: %v", err)
 	}
 
 	m.ColumnSecurity[secKey] = colSecList
@@ -422,10 +413,9 @@ func (m *SecurityList) ClearSecurity(pUserID int, pSchema, pTablename string) er
 	return nil
 }
 
-func (m *SecurityList) LoadRowSecurity(pUserID int, pSchema, pTablename string, pOverwrite bool) (RowSecurity, error) {
-	// Use the callback if provided
-	if m.LoadRowSecurityCallback == nil {
-		return RowSecurity{}, fmt.Errorf("LoadRowSecurityCallback not set - you must provide a callback function")
+func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserID int, pSchema, pTablename string, pOverwrite bool) (RowSecurity, error) {
+	if m.provider == nil {
+		return RowSecurity{}, fmt.Errorf("security provider not set")
 	}
 
 	m.RowSecurityMutex.Lock()
@@ -436,10 +426,10 @@ func (m *SecurityList) LoadRowSecurity(pUserID int, pSchema, pTablename string, 
 	}
 	secKey := fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)
 
-	// Call the user-provided callback to load security rules
-	record, err := m.LoadRowSecurityCallback(pUserID, pSchema, pTablename)
+	// Call the provider to load security rules
+	record, err := m.provider.GetRowSecurity(ctx, pUserID, pSchema, pTablename)
 	if err != nil {
-		return RowSecurity{}, fmt.Errorf("LoadRowSecurityCallback failed: %v", err)
+		return RowSecurity{}, fmt.Errorf("GetRowSecurity failed: %v", err)
 	}
 
 	m.RowSecurity[secKey] = record

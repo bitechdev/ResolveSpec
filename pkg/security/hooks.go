@@ -13,25 +13,25 @@ func RegisterSecurityHooks(handler *restheadspec.Handler, securityList *Security
 
 	// Hook 1: BeforeRead - Load security rules
 	handler.Hooks().Register(restheadspec.BeforeRead, func(hookCtx *restheadspec.HookContext) error {
-		return loadSecurityRules(hookCtx, securityList)
+		return LoadSecurityRules(hookCtx, securityList)
 	})
 
 	// Hook 2: BeforeScan - Apply row-level security filters
 	handler.Hooks().Register(restheadspec.BeforeScan, func(hookCtx *restheadspec.HookContext) error {
-		return applyRowSecurity(hookCtx, securityList)
+		return ApplyRowSecurity(hookCtx, securityList)
 	})
 
 	// Hook 3: AfterRead - Apply column-level security (masking)
 	handler.Hooks().Register(restheadspec.AfterRead, func(hookCtx *restheadspec.HookContext) error {
-		return applyColumnSecurity(hookCtx, securityList)
+		return ApplyColumnSecurity(hookCtx, securityList)
 	})
 
 	// Hook 4 (Optional): Audit logging
-	handler.Hooks().Register(restheadspec.AfterRead, logDataAccess)
+	handler.Hooks().Register(restheadspec.AfterRead, LogDataAccess)
 }
 
-// loadSecurityRules loads security configuration for the user and entity
-func loadSecurityRules(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
+// LoadSecurityRules loads security configuration for the user and entity
+func LoadSecurityRules(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
 	// Extract user ID from context
 	userID, ok := GetUserID(hookCtx.Context)
 	if !ok {
@@ -44,16 +44,16 @@ func loadSecurityRules(hookCtx *restheadspec.HookContext, securityList *Security
 
 	logger.Debug("Loading security rules for user=%d, schema=%s, table=%s", userID, schema, tablename)
 
-	// Load column security rules from database
-	err := securityList.LoadColumnSecurity(userID, schema, tablename, false)
+	// Load column security rules using the provider
+	err := securityList.LoadColumnSecurity(hookCtx.Context, userID, schema, tablename, false)
 	if err != nil {
 		logger.Warn("Failed to load column security: %v", err)
 		// Don't fail the request if no security rules exist
 		// return err
 	}
 
-	// Load row security rules from database
-	_, err = securityList.LoadRowSecurity(userID, schema, tablename, false)
+	// Load row security rules using the provider
+	_, err = securityList.LoadRowSecurity(hookCtx.Context, userID, schema, tablename, false)
 	if err != nil {
 		logger.Warn("Failed to load row security: %v", err)
 		// Don't fail the request if no security rules exist
@@ -63,8 +63,8 @@ func loadSecurityRules(hookCtx *restheadspec.HookContext, securityList *Security
 	return nil
 }
 
-// applyRowSecurity applies row-level security filters to the query
-func applyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
+// ApplyRowSecurity applies row-level security filters to the query
+func ApplyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
 	userID, ok := GetUserID(hookCtx.Context)
 	if !ok {
 		return nil // No user context, skip
@@ -130,8 +130,8 @@ func applyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityL
 	return nil
 }
 
-// applyColumnSecurity applies column-level security (masking/hiding) to results
-func applyColumnSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
+// ApplyColumnSecurity applies column-level security (masking/hiding) to results
+func ApplyColumnSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
 	userID, ok := GetUserID(hookCtx.Context)
 	if !ok {
 		return nil // No user context, skip
@@ -175,8 +175,8 @@ func applyColumnSecurity(hookCtx *restheadspec.HookContext, securityList *Securi
 	return nil
 }
 
-// logDataAccess logs all data access for audit purposes
-func logDataAccess(hookCtx *restheadspec.HookContext) error {
+// LogDataAccess logs all data access for audit purposes
+func LogDataAccess(hookCtx *restheadspec.HookContext) error {
 	userID, _ := GetUserID(hookCtx.Context)
 
 	logger.Info("AUDIT: User %d accessed %s.%s with filters: %+v",

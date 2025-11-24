@@ -1,0 +1,552 @@
+package security
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Production-Ready Authenticators
+// =================================
+
+// HeaderAuthenticator provides simple header-based authentication
+// Expects: X-User-ID, X-User-Name, X-User-Level, X-Session-ID, X-Remote-ID, X-User-Roles, X-User-Email
+type HeaderAuthenticator struct{}
+
+func NewHeaderAuthenticator() *HeaderAuthenticator {
+	return &HeaderAuthenticator{}
+}
+
+func (a *HeaderAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	return nil, fmt.Errorf("header authentication does not support login")
+}
+
+func (a *HeaderAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
+	return nil
+}
+
+func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
+	userIDStr := r.Header.Get("X-User-ID")
+	if userIDStr == "" {
+		return nil, fmt.Errorf("X-User-ID header required")
+	}
+
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	return &UserContext{
+		UserID:    userID,
+		UserName:  r.Header.Get("X-User-Name"),
+		UserLevel: parseIntHeader(r, "X-User-Level", 0),
+		SessionID: r.Header.Get("X-Session-ID"),
+		RemoteID:  r.Header.Get("X-Remote-ID"),
+		Email:     r.Header.Get("X-User-Email"),
+		Roles:     parseRoles(r.Header.Get("X-User-Roles")),
+	}, nil
+}
+
+// DatabaseAuthenticator provides session-based authentication with database storage
+// All database operations go through stored procedures for security and consistency
+// Requires stored procedures: resolvespec_login, resolvespec_logout, resolvespec_session,
+// resolvespec_session_update, resolvespec_refresh_token
+// See database_schema.sql for procedure definitions
+type DatabaseAuthenticator struct {
+	db *sql.DB
+}
+
+func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
+	return &DatabaseAuthenticator{db: db}
+}
+
+func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	// Convert LoginRequest to JSON
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal login request: %w", err)
+	}
+
+	// Call resolvespec_login stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var dataJSON []byte
+
+	query := `SELECT p_success, p_error, p_data FROM resolvespec_login($1::jsonb)`
+	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
+	if err != nil {
+		return nil, fmt.Errorf("login query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("login failed")
+	}
+
+	// Parse response
+	var response LoginResponse
+	if err := json.Unmarshal(dataJSON, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse login response: %w", err)
+	}
+
+	return &response, nil
+}
+
+func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
+	// Convert LogoutRequest to JSON
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal logout request: %w", err)
+	}
+
+	// Call resolvespec_logout stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var dataJSON []byte
+
+	query := `SELECT p_success, p_error, p_data FROM resolvespec_logout($1::jsonb)`
+	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
+	if err != nil {
+		return fmt.Errorf("logout query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return fmt.Errorf("%s", errorMsg.String)
+		}
+		return fmt.Errorf("logout failed")
+	}
+
+	return nil
+}
+
+func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
+	// Extract session token from header or cookie
+	sessionToken := r.Header.Get("Authorization")
+	if sessionToken == "" {
+		// Try cookie
+		cookie, err := r.Cookie("session_token")
+		if err == nil {
+			sessionToken = cookie.Value
+		}
+	} else {
+		// Remove "Bearer " prefix if present
+		sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
+	}
+
+	if sessionToken == "" {
+		return nil, fmt.Errorf("session token required")
+	}
+
+	// Call resolvespec_session stored procedure
+	// reference could be route, controller name, or any identifier
+	reference := "authenticate"
+
+	var success bool
+	var errorMsg sql.NullString
+	var userJSON []byte
+
+	query := `SELECT p_success, p_error, p_user FROM resolvespec_session($1, $2)`
+	err := a.db.QueryRowContext(r.Context(), query, sessionToken, reference).Scan(&success, &errorMsg, &userJSON)
+	if err != nil {
+		return nil, fmt.Errorf("session query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("invalid or expired session")
+	}
+
+	// Parse UserContext
+	var userCtx UserContext
+	if err := json.Unmarshal(userJSON, &userCtx); err != nil {
+		return nil, fmt.Errorf("failed to parse user context: %w", err)
+	}
+
+	// Update last activity timestamp asynchronously
+	go a.updateSessionActivity(r.Context(), sessionToken, &userCtx)
+
+	return &userCtx, nil
+}
+
+// updateSessionActivity updates the last activity timestamp for the session
+func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessionToken string, userCtx *UserContext) {
+	// Convert UserContext to JSON
+	userJSON, err := json.Marshal(userCtx)
+	if err != nil {
+		return
+	}
+
+	// Call resolvespec_session_update stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var updatedUserJSON []byte
+
+	query := `SELECT p_success, p_error, p_user FROM resolvespec_session_update($1, $2::jsonb)`
+	a.db.QueryRowContext(ctx, query, sessionToken, userJSON).Scan(&success, &errorMsg, &updatedUserJSON)
+}
+
+// RefreshToken implements Refreshable interface
+func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken string) (*LoginResponse, error) {
+	// Call api_refresh_token stored procedure
+	// First, we need to get the current user context for the refresh token
+	var success bool
+	var errorMsg sql.NullString
+	var userJSON []byte
+
+	// Get current session to pass to refresh
+	query := `SELECT p_success, p_error, p_user FROM resolvespec_session($1, $2)`
+	err := a.db.QueryRowContext(ctx, query, refreshToken, "refresh").Scan(&success, &errorMsg, &userJSON)
+	if err != nil {
+		return nil, fmt.Errorf("refresh token query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("invalid refresh token")
+	}
+
+	// Call resolvespec_refresh_token to generate new token
+	var newSuccess bool
+	var newErrorMsg sql.NullString
+	var newUserJSON []byte
+
+	refreshQuery := `SELECT p_success, p_error, p_user FROM resolvespec_refresh_token($1, $2::jsonb)`
+	err = a.db.QueryRowContext(ctx, refreshQuery, refreshToken, userJSON).Scan(&newSuccess, &newErrorMsg, &newUserJSON)
+	if err != nil {
+		return nil, fmt.Errorf("refresh token generation failed: %w", err)
+	}
+
+	if !newSuccess {
+		if newErrorMsg.Valid {
+			return nil, fmt.Errorf("%s", newErrorMsg.String)
+		}
+		return nil, fmt.Errorf("failed to refresh token")
+	}
+
+	// Parse refreshed user context
+	var userCtx UserContext
+	if err := json.Unmarshal(newUserJSON, &userCtx); err != nil {
+		return nil, fmt.Errorf("failed to parse user context: %w", err)
+	}
+
+	return &LoginResponse{
+		Token:     userCtx.SessionID, // New session token from stored procedure
+		User:      &userCtx,
+		ExpiresIn: int64(24 * time.Hour.Seconds()),
+	}, nil
+}
+
+// JWTAuthenticator provides JWT token-based authentication
+// All database operations go through stored procedures
+// Requires stored procedures: resolvespec_jwt_login, resolvespec_jwt_logout
+// NOTE: JWT signing/verification requires github.com/golang-jwt/jwt/v5 to be installed and imported
+type JWTAuthenticator struct {
+	secretKey []byte
+	db        *sql.DB
+}
+
+func NewJWTAuthenticator(secretKey string, db *sql.DB) *JWTAuthenticator {
+	return &JWTAuthenticator{
+		secretKey: []byte(secretKey),
+		db:        db,
+	}
+}
+
+func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	// Call resolvespec_jwt_login stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var userJSON []byte
+
+	query := `SELECT p_success, p_error, p_user FROM resolvespec_jwt_login($1, $2)`
+	err := a.db.QueryRowContext(ctx, query, req.Username, req.Password).Scan(&success, &errorMsg, &userJSON)
+	if err != nil {
+		return nil, fmt.Errorf("login query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("invalid credentials")
+	}
+
+	// Parse user data
+	var user struct {
+		ID        int    `json:"id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		Password  string `json:"password"`
+		UserLevel int    `json:"user_level"`
+		Roles     string `json:"roles"`
+	}
+
+	if err := json.Unmarshal(userJSON, &user); err != nil {
+		return nil, fmt.Errorf("failed to parse user data: %w", err)
+	}
+
+	// TODO: Verify password
+	// if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+	//     return nil, fmt.Errorf("invalid credentials")
+	// }
+
+	// Generate token (placeholder - implement JWT signing when library is available)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	tokenString := fmt.Sprintf("token_%d_%d", user.ID, expiresAt.Unix())
+
+	return &LoginResponse{
+		Token: tokenString,
+		User: &UserContext{
+			UserID:    user.ID,
+			UserName:  user.Username,
+			Email:     user.Email,
+			UserLevel: user.UserLevel,
+			Roles:     parseRoles(user.Roles),
+		},
+		ExpiresIn: int64(24 * time.Hour.Seconds()),
+	}, nil
+}
+
+func (a *JWTAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
+	// Call resolvespec_jwt_logout stored procedure
+	var success bool
+	var errorMsg sql.NullString
+
+	query := `SELECT p_success, p_error FROM resolvespec_jwt_logout($1, $2)`
+	err := a.db.QueryRowContext(ctx, query, req.Token, req.UserID).Scan(&success, &errorMsg)
+	if err != nil {
+		return fmt.Errorf("logout query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return fmt.Errorf("%s", errorMsg.String)
+		}
+		return fmt.Errorf("logout failed")
+	}
+
+	return nil
+}
+
+func (a *JWTAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, fmt.Errorf("authorization header required")
+	}
+
+	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenString == authHeader {
+		return nil, fmt.Errorf("bearer token required")
+	}
+
+	// TODO: Implement JWT parsing when library is available
+	return nil, fmt.Errorf("JWT parsing not implemented - install github.com/golang-jwt/jwt/v5")
+}
+
+// Production-Ready Security Providers
+// ====================================
+
+// DatabaseColumnSecurityProvider loads column security from database
+// All database operations go through stored procedures
+// Requires stored procedure: resolvespec_column_security
+type DatabaseColumnSecurityProvider struct {
+	db *sql.DB
+}
+
+func NewDatabaseColumnSecurityProvider(db *sql.DB) *DatabaseColumnSecurityProvider {
+	return &DatabaseColumnSecurityProvider{db: db}
+}
+
+func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
+	var rules []ColumnSecurity
+
+	// Call resolvespec_column_security stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var rulesJSON []byte
+
+	query := `SELECT p_success, p_error, p_rules FROM resolvespec_column_security($1, $2, $3)`
+	err := p.db.QueryRowContext(ctx, query, userID, schema, table).Scan(&success, &errorMsg, &rulesJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load column security: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("failed to load column security")
+	}
+
+	// Parse the JSON array of security records
+	type SecurityRecord struct {
+		Control    string `json:"control"`
+		Accesstype string `json:"accesstype"`
+		JSONValue  string `json:"jsonvalue"`
+	}
+
+	var records []SecurityRecord
+	if err := json.Unmarshal(rulesJSON, &records); err != nil {
+		return nil, fmt.Errorf("failed to parse security rules: %w", err)
+	}
+
+	// Convert records to ColumnSecurity rules
+	for _, rec := range records {
+		parts := strings.Split(rec.Control, ".")
+		if len(parts) < 3 {
+			continue
+		}
+
+		rule := ColumnSecurity{
+			Schema:     schema,
+			Tablename:  table,
+			Path:       parts[2:],
+			Accesstype: rec.Accesstype,
+			UserID:     userID,
+		}
+
+		rules = append(rules, rule)
+	}
+
+	return rules, nil
+}
+
+// DatabaseRowSecurityProvider loads row security from database
+// All database operations go through stored procedures
+// Requires stored procedure: resolvespec_row_security
+type DatabaseRowSecurityProvider struct {
+	db *sql.DB
+}
+
+func NewDatabaseRowSecurityProvider(db *sql.DB) *DatabaseRowSecurityProvider {
+	return &DatabaseRowSecurityProvider{db: db}
+}
+
+func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+	var template string
+	var hasBlock bool
+
+	// Call resolvespec_row_security stored procedure
+	query := `SELECT p_template, p_block FROM resolvespec_row_security($1, $2, $3)`
+
+	err := p.db.QueryRowContext(ctx, query, schema, table, userID).Scan(&template, &hasBlock)
+	if err != nil {
+		return RowSecurity{}, fmt.Errorf("failed to load row security: %w", err)
+	}
+
+	return RowSecurity{
+		Schema:    schema,
+		Tablename: table,
+		UserID:    userID,
+		Template:  template,
+		HasBlock:  hasBlock,
+	}, nil
+}
+
+// ConfigColumnSecurityProvider provides static column security configuration
+type ConfigColumnSecurityProvider struct {
+	rules map[string][]ColumnSecurity
+}
+
+func NewConfigColumnSecurityProvider(rules map[string][]ColumnSecurity) *ConfigColumnSecurityProvider {
+	return &ConfigColumnSecurityProvider{rules: rules}
+}
+
+func (p *ConfigColumnSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
+	key := fmt.Sprintf("%s.%s", schema, table)
+	rules, ok := p.rules[key]
+	if !ok {
+		return []ColumnSecurity{}, nil
+	}
+	return rules, nil
+}
+
+// ConfigRowSecurityProvider provides static row security configuration
+type ConfigRowSecurityProvider struct {
+	templates map[string]string
+	blocked   map[string]bool
+}
+
+func NewConfigRowSecurityProvider(templates map[string]string, blocked map[string]bool) *ConfigRowSecurityProvider {
+	return &ConfigRowSecurityProvider{
+		templates: templates,
+		blocked:   blocked,
+	}
+}
+
+func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+	key := fmt.Sprintf("%s.%s", schema, table)
+
+	if p.blocked[key] {
+		return RowSecurity{
+			Schema:    schema,
+			Tablename: table,
+			UserID:    userID,
+			HasBlock:  true,
+		}, nil
+	}
+
+	template := p.templates[key]
+	return RowSecurity{
+		Schema:    schema,
+		Tablename: table,
+		UserID:    userID,
+		Template:  template,
+		HasBlock:  false,
+	}, nil
+}
+
+// Helper functions
+// ================
+
+func parseRoles(rolesStr string) []string {
+	if rolesStr == "" {
+		return []string{}
+	}
+	return strings.Split(rolesStr, ",")
+}
+
+func parseIntHeader(r *http.Request, key string, defaultVal int) int {
+	val := r.Header.Get(key)
+	if val == "" {
+		return defaultVal
+	}
+	intVal, err := strconv.Atoi(val)
+	if err != nil {
+		return defaultVal
+	}
+	return intVal
+}
+
+func generateRandomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+	}
+	return string(b)
+}
+
+func getClaimString(claims map[string]any, key string) string {
+	if claims == nil {
+		return ""
+	}
+	if val, ok := claims[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}

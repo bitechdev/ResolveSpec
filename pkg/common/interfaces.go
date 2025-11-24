@@ -1,6 +1,11 @@
 package common
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+)
 
 // Database interface designed to work with both GORM and Bun
 type Database interface {
@@ -129,6 +134,99 @@ type ResponseWriter interface {
 
 // HTTPHandlerFunc type for HTTP handlers
 type HTTPHandlerFunc func(ResponseWriter, Request)
+
+// WrapHTTPRequest wraps standard http.ResponseWriter and *http.Request into common interfaces
+func WrapHTTPRequest(w http.ResponseWriter, r *http.Request) (ResponseWriter, Request) {
+	return &StandardResponseWriter{w: w}, &StandardRequest{r: r}
+}
+
+// StandardResponseWriter adapts http.ResponseWriter to ResponseWriter interface
+type StandardResponseWriter struct {
+	w      http.ResponseWriter
+	status int
+}
+
+func (s *StandardResponseWriter) SetHeader(key, value string) {
+	s.w.Header().Set(key, value)
+}
+
+func (s *StandardResponseWriter) WriteHeader(statusCode int) {
+	s.status = statusCode
+	s.w.WriteHeader(statusCode)
+}
+
+func (s *StandardResponseWriter) Write(data []byte) (int, error) {
+	return s.w.Write(data)
+}
+
+func (s *StandardResponseWriter) WriteJSON(data interface{}) error {
+	s.SetHeader("Content-Type", "application/json")
+	return json.NewEncoder(s.w).Encode(data)
+}
+
+// StandardRequest adapts *http.Request to Request interface
+type StandardRequest struct {
+	r    *http.Request
+	body []byte
+}
+
+func (s *StandardRequest) Method() string {
+	return s.r.Method
+}
+
+func (s *StandardRequest) URL() string {
+	return s.r.URL.String()
+}
+
+func (s *StandardRequest) Header(key string) string {
+	return s.r.Header.Get(key)
+}
+
+func (s *StandardRequest) AllHeaders() map[string]string {
+	headers := make(map[string]string)
+	for key, values := range s.r.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+	return headers
+}
+
+func (s *StandardRequest) Body() ([]byte, error) {
+	if s.body != nil {
+		return s.body, nil
+	}
+	if s.r.Body == nil {
+		return nil, nil
+	}
+	defer s.r.Body.Close()
+	body, err := io.ReadAll(s.r.Body)
+	if err != nil {
+		return nil, err
+	}
+	s.body = body
+	return body, nil
+}
+
+func (s *StandardRequest) PathParam(key string) string {
+	// Standard http.Request doesn't have path params
+	// This should be set by the router
+	return ""
+}
+
+func (s *StandardRequest) QueryParam(key string) string {
+	return s.r.URL.Query().Get(key)
+}
+
+func (s *StandardRequest) AllQueryParams() map[string]string {
+	params := make(map[string]string)
+	for key, values := range s.r.URL.Query() {
+		if len(values) > 0 {
+			params[key] = values[0]
+		}
+	}
+	return params
+}
 
 // TableNameProvider interface for models that provide table names
 type TableNameProvider interface {

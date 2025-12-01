@@ -192,7 +192,7 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 	var updatedUserJSON []byte
 
 	query := `SELECT p_success, p_error, p_user FROM resolvespec_session_update($1, $2::jsonb)`
-	a.db.QueryRowContext(ctx, query, sessionToken, userJSON).Scan(&success, &errorMsg, &updatedUserJSON)
+	_ = a.db.QueryRowContext(ctx, query, sessionToken, userJSON).Scan(&success, &errorMsg, &updatedUserJSON)
 }
 
 // RefreshToken implements Refreshable interface
@@ -539,14 +539,14 @@ func generateRandomString(length int) string {
 	return string(b)
 }
 
-func getClaimString(claims map[string]any, key string) string {
-	if claims == nil {
-		return ""
-	}
-	if val, ok := claims[key]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
+// func getClaimString(claims map[string]any, key string) string {
+// 	if claims == nil {
+// 		return ""
+// 	}
+// 	if val, ok := claims[key]; ok {
+// 		if str, ok := val.(string); ok {
+// 			return str
+// 		}
+// 	}
+// 	return ""
+// }

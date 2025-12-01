@@ -377,4 +377,3 @@ func (a *DatabaseAuthenticatorExample) RefreshToken(ctx context.Context, refresh
 		ExpiresIn: int64(24 * time.Hour.Seconds()),
 	}, nil
 }
-

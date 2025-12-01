@@ -109,7 +109,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 		// Use potentially modified SQL query and variables from hooks
 		sqlquery = hookCtx.SQLQuery
 		variables = hookCtx.Variables
-		complexAPI = hookCtx.ComplexAPI
+		// complexAPI = hookCtx.ComplexAPI
 
 		// Extract input variables from SQL query (placeholders like [variable])
 		sqlquery = h.extractInputVariables(sqlquery, &inputvars)
@@ -299,7 +299,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 		}
 
 		if len(dbobjlist) == 0 {
-			w.Write([]byte("[]"))
+			_, _ = w.Write([]byte("[]"))
 			return
 		}
 
@@ -318,7 +318,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				if int64(len(dbobjlist)) < total {
 					w.WriteHeader(http.StatusPartialContent)
 				}
-				w.Write(data)
+				_, _ = w.Write(data)
 			}
 
 		case "detail":
@@ -337,7 +337,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				if int64(len(dbobjlist)) < total {
 					w.WriteHeader(http.StatusPartialContent)
 				}
-				w.Write(data)
+				_, _ = w.Write(data)
 			}
 
 		default:
@@ -357,7 +357,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 					if int64(len(dbobjlist)) < total {
 						w.WriteHeader(http.StatusPartialContent)
 					}
-					w.Write(data)
+					_, _ = w.Write(data)
 				}
 			} else {
 				data, err := json.Marshal(dbobjlist)
@@ -367,7 +367,7 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 					if int64(len(dbobjlist)) < total {
 						w.WriteHeader(http.StatusPartialContent)
 					}
-					w.Write(data)
+					_, _ = w.Write(data)
 				}
 			}
 		}
@@ -578,7 +578,7 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 			if err != nil {
 				sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
 			} else {
-				w.Write(data)
+				_, _ = w.Write(data)
 			}
 			return
 		}
@@ -588,7 +588,7 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 		if err != nil {
 			sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
 		} else {
-			w.Write(data)
+			_, _ = w.Write(data)
 		}
 	}
 }
@@ -597,9 +597,9 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 
 // extractInputVariables extracts placeholders like [variable] from the SQL query
 func (h *Handler) extractInputVariables(sqlquery string, inputvars *[]string) string {
-	max := strings.Count(sqlquery, "[") * 4
+
 	testsqlquery := sqlquery
-	for i := 0; i <= max; i++ {
+	for i := 0; i <= strings.Count(sqlquery, "[")*4; i++ {
 		iStart := strings.Index(testsqlquery, "[")
 		if iStart < 0 {
 			break
@@ -722,7 +722,7 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 		}
 
 		if strings.Contains(k, "x-simpleapi") {
-			*complexAPI = !(val == "1" || strings.ToLower(val) == "true")
+			*complexAPI = !strings.EqualFold(val, "1") && !strings.EqualFold(val, "true")
 		}
 	}
 	return sqlquery
@@ -904,5 +904,5 @@ func sendError(w http.ResponseWriter, status int, code, message string, err erro
 		"success": false,
 		"error":   errObj,
 	})
-	w.Write(data)
+	_, _ = w.Write(data)
 }

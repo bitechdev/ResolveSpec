@@ -37,11 +37,11 @@ type HookContext struct {
 	Writer  http.ResponseWriter
 
 	// SQL query and variables
-	SQLQuery    string                 // The SQL query being executed (can be modified by hooks)
-	Variables   map[string]interface{} // Variables extracted from request
-	InputVars   []string               // Input variable placeholders found in query
-	MetaInfo    map[string]interface{} // Metadata about the request
-	PropQry     map[string]string      // Property query parameters
+	SQLQuery  string                 // The SQL query being executed (can be modified by hooks)
+	Variables map[string]interface{} // Variables extracted from request
+	InputVars []string               // Input variable placeholders found in query
+	MetaInfo  map[string]interface{} // Metadata about the request
+	PropQry   map[string]string      // Property query parameters
 
 	// User context
 	UserContext *security.UserContext

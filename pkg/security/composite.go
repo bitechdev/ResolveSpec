@@ -9,9 +9,9 @@ import (
 // CompositeSecurityProvider combines multiple security providers
 // Allows separating authentication, column security, and row security concerns
 type CompositeSecurityProvider struct {
-	auth    Authenticator
-	colSec  ColumnSecurityProvider
-	rowSec  RowSecurityProvider
+	auth   Authenticator
+	colSec ColumnSecurityProvider
+	rowSec RowSecurityProvider
 }
 
 // NewCompositeSecurityProvider creates a composite provider

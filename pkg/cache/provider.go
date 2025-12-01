@@ -37,10 +37,10 @@ type Provider interface {
 
 // CacheStats contains cache statistics.
 type CacheStats struct {
-	Hits          int64                  `json:"hits"`
-	Misses        int64                  `json:"misses"`
-	Keys          int64                  `json:"keys"`
-	ProviderType  string                 `json:"provider_type"`
+	Hits          int64          `json:"hits"`
+	Misses        int64          `json:"misses"`
+	Keys          int64          `json:"keys"`
+	ProviderType  string         `json:"provider_type"`
 	ProviderStats map[string]any `json:"provider_stats,omitempty"`
 }
 

@@ -17,7 +17,6 @@ func ExampleInMemoryCache() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer Close()
 
 	ctx := context.Background()
 
@@ -33,6 +32,7 @@ func ExampleInMemoryCache() {
 	user := User{ID: 1, Name: "John Doe"}
 	err = cache.Set(ctx, "user:1", user, 10*time.Minute)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -40,6 +40,7 @@ func ExampleInMemoryCache() {
 	var retrieved User
 	err = cache.Get(ctx, "user:1", &retrieved)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -52,15 +53,18 @@ func ExampleInMemoryCache() {
 	// Delete a key
 	err = cache.Delete(ctx, "user:1")
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
 	// Get statistics
 	stats, err := cache.Stats(ctx)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 	fmt.Printf("Cache stats: %+v\n", stats)
+	_ = Close()
 }
 
 // ExampleRedisCache demonstrates using the Redis cache provider.
@@ -78,7 +82,6 @@ func ExampleRedisCache() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer Close()
 
 	ctx := context.Background()
 
@@ -89,12 +92,14 @@ func ExampleRedisCache() {
 	data := []byte("Hello, Redis!")
 	err = cache.SetBytes(ctx, "greeting", data, 1*time.Hour)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
 	// Retrieve raw bytes
 	retrieved, err := cache.GetBytes(ctx, "greeting")
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -103,8 +108,10 @@ func ExampleRedisCache() {
 	// Clear all cache
 	err = cache.Clear(ctx)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
+	_ = Close()
 }
 
 // ExampleMemcacheCache demonstrates using the Memcache cache provider.
@@ -119,7 +126,6 @@ func ExampleMemcacheCache() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer Close()
 
 	ctx := context.Background()
 
@@ -136,6 +142,7 @@ func ExampleMemcacheCache() {
 	product := Product{ID: 100, Name: "Widget", Price: 29.99}
 	err = cache.Set(ctx, "product:100", product, 30*time.Minute)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -143,10 +150,12 @@ func ExampleMemcacheCache() {
 	var retrieved Product
 	err = cache.Get(ctx, "product:100", &retrieved)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
 	fmt.Printf("Retrieved product: %+v\n", retrieved)
+	_ = Close()
 }
 
 // ExampleGetOrSet demonstrates the GetOrSet pattern for lazy loading.
@@ -158,7 +167,6 @@ func ExampleGetOrSet() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer Close()
 
 	ctx := context.Background()
 	cache := GetDefaultCache()
@@ -175,6 +183,7 @@ func ExampleGetOrSet() {
 		return ExpensiveData{Result: "computed value"}, nil
 	})
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -186,10 +195,12 @@ func ExampleGetOrSet() {
 		return ExpensiveData{Result: "new value"}, nil
 	})
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
 	fmt.Printf("Cached data: %+v\n", data)
+	_ = Close()
 }
 
 // ExampleCustomProvider demonstrates using a custom provider.
@@ -202,7 +213,6 @@ func ExampleCustomProvider() {
 
 	// Initialize with custom provider
 	Initialize(memProvider)
-	defer Close()
 
 	ctx := context.Background()
 	cache := GetDefaultCache()
@@ -210,6 +220,7 @@ func ExampleCustomProvider() {
 	// Use the cache
 	err := cache.SetBytes(ctx, "key", []byte("value"), 5*time.Minute)
 	if err != nil {
+		_ = Close()
 		log.Fatal(err)
 	}
 
@@ -218,6 +229,7 @@ func ExampleCustomProvider() {
 		count := mp.CleanExpired(ctx)
 		fmt.Printf("Cleaned %d expired items\n", count)
 	}
+	_ = Close()
 }
 
 // ExampleDeleteByPattern demonstrates pattern-based deletion (Redis only).
@@ -232,21 +244,23 @@ func ExampleDeleteByPattern() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer Close()
 
 	ctx := context.Background()
 	cache := GetDefaultCache()
 
 	// Store multiple keys with a pattern
-	cache.SetBytes(ctx, "user:1:profile", []byte("profile1"), 10*time.Minute)
-	cache.SetBytes(ctx, "user:2:profile", []byte("profile2"), 10*time.Minute)
-	cache.SetBytes(ctx, "user:1:settings", []byte("settings1"), 10*time.Minute)
+	_ = cache.SetBytes(ctx, "user:1:profile", []byte("profile1"), 10*time.Minute)
+	_ = cache.SetBytes(ctx, "user:2:profile", []byte("profile2"), 10*time.Minute)
+	_ = cache.SetBytes(ctx, "user:1:settings", []byte("settings1"), 10*time.Minute)
 
 	// Delete all keys matching pattern (Redis glob pattern)
 	err = cache.DeleteByPattern(ctx, "user:*:profile")
 	if err != nil {
-		log.Fatal(err)
+		_ = Close()
+		log.Print(err)
+		return
 	}
 
 	fmt.Println("Deleted all user profile keys")
+	_ = Close()
 }

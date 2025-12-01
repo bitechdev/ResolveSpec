@@ -13,15 +13,15 @@ import (
 
 // QueryCacheKey represents the components used to build a cache key for query total count
 type QueryCacheKey struct {
-	TableName      string                 `json:"table_name"`
-	Filters        []common.FilterOption  `json:"filters"`
-	Sort           []common.SortOption    `json:"sort"`
-	CustomSQLWhere string                 `json:"custom_sql_where,omitempty"`
-	CustomSQLOr    string                 `json:"custom_sql_or,omitempty"`
-	Expand         []ExpandOptionKey      `json:"expand,omitempty"`
-	Distinct       bool                   `json:"distinct,omitempty"`
-	CursorForward  string                 `json:"cursor_forward,omitempty"`
-	CursorBackward string                 `json:"cursor_backward,omitempty"`
+	TableName      string                `json:"table_name"`
+	Filters        []common.FilterOption `json:"filters"`
+	Sort           []common.SortOption   `json:"sort"`
+	CustomSQLWhere string                `json:"custom_sql_where,omitempty"`
+	CustomSQLOr    string                `json:"custom_sql_or,omitempty"`
+	Expand         []ExpandOptionKey     `json:"expand,omitempty"`
+	Distinct       bool                  `json:"distinct,omitempty"`
+	CursorForward  string                `json:"cursor_forward,omitempty"`
+	CursorBackward string                `json:"cursor_backward,omitempty"`
 }
 
 // ExpandOptionKey represents expand options for cache key

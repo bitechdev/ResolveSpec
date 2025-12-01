@@ -47,7 +47,7 @@ func UseMemcache(config *MemcacheConfig) error {
 // Initializes with in-memory provider if not already initialized.
 func GetDefaultCache() *Cache {
 	if defaultCache == nil {
-		UseMemory(&Options{
+		_ = UseMemory(&Options{
 			DefaultTTL: 5 * time.Minute,
 			MaxSize:    10000,
 		})

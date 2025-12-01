@@ -18,9 +18,9 @@ type RequestParameters struct {
 	Distinct        bool
 
 	// Filtering
-	FieldFilters  map[string]string         // column -> value (exact match)
-	SearchFilters map[string]string         // column -> value (ILIKE)
-	SearchOps     map[string]FilterOperator // column -> {operator, value, logic}
+	FieldFilters   map[string]string         // column -> value (exact match)
+	SearchFilters  map[string]string         // column -> value (ILIKE)
+	SearchOps      map[string]FilterOperator // column -> {operator, value, logic}
 	CustomSQLWhere string
 	CustomSQLOr    string
 
@@ -51,10 +51,10 @@ func (h *Handler) ParseParameters(r *http.Request) *RequestParameters {
 		FieldFilters:   make(map[string]string),
 		SearchFilters:  make(map[string]string),
 		SearchOps:      make(map[string]FilterOperator),
-		Limit:          20,    // Default limit
-		Offset:         0,     // Default offset
+		Limit:          20,       // Default limit
+		Offset:         0,        // Default offset
 		ResponseFormat: "simple", // Default format
-		ComplexAPI:     false, // Default to simple API
+		ComplexAPI:     false,    // Default to simple API
 	}
 
 	// Merge headers and query parameters
@@ -155,7 +155,7 @@ func (h *Handler) ParseParameters(r *http.Request) *RequestParameters {
 		// Response Format
 		case strings.HasPrefix(key, "x-simpleapi"):
 			params.ResponseFormat = "simple"
-			params.ComplexAPI = !(decodedValue == "1" || strings.EqualFold(decodedValue, "true"))
+			params.ComplexAPI = decodedValue != "1" && !strings.EqualFold(decodedValue, "true")
 		case strings.HasPrefix(key, "x-detailapi"):
 			params.ResponseFormat = "detail"
 			params.ComplexAPI = true

@@ -9,7 +9,9 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/cache"
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
@@ -436,14 +438,69 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Get total count before pagination (unless skip count is requested)
 	var total int
 	if !options.SkipCount {
-		count, err := query.Count(ctx)
-		if err != nil {
-			logger.Error("Error counting records: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
-			return
+		// Try to get from cache first (unless SkipCache is true)
+		var cachedTotal *cache.CachedTotal
+		var cacheKey string
+
+		if !options.SkipCache {
+			// Build cache key from query parameters
+			// Convert expand options to interface slice for the cache key builder
+			expandOpts := make([]interface{}, len(options.Expand))
+			for i, exp := range options.Expand {
+				expandOpts[i] = map[string]interface{}{
+					"relation": exp.Relation,
+					"where":    exp.Where,
+				}
+			}
+
+			cacheKeyHash := cache.BuildExtendedQueryCacheKey(
+				tableName,
+				options.Filters,
+				options.Sort,
+				options.CustomSQLWhere,
+				options.CustomSQLOr,
+				expandOpts,
+				options.Distinct,
+				options.CursorForward,
+				options.CursorBackward,
+			)
+			cacheKey = cache.GetQueryTotalCacheKey(cacheKeyHash)
+
+			// Try to retrieve from cache
+			cachedTotal = &cache.CachedTotal{}
+			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotal)
+			if err == nil {
+				total = cachedTotal.Total
+				logger.Debug("Total records (from cache): %d", total)
+			} else {
+				logger.Debug("Cache miss for query total")
+				cachedTotal = nil
+			}
 		}
-		total = count
-		logger.Debug("Total records: %d", total)
+
+		// If not in cache or cache skip, execute count query
+		if cachedTotal == nil {
+			count, err := query.Count(ctx)
+			if err != nil {
+				logger.Error("Error counting records: %v", err)
+				h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
+				return
+			}
+			total = count
+			logger.Debug("Total records (from query): %d", total)
+
+			// Store in cache (if caching is enabled)
+			if !options.SkipCache && cacheKey != "" {
+				cacheTTL := time.Minute * 2 // Default 2 minutes TTL
+				cacheData := &cache.CachedTotal{Total: total}
+				if err := cache.GetDefaultCache().Set(ctx, cacheKey, cacheData, cacheTTL); err != nil {
+					logger.Warn("Failed to cache query total: %v", err)
+					// Don't fail the request if caching fails
+				} else {
+					logger.Debug("Cached query total with key: %s", cacheKey)
+				}
+			}
+		}
 	} else {
 		logger.Debug("Skipping count as requested")
 		total = -1 // Indicate count was skipped

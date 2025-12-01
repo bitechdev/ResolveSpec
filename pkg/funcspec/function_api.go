@@ -20,14 +20,22 @@ import (
 
 // Handler handles function-based SQL API requests
 type Handler struct {
-	db common.Database
+	db    common.Database
+	hooks *HookRegistry
 }
 
 // NewHandler creates a new function API handler
 func NewHandler(db common.Database) *Handler {
 	return &Handler{
-		db: db,
+		db:    db,
+		hooks: NewHookRegistry(),
 	}
+}
+
+// Hooks returns the hook registry for this handler
+// Use this to register custom hooks for operations
+func (h *Handler) Hooks() *HookRegistry {
+	return h.hooks
 }
 
 // HTTPFuncType is a function type for HTTP handlers
@@ -64,17 +72,76 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 
 		w.Header().Set("Content-Type", "application/json")
 
+		// Initialize hook context
+		hookCtx := &HookContext{
+			Context:     ctx,
+			Handler:     h,
+			Request:     r,
+			Writer:      w,
+			SQLQuery:    sqlquery,
+			Variables:   variables,
+			InputVars:   inputvars,
+			MetaInfo:    metainfo,
+			PropQry:     propQry,
+			UserContext: userCtx,
+			NoCount:     pNoCount,
+			BlankParams: pBlankparms,
+			AllowFilter: pAllowFilter,
+			ComplexAPI:  complexAPI,
+		}
+
+		// Execute BeforeQueryList hook
+		if err := h.hooks.Execute(BeforeQueryList, hookCtx); err != nil {
+			logger.Error("BeforeQueryList hook failed: %v", err)
+			sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+			return
+		}
+
+		// Check if hook aborted the operation
+		if hookCtx.Abort {
+			if hookCtx.AbortCode == 0 {
+				hookCtx.AbortCode = http.StatusBadRequest
+			}
+			sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
+			return
+		}
+
+		// Use potentially modified SQL query and variables from hooks
+		sqlquery = hookCtx.SQLQuery
+		variables = hookCtx.Variables
+		complexAPI = hookCtx.ComplexAPI
+
 		// Extract input variables from SQL query (placeholders like [variable])
 		sqlquery = h.extractInputVariables(sqlquery, &inputvars)
 
 		// Merge URL path parameters
 		sqlquery = h.mergePathParams(r, sqlquery, variables)
 
+		// Parse comprehensive parameters from headers and query string
+		reqParams := h.ParseParameters(r)
+		complexAPI = reqParams.ComplexAPI
+
 		// Merge query string parameters
 		sqlquery = h.mergeQueryParams(r, sqlquery, variables, pAllowFilter, propQry)
 
 		// Merge header parameters
 		sqlquery = h.mergeHeaderParams(r, sqlquery, variables, propQry, &complexAPI)
+
+		// Apply filters from parsed parameters (if not already applied by pAllowFilter)
+		if !pAllowFilter {
+			sqlquery = h.ApplyFilters(sqlquery, reqParams)
+		}
+
+		// Apply field selection
+		sqlquery = h.ApplyFieldSelection(sqlquery, reqParams)
+
+		// Apply DISTINCT if requested
+		sqlquery = h.ApplyDistinct(sqlquery, reqParams)
+
+		// Override pNoCount if skipcount is specified
+		if reqParams.SkipCount {
+			pNoCount = true
+		}
 
 		// Build metainfo
 		metainfo["ipaddress"] = getIPAddress(r)
@@ -95,12 +162,32 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 			}
 		}
 
+		// Update hook context with latest SQL query and variables
+		hookCtx.SQLQuery = sqlquery
+		hookCtx.Variables = variables
+		hookCtx.InputVars = inputvars
+
 		// Execute query within transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			sqlqueryCnt := sqlquery
 
 			// Parse sorting and pagination parameters
 			sortcols, limit, offset := h.parsePaginationParams(r)
+
+			// Override with parsed parameters if available
+			if reqParams.SortColumns != "" {
+				sortcols = reqParams.SortColumns
+			}
+			if reqParams.Limit > 0 {
+				limit = reqParams.Limit
+			}
+			if reqParams.Offset > 0 {
+				offset = reqParams.Offset
+			}
+
+			hookCtx.SortColumns = sortcols
+			hookCtx.Limit = limit
+			hookCtx.Offset = offset
 			fromPos := strings.Index(strings.ToLower(sqlquery), "from ")
 			orderbyPos := strings.Index(strings.ToLower(sqlquery), "order by")
 
@@ -127,6 +214,16 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				total = countResult.Count
 			}
 
+			// Execute BeforeSQLExec hook
+			hookCtx.SQLQuery = sqlquery
+			if err := h.hooks.Execute(BeforeSQLExec, hookCtx); err != nil {
+				logger.Error("BeforeSQLExec hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified SQL query from hook
+			sqlquery = hookCtx.SQLQuery
+
 			// Execute main query
 			rows := make([]map[string]interface{}, 0)
 			if err := tx.Query(ctx, &rows, sqlquery); err != nil {
@@ -140,6 +237,20 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				total = int64(len(dbobjlist))
 			}
 
+			// Execute AfterSQLExec hook
+			hookCtx.Result = dbobjlist
+			hookCtx.Total = total
+			if err := h.hooks.Execute(AfterSQLExec, hookCtx); err != nil {
+				logger.Error("AfterSQLExec hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified result from hook
+			if modifiedResult, ok := hookCtx.Result.([]map[string]interface{}); ok {
+				dbobjlist = modifiedResult
+			}
+			total = hookCtx.Total
+
 			return nil
 		})
 
@@ -147,6 +258,21 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 			logger.Error("Transaction failed: %v", err)
 			return
 		}
+
+		// Execute AfterQueryList hook
+		hookCtx.Result = dbobjlist
+		hookCtx.Total = total
+		hookCtx.Error = err
+		if err := h.hooks.Execute(AfterQueryList, hookCtx); err != nil {
+			logger.Error("AfterQueryList hook failed: %v", err)
+			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+			return
+		}
+		// Use potentially modified result from hook
+		if modifiedResult, ok := hookCtx.Result.([]map[string]interface{}); ok {
+			dbobjlist = modifiedResult
+		}
+		total = hookCtx.Total
 
 		// Set response headers
 		respOffset := 0
@@ -159,12 +285,44 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 		w.Header().Set("Content-Range", fmt.Sprintf("items %d-%d/%d", respOffset, respOffset+len(dbobjlist), total))
 		logger.Info("Serving: Records %d of %d", len(dbobjlist), total)
 
+		// Execute BeforeResponse hook
+		hookCtx.Result = dbobjlist
+		hookCtx.Total = total
+		if err := h.hooks.Execute(BeforeResponse, hookCtx); err != nil {
+			logger.Error("BeforeResponse hook failed: %v", err)
+			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+			return
+		}
+		// Use potentially modified result from hook
+		if modifiedResult, ok := hookCtx.Result.([]map[string]interface{}); ok {
+			dbobjlist = modifiedResult
+		}
+
 		if len(dbobjlist) == 0 {
 			w.Write([]byte("[]"))
 			return
 		}
 
-		if complexAPI {
+		// Format response based on response format
+		switch reqParams.ResponseFormat {
+		case "syncfusion":
+			// Syncfusion format: { result: data, count: total }
+			response := map[string]interface{}{
+				"result": dbobjlist,
+				"count":  total,
+			}
+			data, err := json.Marshal(response)
+			if err != nil {
+				sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
+			} else {
+				if int64(len(dbobjlist)) < total {
+					w.WriteHeader(http.StatusPartialContent)
+				}
+				w.Write(data)
+			}
+
+		case "detail":
+			// Detail format: complex API with metadata
 			metaobj := map[string]interface{}{
 				"items":       dbobjlist,
 				"count":       fmt.Sprintf("%d", len(dbobjlist)),
@@ -172,7 +330,6 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				"tablename":   r.URL.Path,
 				"tableprefix": "gsql",
 			}
-
 			data, err := json.Marshal(metaobj)
 			if err != nil {
 				sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
@@ -182,15 +339,36 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				}
 				w.Write(data)
 			}
-		} else {
-			data, err := json.Marshal(dbobjlist)
-			if err != nil {
-				sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
-			} else {
-				if int64(len(dbobjlist)) < total {
-					w.WriteHeader(http.StatusPartialContent)
+
+		default:
+			// Simple format: just return the data array (or complex API if requested)
+			if complexAPI {
+				metaobj := map[string]interface{}{
+					"items":       dbobjlist,
+					"count":       fmt.Sprintf("%d", len(dbobjlist)),
+					"total":       fmt.Sprintf("%d", total),
+					"tablename":   r.URL.Path,
+					"tableprefix": "gsql",
 				}
-				w.Write(data)
+				data, err := json.Marshal(metaobj)
+				if err != nil {
+					sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
+				} else {
+					if int64(len(dbobjlist)) < total {
+						w.WriteHeader(http.StatusPartialContent)
+					}
+					w.Write(data)
+				}
+			} else {
+				data, err := json.Marshal(dbobjlist)
+				if err != nil {
+					sendError(w, http.StatusInternalServerError, "json_error", "Could not marshal response", err)
+				} else {
+					if int64(len(dbobjlist)) < total {
+						w.WriteHeader(http.StatusPartialContent)
+					}
+					w.Write(data)
+				}
 			}
 		}
 	}
@@ -215,6 +393,7 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 		metainfo := make(map[string]interface{})
 		variables := make(map[string]interface{})
 		dbobj := make(map[string]interface{})
+		complexAPI := false
 
 		// Get user context from security package
 		userCtx, ok := security.GetUserContext(ctx)
@@ -225,18 +404,67 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 
 		w.Header().Set("Content-Type", "application/json")
 
+		// Initialize hook context
+		hookCtx := &HookContext{
+			Context:     ctx,
+			Handler:     h,
+			Request:     r,
+			Writer:      w,
+			SQLQuery:    sqlquery,
+			Variables:   variables,
+			InputVars:   inputvars,
+			MetaInfo:    metainfo,
+			PropQry:     propQry,
+			UserContext: userCtx,
+			BlankParams: pBlankparms,
+			ComplexAPI:  complexAPI,
+		}
+
+		// Execute BeforeQuery hook
+		if err := h.hooks.Execute(BeforeQuery, hookCtx); err != nil {
+			logger.Error("BeforeQuery hook failed: %v", err)
+			sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+			return
+		}
+
+		// Check if hook aborted the operation
+		if hookCtx.Abort {
+			if hookCtx.AbortCode == 0 {
+				hookCtx.AbortCode = http.StatusBadRequest
+			}
+			sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
+			return
+		}
+
+		// Use potentially modified SQL query and variables from hooks
+		sqlquery = hookCtx.SQLQuery
+		variables = hookCtx.Variables
+
 		// Extract input variables from SQL query
 		sqlquery = h.extractInputVariables(sqlquery, &inputvars)
 
 		// Merge URL path parameters
 		sqlquery = h.mergePathParams(r, sqlquery, variables)
 
+		// Parse comprehensive parameters from headers and query string
+		reqParams := h.ParseParameters(r)
+		complexAPI = reqParams.ComplexAPI
+
 		// Merge query string parameters
 		sqlquery = h.mergeQueryParams(r, sqlquery, variables, false, propQry)
 
 		// Merge header parameters
-		complexAPI := false
 		sqlquery = h.mergeHeaderParams(r, sqlquery, variables, propQry, &complexAPI)
+		hookCtx.ComplexAPI = complexAPI
+
+		// Apply filters from parsed parameters
+		sqlquery = h.ApplyFilters(sqlquery, reqParams)
+
+		// Apply field selection
+		sqlquery = h.ApplyFieldSelection(sqlquery, reqParams)
+
+		// Apply DISTINCT if requested
+		sqlquery = h.ApplyDistinct(sqlquery, reqParams)
 
 		// Build metainfo
 		metainfo["ipaddress"] = getIPAddress(r)
@@ -272,8 +500,22 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 			}
 		}
 
+		// Update hook context with latest SQL query and variables
+		hookCtx.SQLQuery = sqlquery
+		hookCtx.Variables = variables
+		hookCtx.InputVars = inputvars
+
 		// Execute query within transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			// Execute BeforeSQLExec hook
+			if err := h.hooks.Execute(BeforeSQLExec, hookCtx); err != nil {
+				logger.Error("BeforeSQLExec hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified SQL query from hook
+			sqlquery = hookCtx.SQLQuery
+
 			// Execute main query
 			rows := make([]map[string]interface{}, 0)
 			if err := tx.Query(ctx, &rows, sqlquery); err != nil {
@@ -285,12 +527,49 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 				dbobj = rows[0]
 			}
 
+			// Execute AfterSQLExec hook
+			hookCtx.Result = dbobj
+			if err := h.hooks.Execute(AfterSQLExec, hookCtx); err != nil {
+				logger.Error("AfterSQLExec hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified result from hook
+			if modifiedResult, ok := hookCtx.Result.(map[string]interface{}); ok {
+				dbobj = modifiedResult
+			}
+
 			return nil
 		})
 
 		if err != nil {
 			logger.Error("Transaction failed: %v", err)
 			return
+		}
+
+		// Execute AfterQuery hook
+		hookCtx.Result = dbobj
+		hookCtx.Error = err
+		if err := h.hooks.Execute(AfterQuery, hookCtx); err != nil {
+			logger.Error("AfterQuery hook failed: %v", err)
+			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+			return
+		}
+		// Use potentially modified result from hook
+		if modifiedResult, ok := hookCtx.Result.(map[string]interface{}); ok {
+			dbobj = modifiedResult
+		}
+
+		// Execute BeforeResponse hook
+		hookCtx.Result = dbobj
+		if err := h.hooks.Execute(BeforeResponse, hookCtx); err != nil {
+			logger.Error("BeforeResponse hook failed: %v", err)
+			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+			return
+		}
+		// Use potentially modified result from hook
+		if modifiedResult, ok := hookCtx.Result.(map[string]interface{}); ok {
+			dbobj = modifiedResult
 		}
 
 		// Check if response should be root-level data

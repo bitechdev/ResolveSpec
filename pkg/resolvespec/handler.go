@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
+	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/cache"
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
@@ -233,13 +235,46 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Get total count before pagination
-	total, err := query.Count(ctx)
-	if err != nil {
-		logger.Error("Error counting records: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
-		return
+	var total int
+
+	// Try to get from cache first
+	cacheKeyHash := cache.BuildQueryCacheKey(
+		tableName,
+		options.Filters,
+		options.Sort,
+		"", // No custom SQL WHERE in resolvespec
+		"", // No custom SQL OR in resolvespec
+	)
+	cacheKey := cache.GetQueryTotalCacheKey(cacheKeyHash)
+
+	// Try to retrieve from cache
+	var cachedTotal cache.CachedTotal
+	err := cache.GetDefaultCache().Get(ctx, cacheKey, &cachedTotal)
+	if err == nil {
+		total = cachedTotal.Total
+		logger.Debug("Total records (from cache): %d", total)
+	} else {
+		// Cache miss - execute count query
+		logger.Debug("Cache miss for query total")
+		count, err := query.Count(ctx)
+		if err != nil {
+			logger.Error("Error counting records: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
+			return
+		}
+		total = count
+		logger.Debug("Total records (from query): %d", total)
+
+		// Store in cache
+		cacheTTL := time.Minute * 2 // Default 2 minutes TTL
+		cacheData := cache.CachedTotal{Total: total}
+		if err := cache.GetDefaultCache().Set(ctx, cacheKey, cacheData, cacheTTL); err != nil {
+			logger.Warn("Failed to cache query total: %v", err)
+			// Don't fail the request if caching fails
+		} else {
+			logger.Debug("Cached query total with key: %s", cacheKey)
+		}
 	}
-	logger.Debug("Total records before filtering: %d", total)
 
 	// Apply pagination
 	if options.Limit != nil && *options.Limit > 0 {

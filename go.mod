@@ -19,7 +19,10 @@ require (
 )
 
 require (
+	github.com/bradfitz/gomemcache v0.0.0-20250403215159-8d39553ac7cf // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -30,6 +33,7 @@ require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
+	github.com/redis/go-redis/v9 v9.17.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect

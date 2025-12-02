@@ -15,26 +15,26 @@ import (
 )
 
 type ColumnSecurity struct {
-	Schema       string
-	Tablename    string
-	Path         []string
-	ExtraFilters map[string]string
-	UserID       int
-	Accesstype   string `json:"accesstype"`
-	MaskStart    int
-	MaskEnd      int
-	MaskInvert   bool
-	MaskChar     string
-	Control      string `json:"control"`
-	ID           int    `json:"id"`
+	Schema       string            `json:"schema"`
+	Tablename    string            `json:"tablename"`
+	Path         []string          `json:"path"`
+	ExtraFilters map[string]string `json:"extra_filters"`
+	UserID       int               `json:"user_id"`
+	Accesstype   string            `json:"accesstype"`
+	MaskStart    int               `json:"mask_start"`
+	MaskEnd      int               `json:"mask_end"`
+	MaskInvert   bool              `json:"mask_invert"`
+	MaskChar     string            `json:"mask_char"`
+	Control      string            `json:"control"`
+	ID           int               `json:"id"`
 }
 
 type RowSecurity struct {
-	Schema    string
-	Tablename string
-	Template  string
-	HasBlock  bool
-	UserID    int
+	Schema    string `json:"schema"`
+	Tablename string `json:"tablename"`
+	Template  string `json:"template"`
+	HasBlock  bool   `json:"has_block"`
+	UserID    int    `json:"user_id"`
 }
 
 func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) string {

@@ -91,7 +91,8 @@ security.UserContext{
     RemoteID:  "remote_xyz",        // Remote system ID
     Roles:     []string{"admin"},   // User roles
     Email:     "john@example.com",  // User email
-    Claims:    map[string]any{},    // Additional metadata
+    Claims:    map[string]any{},    // Additional authentication claims
+    Meta:      map[string]any{},    // Additional metadata (JSON-serializable)
 }
 ```
 
@@ -621,6 +622,67 @@ func main() {
 
 ---
 
+## Authentication Modes
+
+```go
+// Required authentication (default)
+// Authentication must succeed or returns 401
+router.Use(security.NewAuthMiddleware(securityList))
+
+// Skip authentication for specific routes
+// Always sets guest user context
+func PublicRoute(w http.ResponseWriter, r *http.Request) {
+    ctx := security.SkipAuth(r.Context())
+    r = r.WithContext(ctx)
+    // Guest context will be set
+}
+
+// Optional authentication for specific routes
+// Tries to authenticate, falls back to guest if it fails
+func HomeRoute(w http.ResponseWriter, r *http.Request) {
+    ctx := security.OptionalAuth(r.Context())
+    r = r.WithContext(ctx)
+
+    userCtx, _ := security.GetUserContext(r.Context())
+    if userCtx.UserID == 0 {
+        // Guest user
+    } else {
+        // Authenticated user
+    }
+}
+```
+
+**Comparison:**
+- **Required**: Auth must succeed or return 401 (default)
+- **SkipAuth**: Never tries to authenticate, always guest
+- **OptionalAuth**: Tries to authenticate, guest on failure
+
+---
+
+## Standalone Handlers
+
+```go
+// NewAuthHandler - Required authentication (returns 401 on failure)
+authHandler := security.NewAuthHandler(securityList, myHandler)
+http.Handle("/api/protected", authHandler)
+
+// NewOptionalAuthHandler - Optional authentication (guest on failure)
+optionalHandler := security.NewOptionalAuthHandler(securityList, myHandler)
+http.Handle("/home", optionalHandler)
+
+// Example handler
+func myHandler(w http.ResponseWriter, r *http.Request) {
+    userCtx, _ := security.GetUserContext(r.Context())
+    if userCtx.UserID == 0 {
+        // Guest user
+    } else {
+        // Authenticated user
+    }
+}
+```
+
+---
+
 ## Context Helpers
 
 ```go
@@ -635,6 +697,7 @@ sessionID, ok := security.GetSessionID(ctx)
 remoteID, ok := security.GetRemoteID(ctx)
 roles, ok := security.GetUserRoles(ctx)
 email, ok := security.GetUserEmail(ctx)
+meta, ok := security.GetUserMeta(ctx)
 ```
 
 ---

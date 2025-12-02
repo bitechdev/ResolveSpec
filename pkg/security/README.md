@@ -118,14 +118,15 @@ Enhanced user context with complete user information:
 
 ```go
 type UserContext struct {
-    UserID    int           // User's unique ID
-    UserName  string        // Username
-    UserLevel int           // User privilege level
-    SessionID string        // Current session ID
-    RemoteID  string        // Remote system ID
-    Roles     []string      // User roles
-    Email     string        // User email
-    Claims    map[string]any // Additional metadata
+    UserID    int            // User's unique ID
+    UserName  string         // Username
+    UserLevel int            // User privilege level
+    SessionID string         // Current session ID
+    RemoteID  string         // Remote system ID
+    Roles     []string       // User roles
+    Email     string         // User email
+    Claims    map[string]any // Additional authentication claims
+    Meta      map[string]any // Additional metadata (can hold any JSON-serializable values)
 }
 ```
 
@@ -626,6 +627,142 @@ func (p *MyProvider) GetRowSecurity(ctx context.Context, userID int, schema, tab
     return security.RowSecurity{
         Template: fmt.Sprintf("tenant_id = %d AND user_id = {UserID}", tenantID),
     }, nil
+}
+```
+
+## Middleware and Handler API
+
+### NewAuthMiddleware
+Standard middleware that authenticates all requests:
+
+```go
+router.Use(security.NewAuthMiddleware(securityList))
+```
+
+Routes can skip authentication using the `SkipAuth` helper:
+
+```go
+func PublicHandler(w http.ResponseWriter, r *http.Request) {
+    ctx := security.SkipAuth(r.Context())
+    // This route will bypass authentication
+    // A guest user context will be set instead
+}
+
+router.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    ctx := security.SkipAuth(r.Context())
+    PublicHandler(w, r.WithContext(ctx))
+}))
+```
+
+When authentication is skipped, a guest user context is automatically set:
+- UserID: 0
+- UserName: "guest"
+- Roles: ["guest"]
+- RemoteID: Request's remote address
+
+Routes can use optional authentication with the `OptionalAuth` helper:
+
+```go
+func OptionalAuthHandler(w http.ResponseWriter, r *http.Request) {
+    ctx := security.OptionalAuth(r.Context())
+    r = r.WithContext(ctx)
+
+    // This route will try to authenticate
+    // If authentication succeeds, authenticated user context is set
+    // If authentication fails, guest user context is set instead
+
+    userCtx, _ := security.GetUserContext(r.Context())
+    if userCtx.UserID == 0 {
+        // Guest user
+        fmt.Fprintf(w, "Welcome, guest!")
+    } else {
+        // Authenticated user
+        fmt.Fprintf(w, "Welcome back, %s!", userCtx.UserName)
+    }
+}
+
+router.Handle("/home", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    ctx := security.OptionalAuth(r.Context())
+    OptionalAuthHandler(w, r.WithContext(ctx))
+}))
+```
+
+**Authentication Modes Summary:**
+- **Required (default)**: Authentication must succeed or returns 401
+- **SkipAuth**: Bypasses authentication entirely, always sets guest context
+- **OptionalAuth**: Tries authentication, falls back to guest context if it fails
+
+### NewAuthHandler
+
+Standalone authentication handler (without middleware wrapping):
+
+```go
+// Use when you need authentication logic without middleware
+authHandler := security.NewAuthHandler(securityList, myHandler)
+http.Handle("/api/protected", authHandler)
+```
+
+### NewOptionalAuthHandler
+
+Standalone optional authentication handler that tries to authenticate but falls back to guest:
+
+```go
+// Use for routes that should work for both authenticated and guest users
+optionalHandler := security.NewOptionalAuthHandler(securityList, myHandler)
+http.Handle("/home", optionalHandler)
+
+// Example handler that checks user context
+func myHandler(w http.ResponseWriter, r *http.Request) {
+    userCtx, _ := security.GetUserContext(r.Context())
+    if userCtx.UserID == 0 {
+        fmt.Fprintf(w, "Welcome, guest!")
+    } else {
+        fmt.Fprintf(w, "Welcome back, %s!", userCtx.UserName)
+    }
+}
+```
+
+### Helper Functions
+
+Extract user information from context:
+
+```go
+// Get full user context
+userCtx, ok := security.GetUserContext(ctx)
+
+// Get specific fields
+userID, ok := security.GetUserID(ctx)
+userName, ok := security.GetUserName(ctx)
+userLevel, ok := security.GetUserLevel(ctx)
+sessionID, ok := security.GetSessionID(ctx)
+remoteID, ok := security.GetRemoteID(ctx)
+roles, ok := security.GetUserRoles(ctx)
+email, ok := security.GetUserEmail(ctx)
+meta, ok := security.GetUserMeta(ctx)
+```
+
+### Metadata Support
+
+The `Meta` field in `UserContext` can hold any JSON-serializable values:
+
+```go
+// Set metadata during login
+loginReq := security.LoginRequest{
+    Username: "user@example.com",
+    Password: "password",
+    Meta: map[string]any{
+        "department": "engineering",
+        "location": "US",
+        "preferences": map[string]any{
+            "theme": "dark",
+        },
+    },
+}
+
+// Access metadata in handlers
+meta, ok := security.GetUserMeta(ctx)
+if ok {
+    department := meta["department"].(string)
 }
 ```
 

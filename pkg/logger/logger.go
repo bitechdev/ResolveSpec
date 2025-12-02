@@ -23,6 +23,15 @@ func Init(dev bool) {
 
 }
 
+func UpdateLoggerPath(path string, dev bool) {
+	defaultConfig := zap.NewProductionConfig()
+	if dev {
+		defaultConfig = zap.NewDevelopmentConfig()
+	}
+	defaultConfig.OutputPaths = []string{path}
+	UpdateLogger(&defaultConfig)
+}
+
 func UpdateLogger(config *zap.Config) {
 	defaultConfig := zap.NewProductionConfig()
 	defaultConfig.OutputPaths = []string{"resolvespec.log"}

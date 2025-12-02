@@ -7,35 +7,37 @@ import (
 
 // UserContext holds authenticated user information
 type UserContext struct {
-	UserID    int
-	UserName  string
-	UserLevel int
-	SessionID string
-	RemoteID  string
-	Roles     []string
-	Email     string
-	Claims    map[string]any
+	UserID    int            `json:"user_id"`
+	UserName  string         `json:"user_name"`
+	UserLevel int            `json:"user_level"`
+	SessionID string         `json:"session_id"`
+	RemoteID  string         `json:"remote_id"`
+	Roles     []string       `json:"roles"`
+	Email     string         `json:"email"`
+	Claims    map[string]any `json:"claims"`
+	Meta      map[string]any `json:"meta"` // Additional metadata that can hold any JSON-serializable values
 }
 
 // LoginRequest contains credentials for login
 type LoginRequest struct {
-	Username string
-	Password string
-	Claims   map[string]any // Additional login data
+	Username string         `json:"username"`
+	Password string         `json:"password"`
+	Claims   map[string]any `json:"claims"` // Additional login data
+	Meta     map[string]any `json:"meta"`   // Additional metadata to be set on user context
 }
 
 // LoginResponse contains the result of a login attempt
 type LoginResponse struct {
-	Token        string
-	RefreshToken string
-	User         *UserContext
-	ExpiresIn    int64 // Token expiration in seconds
+	Token        string       `json:"token"`
+	RefreshToken string       `json:"refresh_token"`
+	User         *UserContext `json:"user"`
+	ExpiresIn    int64        `json:"expires_in"` // Token expiration in seconds
 }
 
 // LogoutRequest contains information for logout
 type LogoutRequest struct {
-	Token  string
-	UserID int
+	Token  string `json:"token"`
+	UserID int    `json:"user_id"`
 }
 
 // Authenticator handles user authentication operations

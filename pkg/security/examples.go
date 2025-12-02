@@ -54,6 +54,8 @@ func (a *HeaderAuthenticatorExample) Authenticate(r *http.Request) (*UserContext
 		RemoteID:  r.Header.Get("X-Remote-ID"),
 		Email:     r.Header.Get("X-User-Email"),
 		Roles:     parseRoles(r.Header.Get("X-User-Roles")),
+		Claims:    make(map[string]any),
+		Meta:      make(map[string]any),
 	}, nil
 }
 
@@ -125,6 +127,8 @@ func (a *JWTAuthenticatorExample) Login(ctx context.Context, req LoginRequest) (
 			Email:     user.Email,
 			UserLevel: user.UserLevel,
 			Roles:     parseRoles(user.Roles),
+			Claims:    req.Claims,
+			Meta:      req.Meta,
 		},
 		ExpiresIn: int64(24 * time.Hour.Seconds()),
 	}, nil
@@ -242,6 +246,9 @@ func (a *DatabaseAuthenticatorExample) Login(ctx context.Context, req LoginReque
 			Email:     user.Email,
 			UserLevel: user.UserLevel,
 			Roles:     parseRoles(user.Roles),
+			SessionID: sessionToken,
+			Claims:    req.Claims,
+			Meta:      req.Meta,
 		},
 		ExpiresIn: int64(24 * time.Hour.Seconds()),
 	}, nil
@@ -320,6 +327,8 @@ func (a *DatabaseAuthenticatorExample) Authenticate(r *http.Request) (*UserConte
 		UserLevel: session.UserLevel,
 		SessionID: sessionToken,
 		Roles:     parseRoles(session.Roles),
+		Claims:    make(map[string]any),
+		Meta:      make(map[string]any),
 	}, nil
 }
 
@@ -370,9 +379,12 @@ func (a *DatabaseAuthenticatorExample) RefreshToken(ctx context.Context, refresh
 	return &LoginResponse{
 		Token: newSessionToken,
 		User: &UserContext{
-			UserID:   session.UserID,
-			UserName: session.Username,
-			Email:    session.Email,
+			UserID:    session.UserID,
+			UserName:  session.Username,
+			Email:     session.Email,
+			SessionID: newSessionToken,
+			Claims:    make(map[string]any),
+			Meta:      make(map[string]any),
 		},
 		ExpiresIn: int64(24 * time.Hour.Seconds()),
 	}, nil

@@ -21,6 +21,7 @@ type Handler struct {
 	db              common.Database
 	registry        common.ModelRegistry
 	nestedProcessor *common.NestedCUDProcessor
+	hooks           *HookRegistry
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -28,10 +29,17 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 	handler := &Handler{
 		db:       db,
 		registry: registry,
+		hooks:    NewHookRegistry(),
 	}
 	// Initialize nested processor
 	handler.nestedProcessor = common.NewNestedCUDProcessor(db, registry, handler)
 	return handler
+}
+
+// Hooks returns the hook registry for this handler
+// Use this to register custom hooks for operations
+func (h *Handler) Hooks() *HookRegistry {
+	return h.hooks
 }
 
 // GetDatabase returns the underlying database connection

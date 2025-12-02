@@ -56,9 +56,10 @@ rowSec := security.NewDatabaseRowSecurityProvider(db)
 // 2. Combine providers
 provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
 
-// 3. Setup security
+// 3. Create handler and register security hooks
 handler := restheadspec.NewHandlerWithGORM(db)
-securityList := security.SetupSecurityProvider(handler, provider)
+securityList := security.NewSecurityList(provider)
+restheadspec.RegisterSecurityHooks(handler, securityList)
 
 // 4. Apply middleware
 router := mux.NewRouter()
@@ -68,6 +69,38 @@ router.Use(security.SetSecurityMiddleware(securityList))
 ```
 
 ## Architecture
+
+### Spec-Agnostic Design
+
+The security system is **completely spec-agnostic** - it doesn't depend on any specific spec implementation. Instead, each spec (restheadspec, funcspec, resolvespec) implements its own security integration by adapting to the `SecurityContext` interface.
+
+```
+┌─────────────────────────────────────┐
+│     Security Package (Generic)      │
+│  - SecurityContext interface        │
+│  - Security providers                │
+│  - Core security logic               │
+└─────────────────────────────────────┘
+           ▲          ▲          ▲
+           │          │          │
+    ┌──────┘          │          └──────┐
+    │                 │                 │
+┌───▼────┐      ┌────▼─────┐     ┌────▼──────┐
+│RestHead│      │ FuncSpec │     │ResolveSpec│
+│  Spec  │      │          │     │           │
+│        │      │          │     │           │
+│Adapts  │      │ Adapts   │     │  Adapts   │
+│to      │      │ to       │     │  to       │
+│Security│      │ Security │     │  Security │
+│Context │      │ Context  │     │  Context  │
+└────────┘      └──────────┘     └───────────┘
+```
+
+**Benefits:**
+- ✅ No circular dependencies
+- ✅ Each spec can customize security integration
+- ✅ Easy to add new specs
+- ✅ Security logic is reusable across all specs
 
 ### Core Interfaces
 
@@ -112,6 +145,28 @@ type SecurityProvider interface {
     RowSecurityProvider
 }
 ```
+
+#### 4. SecurityContext (Spec Integration Interface)
+Each spec implements this interface to integrate with the security system:
+
+```go
+type SecurityContext interface {
+    GetContext() context.Context
+    GetUserID() (int, bool)
+    GetSchema() string
+    GetEntity() string
+    GetModel() interface{}
+    GetQuery() interface{}
+    SetQuery(interface{})
+    GetResult() interface{}
+    SetResult(interface{})
+}
+```
+
+**Implementation Examples:**
+- `restheadspec`: Adapts `restheadspec.HookContext` → `SecurityContext`
+- `funcspec`: Adapts `funcspec.HookContext` → `SecurityContext`
+- `resolvespec`: Adapts `resolvespec.HookContext` → `SecurityContext`
 
 ### UserContext
 Enhanced user context with complete user information:
@@ -197,7 +252,7 @@ rowSec := security.NewConfigRowSecurityProvider(templates, blocked)
 
 ## Usage Examples
 
-### Example 1: Complete Database-Backed Security with Sessions
+### Example 1: Complete Database-Backed Security with Sessions (restheadspec)
 
 ```go
 func main() {
@@ -207,16 +262,20 @@ func main() {
     // db.Exec("CREATE TABLE users ...")
     // db.Exec("CREATE TABLE user_sessions ...")
 
+    // Create handler
     handler := restheadspec.NewHandlerWithGORM(db)
 
-    // Create providers
+    // Create security providers
     auth := security.NewDatabaseAuthenticator(db) // Session-based auth
     colSec := security.NewDatabaseColumnSecurityProvider(db)
     rowSec := security.NewDatabaseRowSecurityProvider(db)
 
-    // Combine
+    // Combine providers
     provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
-    securityList := security.SetupSecurityProvider(handler, provider)
+    securityList := security.NewSecurityList(provider)
+
+    // Register security hooks for this spec
+    restheadspec.RegisterSecurityHooks(handler, securityList)
 
     // Setup routes
     router := mux.NewRouter()
@@ -309,14 +368,85 @@ func main() {
     colSec := security.NewConfigColumnSecurityProvider(columnRules)
     rowSec := security.NewConfigRowSecurityProvider(rowTemplates, nil)
 
+    // Combine providers and register hooks
     provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
-    securityList := security.SetupSecurityProvider(handler, provider)
+    securityList := security.NewSecurityList(provider)
+    restheadspec.RegisterSecurityHooks(handler, securityList)
 
     // Setup routes...
 }
 ```
 
-### Example 3: Custom Provider
+### Example 3: FuncSpec Security (SQL Query API)
+
+```go
+import (
+    "github.com/bitechdev/ResolveSpec/pkg/funcspec"
+    "github.com/bitechdev/ResolveSpec/pkg/security"
+)
+
+func main() {
+    db := setupDatabase()
+
+    // Create funcspec handler
+    handler := funcspec.NewHandler(db)
+
+    // Create security providers
+    auth := security.NewJWTAuthenticator("secret-key", db)
+    colSec := security.NewDatabaseColumnSecurityProvider(db)
+    rowSec := security.NewDatabaseRowSecurityProvider(db)
+
+    // Combine providers
+    provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+    securityList := security.NewSecurityList(provider)
+
+    // Register security hooks (audit logging)
+    funcspec.RegisterSecurityHooks(handler, securityList)
+
+    // Note: funcspec operates on raw SQL queries, so row/column
+    // security is limited. Security should be enforced at the
+    // SQL function level or via database policies.
+
+    // Setup routes...
+}
+```
+
+### Example 4: ResolveSpec Security (REST API)
+
+```go
+import (
+    "github.com/bitechdev/ResolveSpec/pkg/resolvespec"
+    "github.com/bitechdev/ResolveSpec/pkg/security"
+)
+
+func main() {
+    db := setupDatabase()
+    registry := common.NewModelRegistry()
+
+    // Register models
+    registry.RegisterModel("public.users", &User{})
+    registry.RegisterModel("public.orders", &Order{})
+
+    // Create resolvespec handler
+    handler := resolvespec.NewHandler(db, registry)
+
+    // Create security providers
+    auth := security.NewDatabaseAuthenticator(db)
+    colSec := security.NewDatabaseColumnSecurityProvider(db)
+    rowSec := security.NewDatabaseRowSecurityProvider(db)
+
+    // Combine providers
+    provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+    securityList := security.NewSecurityList(provider)
+
+    // Register security hooks for resolvespec
+    resolvespec.RegisterSecurityHooks(handler, securityList)
+
+    // Setup routes...
+}
+```
+
+### Example 5: Custom Provider
 
 Implement your own provider for complete control:
 
@@ -345,9 +475,18 @@ func (p *MySecurityProvider) GetRowSecurity(ctx context.Context, userID int, sch
     // Your custom row security logic
 }
 
-// Use it
+// Use it with any spec
 provider := &MySecurityProvider{db: db}
-securityList := security.SetupSecurityProvider(handler, provider)
+securityList := security.NewSecurityList(provider)
+
+// Register with restheadspec
+restheadspec.RegisterSecurityHooks(restHandler, securityList)
+
+// Or with funcspec
+funcspec.RegisterSecurityHooks(funcHandler, securityList)
+
+// Or with resolvespec
+resolvespec.RegisterSecurityHooks(resolveHandler, securityList)
 ```
 
 ## Security Features
@@ -419,29 +558,44 @@ securityList := security.SetupSecurityProvider(handler, provider)
 ```
 HTTP Request
     ↓
-NewAuthMiddleware
+NewAuthMiddleware (security package)
     ├─ Calls provider.Authenticate(request)
     └─ Adds UserContext to context
     ↓
-SetSecurityMiddleware
+SetSecurityMiddleware (security package)
     └─ Adds SecurityList to context
     ↓
-Handler.Handle()
+Spec Handler (restheadspec/funcspec/resolvespec)
     ↓
-BeforeRead Hook
-    ├─ Calls provider.GetColumnSecurity()
-    └─ Calls provider.GetRowSecurity()
+BeforeRead Hook (registered by spec)
+    ├─ Adapts spec's HookContext → SecurityContext
+    ├─ Calls security.LoadSecurityRules(secCtx, securityList)
+    │   ├─ Calls provider.GetColumnSecurity()
+    │   └─ Calls provider.GetRowSecurity()
+    └─ Caches security rules
     ↓
-BeforeScan Hook
-    └─ Applies row security (adds WHERE clause)
+BeforeScan Hook (registered by spec)
+    ├─ Adapts spec's HookContext → SecurityContext
+    ├─ Calls security.ApplyRowSecurity(secCtx, securityList)
+    └─ Applies row security (adds WHERE clause to query)
     ↓
 Database Query (with security filters)
     ↓
-AfterRead Hook
-    └─ Applies column security (masks/hides fields)
+AfterRead Hook (registered by spec)
+    ├─ Adapts spec's HookContext → SecurityContext
+    ├─ Calls security.ApplyColumnSecurity(secCtx, securityList)
+    ├─ Applies column security (masks/hides fields)
+    └─ Calls security.LogDataAccess(secCtx)
     ↓
 HTTP Response (secured data)
 ```
+
+**Key Points:**
+- Security package is spec-agnostic and provides core logic
+- Each spec registers its own hooks that adapt to SecurityContext
+- Security rules are loaded once and cached for the request
+- Row security is applied to the query (database level)
+- Column security is applied to results (application level)
 
 ## Testing
 
@@ -475,7 +629,9 @@ func TestMyHandler(t *testing.T) {
 }
 ```
 
-## Migration from Callbacks
+## Migration Guide
+
+### From Old Callback System
 
 If you're upgrading from the old callback-based system:
 
@@ -489,7 +645,7 @@ security.SetupSecurityProvider(handler, &security.GlobalSecurity)
 
 **New:**
 ```go
-// Wrap your functions in a provider
+// 1. Wrap your functions in a provider
 type MyProvider struct{}
 
 func (p *MyProvider) Authenticate(r *http.Request) (*security.UserContext, error) {
@@ -513,10 +669,33 @@ func (p *MyProvider) Logout(ctx context.Context, req security.LogoutRequest) err
     return nil
 }
 
-// Use it
+// 2. Create security list and register hooks
 provider := &MyProvider{}
+securityList := security.NewSecurityList(provider)
+
+// 3. Register with your spec
+restheadspec.RegisterSecurityHooks(handler, securityList)
+```
+
+### From Old SetupSecurityProvider API
+
+If you're upgrading from the previous interface-based system:
+
+**Old:**
+```go
 securityList := security.SetupSecurityProvider(handler, provider)
 ```
+
+**New:**
+```go
+securityList := security.NewSecurityList(provider)
+restheadspec.RegisterSecurityHooks(handler, securityList) // or funcspec/resolvespec
+```
+
+The main changes:
+1. Security package no longer knows about specific spec types
+2. Each spec registers its own security hooks
+3. More flexible - same security provider works with all specs
 
 ## Documentation
 

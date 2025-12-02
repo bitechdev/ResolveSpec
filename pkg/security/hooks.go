@@ -1,51 +1,43 @@
 package security
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
-	"github.com/bitechdev/ResolveSpec/pkg/restheadspec"
 )
 
-// RegisterSecurityHooks registers all security-related hooks with the handler
-func RegisterSecurityHooks(handler *restheadspec.Handler, securityList *SecurityList) {
-
-	// Hook 1: BeforeRead - Load security rules
-	handler.Hooks().Register(restheadspec.BeforeRead, func(hookCtx *restheadspec.HookContext) error {
-		return LoadSecurityRules(hookCtx, securityList)
-	})
-
-	// Hook 2: BeforeScan - Apply row-level security filters
-	handler.Hooks().Register(restheadspec.BeforeScan, func(hookCtx *restheadspec.HookContext) error {
-		return ApplyRowSecurity(hookCtx, securityList)
-	})
-
-	// Hook 3: AfterRead - Apply column-level security (masking)
-	handler.Hooks().Register(restheadspec.AfterRead, func(hookCtx *restheadspec.HookContext) error {
-		return ApplyColumnSecurity(hookCtx, securityList)
-	})
-
-	// Hook 4 (Optional): Audit logging
-	handler.Hooks().Register(restheadspec.AfterRead, LogDataAccess)
+// SecurityContext is a generic interface that any spec can implement to integrate with security features
+// This interface abstracts the common security context needs across different specs
+type SecurityContext interface {
+	GetContext() context.Context
+	GetUserID() (int, bool)
+	GetSchema() string
+	GetEntity() string
+	GetModel() interface{}
+	GetQuery() interface{}
+	SetQuery(interface{})
+	GetResult() interface{}
+	SetResult(interface{})
 }
 
-// LoadSecurityRules loads security configuration for the user and entity
-func LoadSecurityRules(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
+// loadSecurityRules loads security configuration for the user and entity (generic version)
+func loadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error {
 	// Extract user ID from context
-	userID, ok := GetUserID(hookCtx.Context)
+	userID, ok := secCtx.GetUserID()
 	if !ok {
 		logger.Warn("No user ID in context for security check")
 		return fmt.Errorf("authentication required")
 	}
 
-	schema := hookCtx.Schema
-	tablename := hookCtx.Entity
+	schema := secCtx.GetSchema()
+	tablename := secCtx.GetEntity()
 
 	logger.Debug("Loading security rules for user=%d, schema=%s, table=%s", userID, schema, tablename)
 
 	// Load column security rules using the provider
-	err := securityList.LoadColumnSecurity(hookCtx.Context, userID, schema, tablename, false)
+	err := securityList.LoadColumnSecurity(secCtx.GetContext(), userID, schema, tablename, false)
 	if err != nil {
 		logger.Warn("Failed to load column security: %v", err)
 		// Don't fail the request if no security rules exist
@@ -53,7 +45,7 @@ func LoadSecurityRules(hookCtx *restheadspec.HookContext, securityList *Security
 	}
 
 	// Load row security rules using the provider
-	_, err = securityList.LoadRowSecurity(hookCtx.Context, userID, schema, tablename, false)
+	_, err = securityList.LoadRowSecurity(secCtx.GetContext(), userID, schema, tablename, false)
 	if err != nil {
 		logger.Warn("Failed to load row security: %v", err)
 		// Don't fail the request if no security rules exist
@@ -63,15 +55,15 @@ func LoadSecurityRules(hookCtx *restheadspec.HookContext, securityList *Security
 	return nil
 }
 
-// ApplyRowSecurity applies row-level security filters to the query
-func ApplyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
-	userID, ok := GetUserID(hookCtx.Context)
+// applyRowSecurity applies row-level security filters to the query (generic version)
+func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error {
+	userID, ok := secCtx.GetUserID()
 	if !ok {
 		return nil // No user context, skip
 	}
 
-	schema := hookCtx.Schema
-	tablename := hookCtx.Entity
+	schema := secCtx.GetSchema()
+	tablename := secCtx.GetEntity()
 
 	// Get row security template
 	rowSec, err := securityList.GetRowSecurityTemplate(userID, schema, tablename)
@@ -89,8 +81,14 @@ func ApplyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityL
 
 	// If there's a security template, apply it as a WHERE clause
 	if rowSec.Template != "" {
+		model := secCtx.GetModel()
+		if model == nil {
+			logger.Debug("No model available for row security on %s.%s", schema, tablename)
+			return nil
+		}
+
 		// Get primary key name from model
-		modelType := reflect.TypeOf(hookCtx.Model)
+		modelType := reflect.TypeOf(model)
 		if modelType.Kind() == reflect.Ptr {
 			modelType = modelType.Elem()
 		}
@@ -117,39 +115,45 @@ func ApplyRowSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityL
 			userID, schema, tablename, whereClause)
 
 		// Apply the WHERE clause to the query
-		// The query is in hookCtx.Query
-		if selectQuery, ok := hookCtx.Query.(interface {
+		query := secCtx.GetQuery()
+		if selectQuery, ok := query.(interface {
 			Where(string, ...interface{}) interface{}
 		}); ok {
-			hookCtx.Query = selectQuery.Where(whereClause)
+			secCtx.SetQuery(selectQuery.Where(whereClause))
 		} else {
-			logger.Error("Unable to apply WHERE clause - query doesn't support Where method")
+			logger.Debug("Query doesn't support Where method, skipping row security")
 		}
 	}
 
 	return nil
 }
 
-// ApplyColumnSecurity applies column-level security (masking/hiding) to results
-func ApplyColumnSecurity(hookCtx *restheadspec.HookContext, securityList *SecurityList) error {
-	userID, ok := GetUserID(hookCtx.Context)
+// applyColumnSecurity applies column-level security (masking/hiding) to results (generic version)
+func applyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) error {
+	userID, ok := secCtx.GetUserID()
 	if !ok {
 		return nil // No user context, skip
 	}
 
-	schema := hookCtx.Schema
-	tablename := hookCtx.Entity
+	schema := secCtx.GetSchema()
+	tablename := secCtx.GetEntity()
 
 	// Get result data
-	result := hookCtx.Result
+	result := secCtx.GetResult()
 	if result == nil {
 		return nil
 	}
 
 	logger.Debug("Applying column security for user=%d, schema=%s, table=%s", userID, schema, tablename)
 
+	model := secCtx.GetModel()
+	if model == nil {
+		logger.Debug("No model available for column security on %s.%s", schema, tablename)
+		return nil
+	}
+
 	// Get model type
-	modelType := reflect.TypeOf(hookCtx.Model)
+	modelType := reflect.TypeOf(model)
 	if modelType.Kind() == reflect.Ptr {
 		modelType = modelType.Elem()
 	}
@@ -169,35 +173,57 @@ func ApplyColumnSecurity(hookCtx *restheadspec.HookContext, securityList *Securi
 
 	// Update the result with masked data
 	if maskedResult.IsValid() && maskedResult.CanInterface() {
-		hookCtx.Result = maskedResult.Interface()
+		secCtx.SetResult(maskedResult.Interface())
 	}
 
 	return nil
 }
 
-// LogDataAccess logs all data access for audit purposes
-func LogDataAccess(hookCtx *restheadspec.HookContext) error {
-	userID, _ := GetUserID(hookCtx.Context)
+// logDataAccess logs all data access for audit purposes (generic version)
+func logDataAccess(secCtx SecurityContext) error {
+	userID, _ := secCtx.GetUserID()
 
-	logger.Info("AUDIT: User %d accessed %s.%s with filters: %+v",
+	logger.Info("AUDIT: User %d accessed %s.%s",
 		userID,
-		hookCtx.Schema,
-		hookCtx.Entity,
-		hookCtx.Options.Filters,
+		secCtx.GetSchema(),
+		secCtx.GetEntity(),
 	)
 
 	// TODO: Write to audit log table or external audit service
 	// auditLog := AuditLog{
 	//     UserID:    userID,
-	//     Schema:    hookCtx.Schema,
-	//     Entity:    hookCtx.Entity,
+	//     Schema:    secCtx.GetSchema(),
+	//     Entity:    secCtx.GetEntity(),
 	//     Action:    "READ",
 	//     Timestamp: time.Now(),
-	//     Filters:   hookCtx.Options.Filters,
 	// }
 	// db.Create(&auditLog)
 
 	return nil
+}
+
+// LogDataAccess is a public wrapper for logDataAccess that accepts a SecurityContext
+// This allows other packages to use the audit logging functionality
+func LogDataAccess(secCtx SecurityContext) error {
+	return logDataAccess(secCtx)
+}
+
+// LoadSecurityRules is a public wrapper for loadSecurityRules that accepts a SecurityContext
+// This allows other packages to load security rules using the generic interface
+func LoadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error {
+	return loadSecurityRules(secCtx, securityList)
+}
+
+// ApplyRowSecurity is a public wrapper for applyRowSecurity that accepts a SecurityContext
+// This allows other packages to apply row-level security using the generic interface
+func ApplyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error {
+	return applyRowSecurity(secCtx, securityList)
+}
+
+// ApplyColumnSecurity is a public wrapper for applyColumnSecurity that accepts a SecurityContext
+// This allows other packages to apply column-level security using the generic interface
+func ApplyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) error {
+	return applyColumnSecurity(secCtx, securityList)
 }
 
 // Helper functions

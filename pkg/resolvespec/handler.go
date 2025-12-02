@@ -16,12 +16,17 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
+// FallbackHandler is a function that handles requests when no model is found
+// It receives the same parameters as the Handle method
+type FallbackHandler func(w common.ResponseWriter, r common.Request, params map[string]string)
+
 // Handler handles API requests using database and model abstractions
 type Handler struct {
 	db              common.Database
 	registry        common.ModelRegistry
 	nestedProcessor *common.NestedCUDProcessor
 	hooks           *HookRegistry
+	fallbackHandler FallbackHandler
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -40,6 +45,12 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 // Use this to register custom hooks for operations
 func (h *Handler) Hooks() *HookRegistry {
 	return h.hooks
+}
+
+// SetFallbackHandler sets a fallback handler to be called when no model is found
+// If not set, the handler will simply return (pass through to next route)
+func (h *Handler) SetFallbackHandler(fallback FallbackHandler) {
+	h.fallbackHandler = fallback
 }
 
 // GetDatabase returns the underlying database connection
@@ -89,8 +100,14 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	// Get model and populate context with request-scoped data
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
-		// Model not found - pass through to next route without writing response
-		logger.Debug("Model not found for %s.%s, passing through to next route", schema, entity)
+		// Model not found - call fallback handler if set, otherwise pass through
+		logger.Debug("Model not found for %s.%s", schema, entity)
+		if h.fallbackHandler != nil {
+			logger.Debug("Calling fallback handler for %s.%s", schema, entity)
+			h.fallbackHandler(w, r, params)
+		} else {
+			logger.Debug("No fallback handler set, passing through to next route")
+		}
 		return
 	}
 
@@ -156,8 +173,14 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
-		// Model not found - pass through to next route without writing response
-		logger.Debug("Model not found for %s.%s, passing through to next route", schema, entity)
+		// Model not found - call fallback handler if set, otherwise pass through
+		logger.Debug("Model not found for %s.%s", schema, entity)
+		if h.fallbackHandler != nil {
+			logger.Debug("Calling fallback handler for %s.%s", schema, entity)
+			h.fallbackHandler(w, r, params)
+		} else {
+			logger.Debug("No fallback handler set, passing through to next route")
+		}
 		return
 	}
 

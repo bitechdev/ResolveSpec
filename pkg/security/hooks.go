@@ -28,7 +28,7 @@ func loadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error
 	userID, ok := secCtx.GetUserID()
 	if !ok {
 		logger.Warn("No user ID in context for security check")
-		return fmt.Errorf("authentication required")
+		return nil
 	}
 
 	schema := secCtx.GetSchema()

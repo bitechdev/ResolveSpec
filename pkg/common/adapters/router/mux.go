@@ -137,6 +137,12 @@ func (h *HTTPRequest) AllHeaders() map[string]string {
 	return headers
 }
 
+// UnderlyingRequest returns the underlying *http.Request
+// This is useful when you need to pass the request to other handlers
+func (h *HTTPRequest) UnderlyingRequest() *http.Request {
+	return h.req
+}
+
 // HTTPResponseWriter adapts our ResponseWriter interface to standard http.ResponseWriter
 type HTTPResponseWriter struct {
 	resp   http.ResponseWriter
@@ -164,6 +170,12 @@ func (h *HTTPResponseWriter) Write(data []byte) (int, error) {
 func (h *HTTPResponseWriter) WriteJSON(data interface{}) error {
 	h.SetHeader("Content-Type", "application/json")
 	return json.NewEncoder(h.resp).Encode(data)
+}
+
+// UnderlyingResponseWriter returns the underlying http.ResponseWriter
+// This is useful when you need to pass the response writer to other handlers
+func (h *HTTPResponseWriter) UnderlyingResponseWriter() http.ResponseWriter {
+	return h.resp
 }
 
 // StandardMuxAdapter creates routes compatible with standard http.HandlerFunc

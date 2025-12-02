@@ -81,8 +81,8 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	// Get model and populate context with request-scoped data
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
-		logger.Error("Invalid entity: %v", err)
-		h.sendError(w, http.StatusBadRequest, "invalid_entity", "Invalid entity", err)
+		// Model not found - pass through to next route without writing response
+		logger.Debug("Model not found for %s.%s, passing through to next route", schema, entity)
 		return
 	}
 
@@ -197,8 +197,8 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
-		logger.Error("Failed to get model: %v", err)
-		h.sendError(w, http.StatusBadRequest, "invalid_entity", "Invalid entity", err)
+		// Model not found - pass through to next route without writing response
+		logger.Debug("Model not found for %s.%s, passing through to next route", schema, entity)
 		return
 	}
 

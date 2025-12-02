@@ -90,31 +90,51 @@ func NewStandardBunRouter() *router.StandardBunRouterAdapter {
 	return router.NewStandardBunRouterAdapter()
 }
 
+// MiddlewareFunc is a function that wraps an http.Handler with additional functionality
+type MiddlewareFunc func(http.Handler) http.Handler
+
 // SetupMuxRoutes sets up routes for the RestHeadSpec API with Mux
-func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
-	// GET, POST, PUT, PATCH, DELETE for /{schema}/{entity}
-	muxRouter.HandleFunc("/{schema}/{entity}", func(w http.ResponseWriter, r *http.Request) {
+// authMiddleware is optional - if provided, routes will be protected with the middleware
+// Example: SetupMuxRoutes(router, handler, func(h http.Handler) http.Handler { return security.NewAuthHandler(securityList, h) })
+func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware MiddlewareFunc) {
+	// Create handler functions
+	entityHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.Handle(respAdapter, reqAdapter, vars)
-	}).Methods("GET", "POST")
+	})
 
-	// GET, PUT, PATCH, DELETE for /{schema}/{entity}/{id}
-	muxRouter.HandleFunc("/{schema}/{entity}/{id}", func(w http.ResponseWriter, r *http.Request) {
+	entityWithIDHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.Handle(respAdapter, reqAdapter, vars)
-	}).Methods("GET", "PUT", "PATCH", "DELETE", "POST")
+	})
 
-	// GET for metadata (using HandleGet)
-	muxRouter.HandleFunc("/{schema}/{entity}/metadata", func(w http.ResponseWriter, r *http.Request) {
+	metadataHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.HandleGet(respAdapter, reqAdapter, vars)
-	}).Methods("GET")
+	})
+
+	// Apply authentication middleware if provided
+	if authMiddleware != nil {
+		entityHandler = authMiddleware(entityHandler).(http.HandlerFunc)
+		entityWithIDHandler = authMiddleware(entityWithIDHandler).(http.HandlerFunc)
+		metadataHandler = authMiddleware(metadataHandler).(http.HandlerFunc)
+	}
+
+	// Register routes
+	// GET, POST for /{schema}/{entity}
+	muxRouter.Handle("/{schema}/{entity}", entityHandler).Methods("GET", "POST")
+
+	// GET, PUT, PATCH, DELETE, POST for /{schema}/{entity}/{id}
+	muxRouter.Handle("/{schema}/{entity}/{id}", entityWithIDHandler).Methods("GET", "PUT", "PATCH", "DELETE", "POST")
+
+	// GET for metadata (using HandleGet)
+	muxRouter.Handle("/{schema}/{entity}/metadata", metadataHandler).Methods("GET")
 }
 
 // Example usage functions for documentation:
@@ -124,12 +144,20 @@ func ExampleWithGORM(db *gorm.DB) {
 	// Create handler using GORM
 	handler := NewHandlerWithGORM(db)
 
-	// Setup router
+	// Setup router without authentication
 	muxRouter := mux.NewRouter()
-	SetupMuxRoutes(muxRouter, handler)
+	SetupMuxRoutes(muxRouter, handler, nil)
 
 	// Register models
 	// handler.registry.RegisterModel("public.users", &User{})
+
+	// To add authentication, pass a middleware function:
+	// import "github.com/bitechdev/ResolveSpec/pkg/security"
+	// secList := security.NewSecurityList(myProvider)
+	// authMiddleware := func(h http.Handler) http.Handler {
+	//     return security.NewAuthHandler(secList, h)
+	// }
+	// SetupMuxRoutes(muxRouter, handler, authMiddleware)
 }
 
 // ExampleWithBun shows how to switch to Bun ORM
@@ -144,9 +172,9 @@ func ExampleWithBun(bunDB *bun.DB) {
 	// Create handler
 	handler := NewHandler(dbAdapter, registry)
 
-	// Setup routes
+	// Setup routes without authentication
 	muxRouter := mux.NewRouter()
-	SetupMuxRoutes(muxRouter, handler)
+	SetupMuxRoutes(muxRouter, handler, nil)
 }
 
 // SetupBunRouterRoutes sets up bunrouter routes for the RestHeadSpec API

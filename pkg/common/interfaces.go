@@ -246,3 +246,39 @@ type PrimaryKeyNameProvider interface {
 type SchemaProvider interface {
 	SchemaName() string
 }
+
+// SpecHandler interface represents common functionality across all spec handlers
+// This is the base interface implemented by:
+//   - resolvespec.Handler: Handles CRUD operations via request body with explicit operation field
+//   - restheadspec.Handler: Handles CRUD operations via HTTP methods (GET/POST/PUT/DELETE)
+//   - funcspec.Handler: Handles custom SQL query execution with dynamic parameters
+//
+// The interface hierarchy is:
+//
+//	SpecHandler (base)
+//	├── CRUDHandler (resolvespec, restheadspec)
+//	└── QueryHandler (funcspec)
+type SpecHandler interface {
+	// GetDatabase returns the underlying database connection
+	GetDatabase() Database
+}
+
+// CRUDHandler interface for handlers that support CRUD operations
+// This is implemented by resolvespec.Handler and restheadspec.Handler
+type CRUDHandler interface {
+	SpecHandler
+
+	// Handle processes API requests through router-agnostic interface
+	Handle(w ResponseWriter, r Request, params map[string]string)
+
+	// HandleGet processes GET requests for metadata
+	HandleGet(w ResponseWriter, r Request, params map[string]string)
+}
+
+// QueryHandler interface for handlers that execute SQL queries
+// This is implemented by funcspec.Handler
+// Note: funcspec uses standard http.ResponseWriter and *http.Request instead of common interfaces
+type QueryHandler interface {
+	SpecHandler
+	// Methods are defined in funcspec package due to different function signature requirements
+}

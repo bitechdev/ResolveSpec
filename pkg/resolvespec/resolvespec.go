@@ -37,28 +37,46 @@ func NewStandardBunRouter() *router.StandardBunRouterAdapter {
 	return router.NewStandardBunRouterAdapter()
 }
 
+// MiddlewareFunc is a function that wraps an http.Handler with additional functionality
+type MiddlewareFunc func(http.Handler) http.Handler
+
 // SetupMuxRoutes sets up routes for the ResolveSpec API with Mux
-func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
-	muxRouter.HandleFunc("/{schema}/{entity}", func(w http.ResponseWriter, r *http.Request) {
+// authMiddleware is optional - if provided, routes will be protected with the middleware
+// Example: SetupMuxRoutes(router, handler, func(h http.Handler) http.Handler { return security.NewAuthHandler(securityList, h) })
+func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware MiddlewareFunc) {
+	// Create handler functions
+	postEntityHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.Handle(respAdapter, reqAdapter, vars)
-	}).Methods("POST")
+	})
 
-	muxRouter.HandleFunc("/{schema}/{entity}/{id}", func(w http.ResponseWriter, r *http.Request) {
+	postEntityWithIDHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.Handle(respAdapter, reqAdapter, vars)
-	}).Methods("POST")
+	})
 
-	muxRouter.HandleFunc("/{schema}/{entity}", func(w http.ResponseWriter, r *http.Request) {
+	getEntityHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		reqAdapter := router.NewHTTPRequest(r)
 		respAdapter := router.NewHTTPResponseWriter(w)
 		handler.HandleGet(respAdapter, reqAdapter, vars)
-	}).Methods("GET")
+	})
+
+	// Apply authentication middleware if provided
+	if authMiddleware != nil {
+		postEntityHandler = authMiddleware(postEntityHandler).(http.HandlerFunc)
+		postEntityWithIDHandler = authMiddleware(postEntityWithIDHandler).(http.HandlerFunc)
+		getEntityHandler = authMiddleware(getEntityHandler).(http.HandlerFunc)
+	}
+
+	// Register routes
+	muxRouter.Handle("/{schema}/{entity}", postEntityHandler).Methods("POST")
+	muxRouter.Handle("/{schema}/{entity}/{id}", postEntityWithIDHandler).Methods("POST")
+	muxRouter.Handle("/{schema}/{entity}", getEntityHandler).Methods("GET")
 }
 
 // Example usage functions for documentation:
@@ -68,12 +86,20 @@ func ExampleWithGORM(db *gorm.DB) {
 	// Create handler using GORM
 	handler := NewHandlerWithGORM(db)
 
-	// Setup router
+	// Setup router without authentication
 	muxRouter := mux.NewRouter()
-	SetupMuxRoutes(muxRouter, handler)
+	SetupMuxRoutes(muxRouter, handler, nil)
 
 	// Register models
 	// handler.RegisterModel("public", "users", &User{})
+
+	// To add authentication, pass a middleware function:
+	// import "github.com/bitechdev/ResolveSpec/pkg/security"
+	// secList := security.NewSecurityList(myProvider)
+	// authMiddleware := func(h http.Handler) http.Handler {
+	//     return security.NewAuthHandler(secList, h)
+	// }
+	// SetupMuxRoutes(muxRouter, handler, authMiddleware)
 }
 
 // ExampleWithBun shows how to switch to Bun ORM
@@ -88,9 +114,9 @@ func ExampleWithBun(bunDB *bun.DB) {
 	// Create handler
 	handler := NewHandler(dbAdapter, registry)
 
-	// Setup routes
+	// Setup routes without authentication
 	muxRouter := mux.NewRouter()
-	SetupMuxRoutes(muxRouter, handler)
+	SetupMuxRoutes(muxRouter, handler, nil)
 }
 
 // SetupBunRouterRoutes sets up bunrouter routes for the ResolveSpec API

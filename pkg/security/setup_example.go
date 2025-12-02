@@ -68,12 +68,14 @@ func ExampleDatabaseSecurity(gormDB interface{}, sqlDB *sql.DB) (http.Handler, e
 	// Step 5: Setup security
 	securityList := SetupSecurityProvider(handler, provider)
 
-	// Step 6: Create router and setup routes
+	// Step 6: Create router and setup routes with authentication
 	router := mux.NewRouter()
-	restheadspec.SetupMuxRoutes(router, handler)
+	authMiddleware := func(h http.Handler) http.Handler {
+		return NewAuthHandler(securityList, h)
+	}
+	restheadspec.SetupMuxRoutes(router, handler, authMiddleware)
 
-	// Step 7: Apply middleware in correct order
-	router.Use(NewAuthMiddleware(securityList))
+	// Step 7: Apply additional security middleware
 	router.Use(SetSecurityMiddleware(securityList))
 
 	return router, nil
@@ -95,9 +97,11 @@ func ExampleHeaderAuthentication(gormDB interface{}, sqlDB *sql.DB) (*mux.Router
 	securityList := SetupSecurityProvider(handler, provider)
 
 	router := mux.NewRouter()
-	restheadspec.SetupMuxRoutes(router, handler)
+	authMiddleware := func(h http.Handler) http.Handler {
+		return NewAuthHandler(securityList, h)
+	}
+	restheadspec.SetupMuxRoutes(router, handler, authMiddleware)
 
-	router.Use(NewAuthMiddleware(securityList))
 	router.Use(SetSecurityMiddleware(securityList))
 
 	return router, nil
@@ -150,9 +154,11 @@ func ExampleConfigSecurity(gormDB interface{}) (*mux.Router, error) {
 	securityList := SetupSecurityProvider(handler, provider)
 
 	router := mux.NewRouter()
-	restheadspec.SetupMuxRoutes(router, handler)
+	authMiddleware := func(h http.Handler) http.Handler {
+		return NewAuthHandler(securityList, h)
+	}
+	restheadspec.SetupMuxRoutes(router, handler, authMiddleware)
 
-	router.Use(NewAuthMiddleware(securityList))
 	router.Use(SetSecurityMiddleware(securityList))
 
 	return router, nil
@@ -282,10 +288,12 @@ func CompleteServerExample(gormDB interface{}, sqlDB *sql.DB) http.Handler {
 	// Add auth routes (login/logout)
 	SetupAuthRoutes(router, securityList)
 
-	// Add API routes with security middleware
+	// Add API routes with authentication
 	apiRouter := router.PathPrefix("/api").Subrouter()
-	restheadspec.SetupMuxRoutes(apiRouter, handler)
-	apiRouter.Use(NewAuthMiddleware(securityList))
+	authMiddleware := func(h http.Handler) http.Handler {
+		return NewAuthHandler(securityList, h)
+	}
+	restheadspec.SetupMuxRoutes(apiRouter, handler, authMiddleware)
 	apiRouter.Use(SetSecurityMiddleware(securityList))
 
 	return router

@@ -34,6 +34,12 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 	return handler
 }
 
+// GetDatabase returns the underlying database connection
+// Implements common.SpecHandler interface
+func (h *Handler) GetDatabase() common.Database {
+	return h.db
+}
+
 // handlePanic is a helper function to handle panics with stack traces
 func (h *Handler) handlePanic(w common.ResponseWriter, method string, err interface{}) {
 	stack := debug.Stack()

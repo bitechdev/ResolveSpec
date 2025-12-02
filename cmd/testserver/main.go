@@ -47,8 +47,8 @@ func main() {
 		handler.RegisterModel("public", modelNames[i], model)
 	}
 
-	// Setup routes using new SetupMuxRoutes function
-	resolvespec.SetupMuxRoutes(r, handler)
+	// Setup routes using new SetupMuxRoutes function (without authentication)
+	resolvespec.SetupMuxRoutes(r, handler, nil)
 
 	// Start server
 	logger.Info("Starting server on :8080")

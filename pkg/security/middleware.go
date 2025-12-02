@@ -243,3 +243,158 @@ func GetUserMeta(ctx context.Context) (map[string]any, bool) {
 	meta, ok := ctx.Value(UserMetaKey).(map[string]any)
 	return meta, ok
 }
+
+// // Handler adapters for resolvespec/restheadspec compatibility
+// // These functions allow using NewAuthHandler and NewOptionalAuthHandler with custom handler abstractions
+
+// // SpecHandlerAdapter is an interface for handler adapters that need authentication
+// // Implement this interface to create adapters for custom handler types
+// type SpecHandlerAdapter interface {
+// 	// AdaptToHTTPHandler converts the custom handler to a standard http.Handler
+// 	AdaptToHTTPHandler() http.Handler
+// }
+
+// // ResolveSpecHandlerAdapter adapts a resolvespec/restheadspec handler method to http.Handler
+// type ResolveSpecHandlerAdapter struct {
+// 	// HandlerMethod is the method to call (e.g., handler.Handle, handler.HandleGet)
+// 	HandlerMethod func(w any, r any, params map[string]string)
+// 	// Params are the route parameters (e.g., {"schema": "public", "entity": "users"})
+// 	Params map[string]string
+// 	// RequestAdapter converts *http.Request to the custom Request interface
+// 	// Use router.NewHTTPRequest from pkg/common/adapters/router
+// 	RequestAdapter func(*http.Request) any
+// 	// ResponseAdapter converts http.ResponseWriter to the custom ResponseWriter interface
+// 	// Use router.NewHTTPResponseWriter from pkg/common/adapters/router
+// 	ResponseAdapter func(http.ResponseWriter) any
+// }
+
+// // AdaptToHTTPHandler implements SpecHandlerAdapter
+// func (a *ResolveSpecHandlerAdapter) AdaptToHTTPHandler() http.Handler {
+// 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// 		req := a.RequestAdapter(r)
+// 		resp := a.ResponseAdapter(w)
+// 		a.HandlerMethod(resp, req, a.Params)
+// 	})
+// }
+
+// // WrapSpecHandler wraps a spec handler adapter with authentication
+// // Use this to apply NewAuthHandler or NewOptionalAuthHandler to resolvespec/restheadspec handlers
+// //
+// // Example with required auth:
+// //
+// //	adapter := &security.ResolveSpecHandlerAdapter{
+// //	    HandlerMethod: handler.Handle,
+// //	    Params: map[string]string{"schema": "public", "entity": "users"},
+// //	    RequestAdapter: func(r *http.Request) any { return router.NewHTTPRequest(r) },
+// //	    ResponseAdapter: func(w http.ResponseWriter) any { return router.NewHTTPResponseWriter(w) },
+// //	}
+// //	authHandler := security.WrapSpecHandler(securityList, adapter, false)
+// //	muxRouter.Handle("/api/users", authHandler)
+// func WrapSpecHandler(securityList *SecurityList, adapter SpecHandlerAdapter, optional bool) http.Handler {
+// 	httpHandler := adapter.AdaptToHTTPHandler()
+// 	if optional {
+// 		return NewOptionalAuthHandler(securityList, httpHandler)
+// 	}
+// 	return NewAuthHandler(securityList, httpHandler)
+// }
+
+// // MuxRouteBuilder helps build authenticated routes with Gorilla Mux
+// type MuxRouteBuilder struct {
+// 	securityList    *SecurityList
+// 	requestAdapter  func(*http.Request) any
+// 	responseAdapter func(http.ResponseWriter) any
+// 	paramExtractor  func(*http.Request) map[string]string
+// }
+
+// // NewMuxRouteBuilder creates a route builder for Gorilla Mux with standard router adapters
+// // Usage:
+// //
+// //	builder := security.NewMuxRouteBuilder(securityList, router.NewHTTPRequest, router.NewHTTPResponseWriter)
+// func NewMuxRouteBuilder(
+// 	securityList *SecurityList,
+// 	requestAdapter func(*http.Request) any,
+// 	responseAdapter func(http.ResponseWriter) any,
+// ) *MuxRouteBuilder {
+// 	return &MuxRouteBuilder{
+// 		securityList:    securityList,
+// 		requestAdapter:  requestAdapter,
+// 		responseAdapter: responseAdapter,
+// 		paramExtractor:  nil, // Will be set per route using mux.Vars
+// 	}
+// }
+
+// // HandleAuth creates an authenticated route handler
+// // pattern: the route pattern (e.g., "/{schema}/{entity}")
+// // handler: the handler method to call (e.g., handler.Handle)
+// // optional: true for optional auth (guest fallback), false for required auth (401 on failure)
+// // methods: HTTP methods (e.g., "GET", "POST")
+// //
+// // Usage:
+// //
+// //	builder.HandleAuth(router, "/{schema}/{entity}", handler.Handle, false, "POST")
+// func (b *MuxRouteBuilder) HandleAuth(
+// 	router interface {
+// 		HandleFunc(pattern string, f func(http.ResponseWriter, *http.Request)) interface{ Methods(...string) interface{} }
+// 	},
+// 	pattern string,
+// 	handlerMethod func(w any, r any, params map[string]string),
+// 	optional bool,
+// 	methods ...string,
+// ) {
+// 	router.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+// 		// Extract params using the registered extractor or default to empty map
+// 		var params map[string]string
+// 		if b.paramExtractor != nil {
+// 			params = b.paramExtractor(r)
+// 		} else {
+// 			params = make(map[string]string)
+// 		}
+
+// 		adapter := &ResolveSpecHandlerAdapter{
+// 			HandlerMethod:   handlerMethod,
+// 			Params:          params,
+// 			RequestAdapter:  b.requestAdapter,
+// 			ResponseAdapter: b.responseAdapter,
+// 		}
+// 		authHandler := WrapSpecHandler(b.securityList, adapter, optional)
+// 		authHandler.ServeHTTP(w, r)
+// 	}).Methods(methods...)
+// }
+
+// // SetParamExtractor sets a custom parameter extractor function
+// // For Gorilla Mux, you would use: builder.SetParamExtractor(mux.Vars)
+// func (b *MuxRouteBuilder) SetParamExtractor(extractor func(*http.Request) map[string]string) {
+// 	b.paramExtractor = extractor
+// }
+
+// // SetupAuthenticatedSpecRoutes sets up all standard resolvespec/restheadspec routes with authentication
+// // This is a convenience function that sets up the common route patterns
+// //
+// // Usage:
+// //
+// //	security.SetupAuthenticatedSpecRoutes(router, handler, securityList, router.NewHTTPRequest, router.NewHTTPResponseWriter, mux.Vars)
+// func SetupAuthenticatedSpecRoutes(
+// 	router interface {
+// 		HandleFunc(pattern string, f func(http.ResponseWriter, *http.Request)) interface{ Methods(...string) interface{} }
+// 	},
+// 	handler interface {
+// 		Handle(w any, r any, params map[string]string)
+// 		HandleGet(w any, r any, params map[string]string)
+// 	},
+// 	securityList *SecurityList,
+// 	requestAdapter func(*http.Request) any,
+// 	responseAdapter func(http.ResponseWriter) any,
+// 	paramExtractor func(*http.Request) map[string]string,
+// ) {
+// 	builder := NewMuxRouteBuilder(securityList, requestAdapter, responseAdapter)
+// 	builder.SetParamExtractor(paramExtractor)
+
+// 	// POST /{schema}/{entity}
+// 	builder.HandleAuth(router, "/{schema}/{entity}", handler.Handle, false, "POST")
+
+// 	// POST /{schema}/{entity}/{id}
+// 	builder.HandleAuth(router, "/{schema}/{entity}/{id}", handler.Handle, false, "POST")
+
+// 	// GET /{schema}/{entity}
+// 	builder.HandleAuth(router, "/{schema}/{entity}", handler.HandleGet, false, "GET")
+// }

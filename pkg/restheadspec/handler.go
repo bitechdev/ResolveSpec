@@ -38,6 +38,12 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 	return handler
 }
 
+// GetDatabase returns the underlying database connection
+// Implements common.SpecHandler interface
+func (h *Handler) GetDatabase() common.Database {
+	return h.db
+}
+
 // Hooks returns the hook registry for this handler
 // Use this to register custom hooks for operations
 func (h *Handler) Hooks() *HookRegistry {

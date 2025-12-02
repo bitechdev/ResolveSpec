@@ -1,6 +1,7 @@
 package restheadspec
 
 import (
+	"net/http"
 	"testing"
 )
 
@@ -40,6 +41,12 @@ func (m *MockRequest) QueryParam(key string) string {
 
 func (m *MockRequest) AllQueryParams() map[string]string {
 	return m.queryParams
+}
+
+func (m *MockRequest) UnderlyingRequest() *http.Request {
+	// For testing purposes, return nil
+	// In real scenarios, you might want to construct a proper http.Request
+	return nil
 }
 
 func TestParseOptionsFromQueryParams(t *testing.T) {

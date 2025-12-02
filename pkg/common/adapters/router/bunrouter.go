@@ -141,6 +141,12 @@ func (b *BunRouterRequest) AllHeaders() map[string]string {
 	return headers
 }
 
+// UnderlyingRequest returns the underlying *http.Request
+// This is useful when you need to pass the request to other handlers
+func (b *BunRouterRequest) UnderlyingRequest() *http.Request {
+	return b.req.Request
+}
+
 // StandardBunRouterAdapter creates routes compatible with standard bunrouter handlers
 type StandardBunRouterAdapter struct {
 	*BunRouterAdapter

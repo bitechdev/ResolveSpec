@@ -122,6 +122,7 @@ type Request interface {
 	PathParam(key string) string
 	QueryParam(key string) string
 	AllQueryParams() map[string]string // Get all query parameters as a map
+	UnderlyingRequest() *http.Request  // Get the underlying *http.Request for forwarding to other handlers
 }
 
 // ResponseWriter interface abstracts HTTP response
@@ -130,6 +131,7 @@ type ResponseWriter interface {
 	WriteHeader(statusCode int)
 	Write(data []byte) (int, error)
 	WriteJSON(data interface{}) error
+	UnderlyingResponseWriter() http.ResponseWriter // Get the underlying http.ResponseWriter for forwarding to other handlers
 }
 
 // HTTPHandlerFunc type for HTTP handlers
@@ -162,6 +164,10 @@ func (s *StandardResponseWriter) Write(data []byte) (int, error) {
 func (s *StandardResponseWriter) WriteJSON(data interface{}) error {
 	s.SetHeader("Content-Type", "application/json")
 	return json.NewEncoder(s.w).Encode(data)
+}
+
+func (s *StandardResponseWriter) UnderlyingResponseWriter() http.ResponseWriter {
+	return s.w
 }
 
 // StandardRequest adapts *http.Request to Request interface
@@ -226,6 +232,10 @@ func (s *StandardRequest) AllQueryParams() map[string]string {
 		}
 	}
 	return params
+}
+
+func (s *StandardRequest) UnderlyingRequest() *http.Request {
+	return s.r
 }
 
 // TableNameProvider interface for models that provide table names

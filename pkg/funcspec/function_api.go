@@ -238,7 +238,8 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 				return err
 			}
 
-			dbobjlist = rows
+			// Normalize PostgreSQL types for proper JSON marshaling
+			dbobjlist = normalizePostgresTypesList(rows)
 
 			if pNoCount {
 				total = int64(len(dbobjlist))
@@ -532,7 +533,7 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 			}
 
 			if len(rows) > 0 {
-				dbobj = rows[0]
+				dbobj = normalizePostgresTypes(rows[0])
 			}
 
 			// Execute AfterSQLExec hook
@@ -945,4 +946,68 @@ func sendError(w http.ResponseWriter, status int, code, message string, err erro
 		"error":   errObj,
 	})
 	_, _ = w.Write(data)
+}
+
+// normalizePostgresTypesList normalizes a list of result maps to handle PostgreSQL types correctly
+func normalizePostgresTypesList(rows []map[string]interface{}) []map[string]interface{} {
+	if len(rows) == 0 {
+		return rows
+	}
+
+	normalized := make([]map[string]interface{}, len(rows))
+	for i, row := range rows {
+		normalized[i] = normalizePostgresTypes(row)
+	}
+	return normalized
+}
+
+// normalizePostgresTypes normalizes a result map to handle PostgreSQL types correctly for JSON marshaling
+// This is necessary because when scanning into map[string]interface{}, PostgreSQL types like jsonb, bytea, etc.
+// are scanned as []byte which would be base64-encoded when marshaled to JSON.
+func normalizePostgresTypes(row map[string]interface{}) map[string]interface{} {
+	if row == nil {
+		return nil
+	}
+
+	normalized := make(map[string]interface{}, len(row))
+	for key, value := range row {
+		normalized[key] = normalizePostgresValue(value)
+	}
+	return normalized
+}
+
+// normalizePostgresValue normalizes a single value to the appropriate Go type for JSON marshaling
+func normalizePostgresValue(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case []byte:
+		// Check if it's valid JSON (jsonb type)
+		// Try to unmarshal as JSON first
+		var jsonObj interface{}
+		if err := json.Unmarshal(v, &jsonObj); err == nil {
+			// It's valid JSON, return as json.RawMessage so it's not double-encoded
+			return json.RawMessage(v)
+		}
+		// Not valid JSON, could be bytea - keep as []byte for base64 encoding
+		return v
+
+	case []interface{}:
+		// Recursively normalize array elements
+		normalized := make([]interface{}, len(v))
+		for i, elem := range v {
+			normalized[i] = normalizePostgresValue(elem)
+		}
+		return normalized
+
+	case map[string]interface{}:
+		// Recursively normalize nested maps
+		return normalizePostgresTypes(v)
+
+	default:
+		// For other types (int, float, string, bool, etc.), return as-is
+		return v
+	}
 }

@@ -147,8 +147,11 @@ func (b *BunSelectQuery) Column(columns ...string) common.SelectQuery {
 }
 
 func (b *BunSelectQuery) ColumnExpr(query string, args ...interface{}) common.SelectQuery {
-	b.query = b.query.ColumnExpr(query, args)
-
+	if len(args) > 0 {
+		b.query = b.query.ColumnExpr(query, args)
+	} else {
+		b.query = b.query.ColumnExpr(query)
+	}
 	return b
 }
 

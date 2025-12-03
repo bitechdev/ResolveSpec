@@ -125,7 +125,12 @@ func (g *GormSelectQuery) Column(columns ...string) common.SelectQuery {
 }
 
 func (g *GormSelectQuery) ColumnExpr(query string, args ...interface{}) common.SelectQuery {
-	g.db = g.db.Select(query, args...)
+	if len(args) > 0 {
+		g.db = g.db.Select(query, args...)
+	} else {
+		g.db = g.db.Select(query)
+	}
+
 	return g
 }
 

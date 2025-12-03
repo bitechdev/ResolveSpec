@@ -2,12 +2,14 @@ package resolvespec
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bunrouter"
 	"gorm.io/gorm"
 
+	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/router"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
@@ -44,39 +46,115 @@ type MiddlewareFunc func(http.Handler) http.Handler
 // authMiddleware is optional - if provided, routes will be protected with the middleware
 // Example: SetupMuxRoutes(router, handler, func(h http.Handler) http.Handler { return security.NewAuthHandler(securityList, h) })
 func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware MiddlewareFunc) {
-	// Create handler functions
-	postEntityHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		reqAdapter := router.NewHTTPRequest(r)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.Handle(respAdapter, reqAdapter, vars)
-	})
+	// Get all registered models from the registry
+	allModels := handler.registry.GetAllModels()
 
-	postEntityWithIDHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		reqAdapter := router.NewHTTPRequest(r)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.Handle(respAdapter, reqAdapter, vars)
-	})
+	// Loop through each registered model and create explicit routes
+	for fullName := range allModels {
+		// Parse the full name (e.g., "public.users" or just "users")
+		schema, entity := parseModelName(fullName)
 
-	getEntityHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		reqAdapter := router.NewHTTPRequest(r)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.HandleGet(respAdapter, reqAdapter, vars)
-	})
+		// Build the route paths
+		entityPath := buildRoutePath(schema, entity)
+		entityWithIDPath := buildRoutePath(schema, entity) + "/{id}"
 
-	// Apply authentication middleware if provided
-	if authMiddleware != nil {
-		postEntityHandler = authMiddleware(postEntityHandler).(http.HandlerFunc)
-		postEntityWithIDHandler = authMiddleware(postEntityWithIDHandler).(http.HandlerFunc)
-		getEntityHandler = authMiddleware(getEntityHandler).(http.HandlerFunc)
+		// Create handler functions for this specific entity
+		postEntityHandler := createMuxHandler(handler, schema, entity, "")
+		postEntityWithIDHandler := createMuxHandler(handler, schema, entity, "id")
+		getEntityHandler := createMuxGetHandler(handler, schema, entity, "")
+		optionsEntityHandler := createMuxOptionsHandler(handler, schema, entity, []string{"GET", "POST", "OPTIONS"})
+		optionsEntityWithIDHandler := createMuxOptionsHandler(handler, schema, entity, []string{"POST", "OPTIONS"})
+
+		// Apply authentication middleware if provided
+		if authMiddleware != nil {
+			postEntityHandler = authMiddleware(postEntityHandler).(http.HandlerFunc)
+			postEntityWithIDHandler = authMiddleware(postEntityWithIDHandler).(http.HandlerFunc)
+			getEntityHandler = authMiddleware(getEntityHandler).(http.HandlerFunc)
+			// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
+		}
+
+		// Register routes for this entity
+		muxRouter.Handle(entityPath, postEntityHandler).Methods("POST")
+		muxRouter.Handle(entityWithIDPath, postEntityWithIDHandler).Methods("POST")
+		muxRouter.Handle(entityPath, getEntityHandler).Methods("GET")
+		muxRouter.Handle(entityPath, optionsEntityHandler).Methods("OPTIONS")
+		muxRouter.Handle(entityWithIDPath, optionsEntityWithIDHandler).Methods("OPTIONS")
 	}
+}
 
-	// Register routes
-	muxRouter.Handle("/{schema}/{entity}", postEntityHandler).Methods("POST")
-	muxRouter.Handle("/{schema}/{entity}/{id}", postEntityWithIDHandler).Methods("POST")
-	muxRouter.Handle("/{schema}/{entity}", getEntityHandler).Methods("GET")
+// Helper function to create Mux handler for a specific entity with CORS support
+func createMuxHandler(handler *Handler, schema, entity, idParam string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		corsConfig := common.DefaultCORSConfig()
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+
+		vars := make(map[string]string)
+		vars["schema"] = schema
+		vars["entity"] = entity
+		if idParam != "" {
+			vars["id"] = mux.Vars(r)[idParam]
+		}
+		reqAdapter := router.NewHTTPRequest(r)
+		handler.Handle(respAdapter, reqAdapter, vars)
+	}
+}
+
+// Helper function to create Mux GET handler for a specific entity with CORS support
+func createMuxGetHandler(handler *Handler, schema, entity, idParam string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		corsConfig := common.DefaultCORSConfig()
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+
+		vars := make(map[string]string)
+		vars["schema"] = schema
+		vars["entity"] = entity
+		if idParam != "" {
+			vars["id"] = mux.Vars(r)[idParam]
+		}
+		reqAdapter := router.NewHTTPRequest(r)
+		handler.HandleGet(respAdapter, reqAdapter, vars)
+	}
+}
+
+// Helper function to create Mux OPTIONS handler that returns metadata
+func createMuxOptionsHandler(handler *Handler, schema, entity string, allowedMethods []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers with the allowed methods for this route
+		corsConfig := common.DefaultCORSConfig()
+		corsConfig.AllowedMethods = allowedMethods
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+
+		// Return metadata in the OPTIONS response body
+		vars := make(map[string]string)
+		vars["schema"] = schema
+		vars["entity"] = entity
+		reqAdapter := router.NewHTTPRequest(r)
+		handler.HandleGet(respAdapter, reqAdapter, vars)
+	}
+}
+
+// parseModelName parses a model name like "public.users" into schema and entity
+// If no schema is present, returns empty string for schema
+func parseModelName(fullName string) (schema, entity string) {
+	parts := strings.Split(fullName, ".")
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", fullName
+}
+
+// buildRoutePath builds a route path from schema and entity
+// If schema is empty, returns just "/entity", otherwise "/{schema}/{entity}"
+func buildRoutePath(schema, entity string) string {
+	if schema == "" {
+		return "/" + entity
+	}
+	return "/" + schema + "/" + entity
 }
 
 // Example usage functions for documentation:
@@ -123,51 +201,109 @@ func ExampleWithBun(bunDB *bun.DB) {
 func SetupBunRouterRoutes(bunRouter *router.StandardBunRouterAdapter, handler *Handler) {
 	r := bunRouter.GetBunRouter()
 
-	r.Handle("POST", "/:schema/:entity", func(w http.ResponseWriter, req bunrouter.Request) error {
-		params := map[string]string{
-			"schema": req.Param("schema"),
-			"entity": req.Param("entity"),
-		}
-		reqAdapter := router.NewHTTPRequest(req.Request)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.Handle(respAdapter, reqAdapter, params)
-		return nil
-	})
+	// Get all registered models from the registry
+	allModels := handler.registry.GetAllModels()
 
-	r.Handle("POST", "/:schema/:entity/:id", func(w http.ResponseWriter, req bunrouter.Request) error {
-		params := map[string]string{
-			"schema": req.Param("schema"),
-			"entity": req.Param("entity"),
-			"id":     req.Param("id"),
-		}
-		reqAdapter := router.NewHTTPRequest(req.Request)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.Handle(respAdapter, reqAdapter, params)
-		return nil
-	})
+	// CORS config
+	corsConfig := common.DefaultCORSConfig()
 
-	r.Handle("GET", "/:schema/:entity", func(w http.ResponseWriter, req bunrouter.Request) error {
-		params := map[string]string{
-			"schema": req.Param("schema"),
-			"entity": req.Param("entity"),
-		}
-		reqAdapter := router.NewHTTPRequest(req.Request)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.HandleGet(respAdapter, reqAdapter, params)
-		return nil
-	})
+	// Loop through each registered model and create explicit routes
+	for fullName := range allModels {
+		// Parse the full name (e.g., "public.users" or just "users")
+		schema, entity := parseModelName(fullName)
 
-	r.Handle("GET", "/:schema/:entity/:id", func(w http.ResponseWriter, req bunrouter.Request) error {
-		params := map[string]string{
-			"schema": req.Param("schema"),
-			"entity": req.Param("entity"),
-			"id":     req.Param("id"),
-		}
-		reqAdapter := router.NewHTTPRequest(req.Request)
-		respAdapter := router.NewHTTPResponseWriter(w)
-		handler.HandleGet(respAdapter, reqAdapter, params)
-		return nil
-	})
+		// Build the route paths
+		entityPath := buildRoutePath(schema, entity)
+		entityWithIDPath := entityPath + "/:id"
+
+		// Create closure variables to capture current schema and entity
+		currentSchema := schema
+		currentEntity := entity
+
+		// POST route without ID
+		r.Handle("POST", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			common.SetCORSHeaders(respAdapter, corsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.Handle(respAdapter, reqAdapter, params)
+			return nil
+		})
+
+		// POST route with ID
+		r.Handle("POST", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			common.SetCORSHeaders(respAdapter, corsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+				"id":     req.Param("id"),
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.Handle(respAdapter, reqAdapter, params)
+			return nil
+		})
+
+		// GET route without ID
+		r.Handle("GET", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			common.SetCORSHeaders(respAdapter, corsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.HandleGet(respAdapter, reqAdapter, params)
+			return nil
+		})
+
+		// GET route with ID
+		r.Handle("GET", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			common.SetCORSHeaders(respAdapter, corsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+				"id":     req.Param("id"),
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.HandleGet(respAdapter, reqAdapter, params)
+			return nil
+		})
+
+		// OPTIONS route without ID (returns metadata)
+		r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			optionsCorsConfig := corsConfig
+			optionsCorsConfig.AllowedMethods = []string{"GET", "POST", "OPTIONS"}
+			common.SetCORSHeaders(respAdapter, optionsCorsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.HandleGet(respAdapter, reqAdapter, params)
+			return nil
+		})
+
+		// OPTIONS route with ID (returns metadata)
+		r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+			respAdapter := router.NewHTTPResponseWriter(w)
+			optionsCorsConfig := corsConfig
+			optionsCorsConfig.AllowedMethods = []string{"POST", "OPTIONS"}
+			common.SetCORSHeaders(respAdapter, optionsCorsConfig)
+			params := map[string]string{
+				"schema": currentSchema,
+				"entity": currentEntity,
+			}
+			reqAdapter := router.NewHTTPRequest(req.Request)
+			handler.HandleGet(respAdapter, reqAdapter, params)
+			return nil
+		})
+	}
 }
 
 // ExampleWithBunRouter shows how to use bunrouter from uptrace

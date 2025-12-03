@@ -13,6 +13,8 @@ Both share the same core architecture and provide dynamic data querying, relatio
 
 **🆕 New in v2.1**: RestHeadSpec (HeaderSpec) - Header-based REST API with lifecycle hooks, cursor pagination, and advanced filtering.
 
+**🆕 New in v3.0**: Explicit route registration - Routes are now created per registered model for better flexibility and control. OPTIONS method support with full CORS headers for cross-origin requests.
+
 ![slogan](./generated_slogan.webp)
 
 ## Table of Contents
@@ -64,6 +66,12 @@ Both share the same core architecture and provide dynamic data querying, relatio
 - **🆕 Single Record as Object**: Automatically normalize single-element arrays to objects (enabled by default)
 - **🆕 Advanced Filtering**: Field filters, search operators, AND/OR logic, and custom SQL
 - **🆕 Base64 Encoding**: Support for base64-encoded header values
+
+### Routing & CORS (v3.0+)
+- **🆕 Explicit Route Registration**: Routes created per registered model instead of dynamic lookups
+- **🆕 OPTIONS Method Support**: Full OPTIONS method support returning model metadata
+- **🆕 CORS Headers**: Comprehensive CORS support with all HeadSpec headers allowed
+- **🆕 Better Route Control**: Customize routes per model with more flexibility
 
 ## API Structure
 
@@ -123,13 +131,15 @@ import "github.com/gorilla/mux"
 // Create handler
 handler := restheadspec.NewHandlerWithGORM(db)
 
-// Register models using schema.table format
+// IMPORTANT: Register models BEFORE setting up routes
+// Routes are created explicitly for each registered model
 handler.Registry.RegisterModel("public.users", &User{})
 handler.Registry.RegisterModel("public.posts", &Post{})
 
-// Setup routes
+// Setup routes (creates explicit routes for each registered model)
+// This replaces the old dynamic route lookup approach
 router := mux.NewRouter()
-restheadspec.SetupMuxRoutes(router, handler)
+restheadspec.SetupMuxRoutes(router, handler, nil)
 
 // Start server
 http.ListenAndServe(":8080", router)
@@ -171,6 +181,42 @@ restheadspec.SetupMuxRoutes(router, handler)
 **Available Operators**: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `startswith`, `endswith`, `between`, `betweeninclusive`, `in`, `empty`, `notempty`
 
 For complete header documentation, see [pkg/restheadspec/HEADERS.md](pkg/restheadspec/HEADERS.md).
+
+### CORS & OPTIONS Support
+
+ResolveSpec and RestHeadSpec include comprehensive CORS support for cross-origin requests:
+
+**OPTIONS Method**:
+```http
+OPTIONS /public/users HTTP/1.1
+```
+Returns metadata with appropriate CORS headers:
+```http
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Select-Fields, X-FieldFilter-*, ...
+Access-Control-Max-Age: 86400
+Access-Control-Allow-Credentials: true
+```
+
+**Key Features**:
+- OPTIONS returns model metadata (same as GET metadata endpoint)
+- All HTTP methods include CORS headers automatically
+- OPTIONS requests don't require authentication (CORS preflight)
+- Supports all HeadSpec custom headers (`X-Select-Fields`, `X-FieldFilter-*`, etc.)
+- 24-hour max age to reduce preflight requests
+
+**Configuration**:
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/common"
+
+// Get default CORS config
+corsConfig := common.DefaultCORSConfig()
+
+// Customize if needed
+corsConfig.AllowedOrigins = []string{"https://example.com"}
+corsConfig.AllowedMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
+```
 
 ### Lifecycle Hooks
 
@@ -687,15 +733,16 @@ handler := resolvespec.NewHandler(dbAdapter, registry)
 ```go
 import "github.com/gorilla/mux"
 
-// Backward compatible way
-router := mux.NewRouter()  
-resolvespec.SetupRoutes(router, handler)
+// Register models first
+handler.Registry.RegisterModel("public.users", &User{})
+handler.Registry.RegisterModel("public.posts", &Post{})
 
-// Or manually:
-router.HandleFunc("/{schema}/{entity}", func(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    handler.Handle(w, r, vars)
-}).Methods("POST")
+// Setup routes - creates explicit routes for each model
+router := mux.NewRouter()
+resolvespec.SetupMuxRoutes(router, handler, nil)
+
+// Routes created: /public/users, /public/posts, etc.
+// Each route includes GET, POST, and OPTIONS methods with CORS support
 ```
 
 #### Gin (Custom Integration)
@@ -950,7 +997,28 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## What's New
 
-### v2.1 (Latest)
+### v3.0 (Latest - December 2025)
+
+**Explicit Route Registration (🆕)**:
+- **Breaking Change**: Routes are now created explicitly for each registered model
+- **Better Control**: Customize routes per model with more flexibility
+- **Registration Order**: Models must be registered BEFORE calling SetupMuxRoutes/SetupBunRouterRoutes
+- **Benefits**: More flexible routing, easier to add custom routes per model, better performance
+
+**OPTIONS Method & CORS Support (🆕)**:
+- **OPTIONS Endpoint**: Full OPTIONS method support for CORS preflight requests
+- **Metadata Response**: OPTIONS returns model metadata (same as GET /metadata)
+- **CORS Headers**: Comprehensive CORS headers on all responses
+- **Header Support**: All HeadSpec custom headers (`X-Select-Fields`, `X-FieldFilter-*`, etc.) allowed
+- **No Auth on OPTIONS**: CORS preflight requests don't require authentication
+- **Configurable**: Customize CORS settings via `common.CORSConfig`
+
+**Migration Notes**:
+- Update your code to register models BEFORE calling SetupMuxRoutes/SetupBunRouterRoutes
+- Routes like `/public/users` are now created per registered model instead of using dynamic `/{schema}/{entity}` pattern
+- This is a **breaking change** but provides better control and flexibility
+
+### v2.1
 
 **Recursive CRUD Handler (🆕 Nov 11, 2025)**:
 - **Nested Object Graphs**: Automatically handle complex object hierarchies with parent-child relationships

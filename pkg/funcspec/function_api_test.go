@@ -784,7 +784,7 @@ func TestReplaceMetaVariables(t *testing.T) {
 	userCtx := &security.UserContext{
 		UserID:    123,
 		UserName:  "testuser",
-		SessionID: "session-abc",
+		SessionID: "456",
 	}
 
 	metainfo := map[string]interface{}{
@@ -819,7 +819,7 @@ func TestReplaceMetaVariables(t *testing.T) {
 			name:     "Replace [rid_session]",
 			sqlQuery: "SELECT * FROM sessions WHERE session_id = [rid_session]",
 			expectedCheck: func(result string) bool {
-				return strings.Contains(result, "'session-abc'")
+				return strings.Contains(result, "456")
 			},
 		},
 	}

@@ -151,6 +151,8 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 		h.handleUpdate(ctx, w, id, req.ID, req.Data, req.Options)
 	case "delete":
 		h.handleDelete(ctx, w, id, req.Data)
+	case "meta":
+		h.handleMeta(ctx, w, schema, entity, model)
 	default:
 		logger.Error("Invalid operation: %s", req.Operation)
 		h.sendError(w, http.StatusBadRequest, "invalid_operation", "Invalid operation", nil)
@@ -183,6 +185,21 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 		}
 		return
 	}
+
+	metadata := h.generateMetadata(schema, entity, model)
+	h.sendResponse(w, metadata, nil)
+}
+
+// handleMeta processes meta operation requests
+func (h *Handler) handleMeta(ctx context.Context, w common.ResponseWriter, schema, entity string, model interface{}) {
+	// Capture panics and return error response
+	defer func() {
+		if err := recover(); err != nil {
+			h.handlePanic(w, "handleMeta", err)
+		}
+	}()
+
+	logger.Info("Getting metadata for %s.%s via meta operation", schema, entity)
 
 	metadata := h.generateMetadata(schema, entity, model)
 	h.sendResponse(w, metadata, nil)

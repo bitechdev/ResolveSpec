@@ -333,7 +333,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	if len(options.ComputedQL) > 0 {
 		for colName, colExpr := range options.ComputedQL {
 			logger.Debug("Applying computed column: %s", colName)
-			query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", colExpr, colName))
+			if strings.Contains(colName, "cql") {
+				query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", colExpr, colName))
+			} else {
+				query = query.ColumnExpr(fmt.Sprintf("(%s)AS %s", colExpr, colName))
+			}
+
 			for colIndex := range options.Columns {
 				if options.Columns[colIndex] == colName {
 					// Remove the computed column from the selected columns to avoid duplication
@@ -347,7 +352,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	if len(options.ComputedColumns) > 0 {
 		for _, cu := range options.ComputedColumns {
 			logger.Debug("Applying computed column: %s", cu.Name)
-			query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
+			if strings.Contains(cu.Name, "cql") {
+				query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", cu.Expression, cu.Name))
+			} else {
+				query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
+			}
+
 			for colIndex := range options.Columns {
 				if options.Columns[colIndex] == cu.Name {
 					// Remove the computed column from the selected columns to avoid duplication

@@ -163,8 +163,9 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 		// Remove unused input variables
 		if pBlankparms {
 			for _, kw := range inputvars {
-				sqlquery = strings.ReplaceAll(sqlquery, kw, "")
-				logger.Debug("Removed unused variable: %s", kw)
+				replacement := getReplacementForBlankParam(sqlquery, kw)
+				sqlquery = strings.ReplaceAll(sqlquery, kw, replacement)
+				logger.Debug("Replaced unused variable %s with: %s", kw, replacement)
 			}
 		}
 
@@ -501,8 +502,9 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 		// Remove unused input variables
 		if pBlankparms {
 			for _, kw := range inputvars {
-				sqlquery = strings.ReplaceAll(sqlquery, kw, "")
-				logger.Debug("Removed unused variable: %s", kw)
+				replacement := getReplacementForBlankParam(sqlquery, kw)
+				sqlquery = strings.ReplaceAll(sqlquery, kw, replacement)
+				logger.Debug("Replaced unused variable %s with: %s", kw, replacement)
 			}
 		}
 
@@ -868,6 +870,38 @@ func sqlQryWhere(sqlquery, condition string) string {
 func IsNumeric(s string) bool {
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
+}
+
+// getReplacementForBlankParam determines the replacement value for an unused parameter
+// based on whether it appears within quotes in the SQL query.
+// It checks for PostgreSQL quotes: single quotes ('') and dollar quotes ($...$)
+func getReplacementForBlankParam(sqlquery, param string) string {
+	// Find the parameter in the query
+	idx := strings.Index(sqlquery, param)
+	if idx < 0 {
+		return ""
+	}
+
+	// Check characters immediately before and after the parameter
+	var charBefore, charAfter byte
+
+	if idx > 0 {
+		charBefore = sqlquery[idx-1]
+	}
+
+	endIdx := idx + len(param)
+	if endIdx < len(sqlquery) {
+		charAfter = sqlquery[endIdx]
+	}
+
+	// Check if parameter is surrounded by quotes (single quote or dollar sign for PostgreSQL dollar-quoted strings)
+	if (charBefore == '\'' || charBefore == '$') && (charAfter == '\'' || charAfter == '$') {
+		// Parameter is in quotes, return empty string
+		return ""
+	}
+
+	// Parameter is not in quotes, return NULL
+	return "NULL"
 }
 
 // makeResultReceiver creates a slice of interface{} pointers for scanning SQL rows

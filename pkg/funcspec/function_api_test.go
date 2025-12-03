@@ -835,3 +835,65 @@ func TestReplaceMetaVariables(t *testing.T) {
 		})
 	}
 }
+
+// TestGetReplacementForBlankParam tests the blank parameter replacement logic
+func TestGetReplacementForBlankParam(t *testing.T) {
+	tests := []struct {
+		name     string
+		sqlQuery string
+		param    string
+		expected string
+	}{
+		{
+			name:     "Parameter in single quotes",
+			sqlQuery: "SELECT * FROM users WHERE name = '[username]'",
+			param:    "[username]",
+			expected: "",
+		},
+		{
+			name:     "Parameter in dollar quotes",
+			sqlQuery: "SELECT * FROM users WHERE data = $[jsondata]$",
+			param:    "[jsondata]",
+			expected: "",
+		},
+		{
+			name:     "Parameter not in quotes",
+			sqlQuery: "SELECT * FROM users WHERE id = [user_id]",
+			param:    "[user_id]",
+			expected: "NULL",
+		},
+		{
+			name:     "Parameter not in quotes with AND",
+			sqlQuery: "SELECT * FROM users WHERE id = [user_id] AND status = 1",
+			param:    "[user_id]",
+			expected: "NULL",
+		},
+		{
+			name:     "Parameter in mixed quote context - before quote",
+			sqlQuery: "SELECT * FROM users WHERE id = [user_id] AND name = 'test'",
+			param:    "[user_id]",
+			expected: "NULL",
+		},
+		{
+			name:     "Parameter in mixed quote context - in quotes",
+			sqlQuery: "SELECT * FROM users WHERE name = '[username]' AND id = 1",
+			param:    "[username]",
+			expected: "",
+		},
+		{
+			name:     "Parameter with dollar quote tag",
+			sqlQuery: "SELECT * FROM users WHERE body = $tag$[content]$tag$",
+			param:    "[content]",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getReplacementForBlankParam(tt.sqlQuery, tt.param)
+			if result != tt.expected {
+				t.Errorf("Expected replacement '%s', got '%s' for query: %s", tt.expected, result, tt.sqlQuery)
+			}
+		})
+	}
+}

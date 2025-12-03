@@ -1926,6 +1926,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 	}
 
 	// Return data as-is without wrapping in common.Response
+	w.SetHeader("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := w.WriteJSON(data); err != nil {
 		logger.Error("Failed to write JSON response: %v", err)
@@ -2028,6 +2029,7 @@ func (h *Handler) sendError(w common.ResponseWriter, statusCode int, code, messa
 		"_error":  errorMsg,
 		"_retval": 1,
 	}
+	w.SetHeader("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	if jsonErr := w.WriteJSON(response); jsonErr != nil {
 		logger.Error("Failed to write JSON error response: %v", jsonErr)

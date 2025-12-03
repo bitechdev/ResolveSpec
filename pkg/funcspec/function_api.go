@@ -757,8 +757,8 @@ func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx
 	}
 
 	if strings.Contains(sqlquery, "[rid_session]") {
-		sessionID := userCtx.SessionID
-		sqlquery = strings.ReplaceAll(sqlquery, "[rid_session]", fmt.Sprintf("'%s'", sessionID))
+		sessionID, _ := strconv.ParseInt(userCtx.SessionID, 10, 64)
+		sqlquery = strings.ReplaceAll(sqlquery, "[rid_session]", fmt.Sprintf("%d", sessionID))
 	}
 
 	if strings.Contains(sqlquery, "[method]") {
@@ -874,7 +874,7 @@ func IsNumeric(s string) bool {
 
 // getReplacementForBlankParam determines the replacement value for an unused parameter
 // based on whether it appears within quotes in the SQL query.
-// It checks for PostgreSQL quotes: single quotes ('') and dollar quotes ($...$)
+// It checks for PostgreSQL quotes: single quotes (”) and dollar quotes ($...$)
 func getReplacementForBlankParam(sqlquery, param string) string {
 	// Find the parameter in the query
 	idx := strings.Index(sqlquery, param)

@@ -1816,22 +1816,51 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 	if modelType.Kind() != reflect.Struct {
 		logger.Error("Model type must be a struct, got %s for %s.%s", modelType.Kind(), schema, entity)
 		return &common.TableMetadata{
-			Schema:  schema,
-			Table:   h.getTableName(schema, entity, model),
-			Columns: []common.Column{},
+			Schema:    schema,
+			Table:     h.getTableName(schema, entity, model),
+			Columns:   []common.Column{},
+			Relations: []string{},
 		}
 	}
 
 	tableName := h.getTableName(schema, entity, model)
 
 	metadata := &common.TableMetadata{
-		Schema:  schema,
-		Table:   tableName,
-		Columns: []common.Column{},
+		Schema:    schema,
+		Table:     tableName,
+		Columns:   []common.Column{},
+		Relations: []string{},
 	}
 
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		gormTag := field.Tag.Get("gorm")
+		jsonTag := field.Tag.Get("json")
+
+		// Skip fields with json:"-"
+		if jsonTag == "-" {
+			continue
+		}
+
+		// Get JSON name
+		jsonName := strings.Split(jsonTag, ",")[0]
+		if jsonName == "" {
+			jsonName = field.Name
+		}
+
+		// Check if this is a relation field (slice or struct, but not time.Time)
+		if field.Type.Kind() == reflect.Slice ||
+			(field.Type.Kind() == reflect.Struct && field.Type.Name() != "Time") ||
+			(field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct && field.Type.Elem().Name() != "Time") {
+			metadata.Relations = append(metadata.Relations, jsonName)
+			continue
+		}
 
 		// Get column name from gorm tag or json tag
 		columnName := field.Tag.Get("gorm")
@@ -1844,14 +1873,8 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 				}
 			}
 		} else {
-			columnName = field.Tag.Get("json")
-			if columnName == "" || columnName == "-" {
-				columnName = strings.ToLower(field.Name)
-			}
+			columnName = jsonName
 		}
-
-		// Check for primary key and unique constraint
-		gormTag := field.Tag.Get("gorm")
 
 		column := common.Column{
 			Name:       columnName,

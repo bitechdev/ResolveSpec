@@ -58,16 +58,16 @@ type SecurityList struct {
 }
 
 // NewSecurityList creates a new security list with the given provider
-func NewSecurityList(provider SecurityProvider) *SecurityList {
+func NewSecurityList(provider SecurityProvider) (*SecurityList, error) {
 	if provider == nil {
-		panic("security provider cannot be nil")
+		return nil, fmt.Errorf("security provider cannot be nil")
 	}
 
 	return &SecurityList{
 		provider:       provider,
 		ColumnSecurity: make(map[string][]ColumnSecurity),
 		RowSecurity:    make(map[string]RowSecurity),
-	}
+	}, nil
 }
 
 // Provider returns the underlying security provider

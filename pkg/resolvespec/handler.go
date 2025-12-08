@@ -75,7 +75,7 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 		}
 	}()
 
-	ctx := context.Background()
+	ctx := r.UnderlyingRequest().Context()
 
 	body, err := r.Body()
 	if err != nil {
@@ -111,28 +111,16 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 		return
 	}
 
-	// Validate that the model is a struct type (not a slice or pointer to slice)
-	modelType := reflect.TypeOf(model)
-	originalType := modelType
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
-		modelType = modelType.Elem()
-	}
-
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		logger.Error("Model for %s.%s must be a struct type, got %v. Please register models as struct types, not slices or pointers to slices.", schema, entity, originalType)
-		h.sendError(w, http.StatusInternalServerError, "invalid_model_type",
-			fmt.Sprintf("Model must be a struct type, got %v. Ensure you register the struct (e.g., ModelCoreAccount{}) not a slice (e.g., []*ModelCoreAccount)", originalType),
-			fmt.Errorf("invalid model type: %v", originalType))
+	// Validate and unwrap model using common utility
+	result, err := common.ValidateAndUnwrapModel(model)
+	if err != nil {
+		logger.Error("Model for %s.%s validation failed: %v", schema, entity, err)
+		h.sendError(w, http.StatusInternalServerError, "invalid_model_type", err.Error(), err)
 		return
 	}
 
-	// If the registered model was a pointer or slice, use the unwrapped struct type
-	if originalType != modelType {
-		model = reflect.New(modelType).Elem().Interface()
-	}
-
-	// Create a pointer to the model type for database operations
-	modelPtr := reflect.New(reflect.TypeOf(model)).Interface()
+	model = result.Model
+	modelPtr := result.ModelPtr
 	tableName := h.getTableName(schema, entity, model)
 
 	// Add request-scoped data to context
@@ -269,7 +257,13 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	// Apply preloading
 	if len(options.Preload) > 0 {
-		query = h.applyPreloads(model, query, options.Preload)
+		var err error
+		query, err = h.applyPreloads(model, query, options.Preload)
+		if err != nil {
+			logger.Error("Failed to apply preloads: %v", err)
+			h.sendError(w, http.StatusBadRequest, "invalid_preload", "Failed to apply preloads", err)
+			return
+		}
 	}
 
 	// Apply filters
@@ -1201,7 +1195,7 @@ type relationshipInfo struct {
 	relatedModel interface{}
 }
 
-func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, preloads []common.PreloadOption) common.SelectQuery {
+func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, preloads []common.PreloadOption) (common.SelectQuery, error) {
 	modelType := reflect.TypeOf(model)
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
@@ -1212,7 +1206,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 	// Validate that we have a struct type
 	if modelType == nil || modelType.Kind() != reflect.Struct {
 		logger.Warn("Cannot apply preloads to non-struct type: %v", modelType)
-		return query
+		return query, nil
 	}
 
 	for idx := range preloads {
@@ -1233,7 +1227,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 			fixedWhere, err := common.ValidateAndFixPreloadWhere(preload.Where, relationFieldName)
 			if err != nil {
 				logger.Error("Invalid preload WHERE clause for relation '%s': %v", relationFieldName, err)
-				panic(fmt.Errorf("invalid preload WHERE clause for relation '%s': %w", relationFieldName, err))
+				return query, fmt.Errorf("invalid preload WHERE clause for relation '%s': %w", relationFieldName, err)
 			}
 			preload.Where = fixedWhere
 		}
@@ -1316,7 +1310,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 		logger.Debug("Applied Preload for relation: %s (field: %s)", preload.Relation, relationFieldName)
 	}
 
-	return query
+	return query, nil
 }
 
 func (h *Handler) getRelationshipInfo(modelType reflect.Type, relationName string) *relationshipInfo {

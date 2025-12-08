@@ -78,7 +78,7 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 		}
 	}()
 
-	ctx := context.Background()
+	ctx := r.UnderlyingRequest().Context()
 
 	schema := params["schema"]
 	entity := params["entity"]
@@ -103,27 +103,16 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 		return
 	}
 
-	// Validate that the model is a struct type (not a slice or pointer to slice)
-	modelType := reflect.TypeOf(model)
-	originalType := modelType
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
-		modelType = modelType.Elem()
-	}
-
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		logger.Error("Model for %s.%s must be a struct type, got %v. Please register models as struct types, not slices or pointers to slices.", schema, entity, originalType)
-		h.sendError(w, http.StatusInternalServerError, "invalid_model_type",
-			fmt.Sprintf("Model must be a struct type, got %v. Ensure you register the struct (e.g., ModelCoreAccount{}) not a slice (e.g., []*ModelCoreAccount)", originalType),
-			fmt.Errorf("invalid model type: %v", originalType))
+	// Validate and unwrap model using common utility
+	result, err := common.ValidateAndUnwrapModel(model)
+	if err != nil {
+		logger.Error("Model for %s.%s validation failed: %v", schema, entity, err)
+		h.sendError(w, http.StatusInternalServerError, "invalid_model_type", err.Error(), err)
 		return
 	}
 
-	// If the registered model was a pointer or slice, use the unwrapped struct type
-	if originalType != modelType {
-		model = reflect.New(modelType).Elem().Interface()
-	}
-
-	modelPtr := reflect.New(reflect.TypeOf(model)).Interface()
+	model = result.Model
+	modelPtr := result.ModelPtr
 	tableName := h.getTableName(schema, entity, model)
 
 	// Parse options from headers - this now includes relation name resolution

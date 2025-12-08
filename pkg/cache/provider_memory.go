@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,8 +30,8 @@ type MemoryProvider struct {
 	mu      sync.RWMutex
 	items   map[string]*memoryItem
 	options *Options
-	hits    int64
-	misses  int64
+	hits    atomic.Int64
+	misses  atomic.Int64
 }
 
 // NewMemoryProvider creates a new in-memory cache provider.
@@ -50,26 +51,37 @@ func NewMemoryProvider(opts *Options) *MemoryProvider {
 
 // Get retrieves a value from the cache by key.
 func (m *MemoryProvider) Get(ctx context.Context, key string) ([]byte, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	// First try with read lock for fast path
+	m.mu.RLock()
 	item, exists := m.items[key]
 	if !exists {
-		m.misses++
+		m.mu.RUnlock()
+		m.misses.Add(1)
 		return nil, false
 	}
 
 	if item.isExpired() {
+		m.mu.RUnlock()
+		// Upgrade to write lock to delete expired item
+		m.mu.Lock()
 		delete(m.items, key)
-		m.misses++
+		m.mu.Unlock()
+		m.misses.Add(1)
 		return nil, false
 	}
 
+	// Update stats and access time with write lock
+	value := item.Value
+	m.mu.RUnlock()
+
+	// Update access tracking with write lock
+	m.mu.Lock()
 	item.LastAccess = time.Now()
 	item.HitCount++
-	m.hits++
+	m.mu.Unlock()
 
-	return item.Value, true
+	m.hits.Add(1)
+	return value, true
 }
 
 // Set stores a value in the cache with the specified TTL.
@@ -136,8 +148,8 @@ func (m *MemoryProvider) Clear(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	m.items = make(map[string]*memoryItem)
-	m.hits = 0
-	m.misses = 0
+	m.hits.Store(0)
+	m.misses.Store(0)
 	return nil
 }
 
@@ -177,8 +189,8 @@ func (m *MemoryProvider) Stats(ctx context.Context) (*CacheStats, error) {
 	}
 
 	return &CacheStats{
-		Hits:         m.hits,
-		Misses:       m.misses,
+		Hits:         m.hits.Load(),
+		Misses:       m.misses.Load(),
 		Keys:         int64(validKeys),
 		ProviderType: "memory",
 		ProviderStats: map[string]any{

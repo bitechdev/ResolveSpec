@@ -35,7 +35,8 @@ func (b *BunRouterAdapter) HandleFunc(pattern string, handler common.HTTPHandler
 func (b *BunRouterAdapter) ServeHTTP(w common.ResponseWriter, r common.Request) {
 	// This method would be used when we need to serve through our interface
 	// For now, we'll work directly with the underlying router
-	panic("ServeHTTP not implemented - use GetBunRouter() for direct access")
+	w.WriteHeader(http.StatusNotImplemented)
+	w.Write([]byte(`{"error":"ServeHTTP not implemented - use GetBunRouter() for direct access"}`))
 }
 
 // GetBunRouter returns the underlying bunrouter for direct access

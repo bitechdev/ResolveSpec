@@ -20,22 +20,22 @@ func NewCompositeSecurityProvider(
 	auth Authenticator,
 	colSec ColumnSecurityProvider,
 	rowSec RowSecurityProvider,
-) *CompositeSecurityProvider {
+) (*CompositeSecurityProvider, error) {
 	if auth == nil {
-		panic("authenticator cannot be nil")
+		return nil, fmt.Errorf("authenticator cannot be nil")
 	}
 	if colSec == nil {
-		panic("column security provider cannot be nil")
+		return nil, fmt.Errorf("column security provider cannot be nil")
 	}
 	if rowSec == nil {
-		panic("row security provider cannot be nil")
+		return nil, fmt.Errorf("row security provider cannot be nil")
 	}
 
 	return &CompositeSecurityProvider{
 		auth:   auth,
 		colSec: colSec,
 		rowSec: rowSec,
-	}
+	}, nil
 }
 
 // Login delegates to the authenticator

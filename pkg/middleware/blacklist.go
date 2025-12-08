@@ -6,15 +6,17 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // IPBlacklist provides IP blocking functionality
 type IPBlacklist struct {
-	mu        sync.RWMutex
-	ips       map[string]bool // Individual IPs
-	cidrs     []*net.IPNet    // CIDR ranges
-	reason    map[string]string
-	useProxy  bool // Whether to check X-Forwarded-For headers
+	mu       sync.RWMutex
+	ips      map[string]bool // Individual IPs
+	cidrs    []*net.IPNet    // CIDR ranges
+	reason   map[string]string
+	useProxy bool // Whether to check X-Forwarded-For headers
 }
 
 // BlacklistConfig configures the IP blacklist
@@ -92,7 +94,7 @@ func (bl *IPBlacklist) UnblockCIDR(cidr string) {
 }
 
 // IsBlocked checks if an IP is blacklisted
-func (bl *IPBlacklist) IsBlocked(ip string) (bool, string) {
+func (bl *IPBlacklist) IsBlocked(ip string) (blacklist bool, reason string) {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 
@@ -178,7 +180,10 @@ func (bl *IPBlacklist) Middleware(next http.Handler) http.Handler {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(response)
+			err := json.NewEncoder(w).Encode(response)
+			if err != nil {
+				logger.Debug("Failed to write blacklist response: %v", err)
+			}
 			return
 		}
 
@@ -192,13 +197,16 @@ func (bl *IPBlacklist) StatsHandler() http.Handler {
 		ips, cidrs := bl.GetBlacklist()
 
 		stats := map[string]interface{}{
-			"blocked_ips":    ips,
-			"blocked_cidrs":  cidrs,
-			"total_ips":      len(ips),
-			"total_cidrs":    len(cidrs),
+			"blocked_ips":   ips,
+			"blocked_cidrs": cidrs,
+			"total_ips":     len(ips),
+			"total_cidrs":   len(cidrs),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(stats)
+		err := json.NewEncoder(w).Encode(stats)
+		if err != nil {
+			logger.Debug("Failed to encode stats: %v", err)
+		}
 	})
 }

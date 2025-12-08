@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"golang.org/x/time/rate"
 )
 
@@ -113,10 +114,10 @@ func (rl *RateLimiter) MiddlewareWithKeyFunc(keyFunc func(*http.Request) string)
 
 // RateLimitInfo contains information about a specific IP's rate limit status
 type RateLimitInfo struct {
-	IP             string    `json:"ip"`
-	TokensRemaining float64   `json:"tokens_remaining"`
-	Limit          float64   `json:"limit"`
-	Burst          int       `json:"burst"`
+	IP              string  `json:"ip"`
+	TokensRemaining float64 `json:"tokens_remaining"`
+	Limit           float64 `json:"limit"`
+	Burst           int     `json:"burst"`
 }
 
 // GetTrackedIPs returns all IPs currently being tracked by the rate limiter
@@ -140,18 +141,18 @@ func (rl *RateLimiter) GetRateLimitInfo(ip string) *RateLimitInfo {
 	if !exists {
 		// Return default info for untracked IP
 		return &RateLimitInfo{
-			IP:             ip,
+			IP:              ip,
 			TokensRemaining: float64(rl.burst),
-			Limit:          float64(rl.rate),
-			Burst:          rl.burst,
+			Limit:           float64(rl.rate),
+			Burst:           rl.burst,
 		}
 	}
 
 	return &RateLimitInfo{
-		IP:             ip,
+		IP:              ip,
 		TokensRemaining: limiter.Tokens(),
-		Limit:          float64(rl.rate),
-		Burst:          rl.burst,
+		Limit:           float64(rl.rate),
+		Burst:           rl.burst,
 	}
 }
 
@@ -175,7 +176,10 @@ func (rl *RateLimiter) StatsHandler() http.Handler {
 		if ip := r.URL.Query().Get("ip"); ip != "" {
 			info := rl.GetRateLimitInfo(ip)
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(info)
+			err := json.NewEncoder(w).Encode(info)
+			if err != nil {
+				logger.Debug("Failed to encode json: %v", err)
+			}
 			return
 		}
 
@@ -186,13 +190,16 @@ func (rl *RateLimiter) StatsHandler() http.Handler {
 			"total_tracked_ips": len(allInfo),
 			"rate_limit_config": map[string]interface{}{
 				"requests_per_second": float64(rl.rate),
-				"burst":              rl.burst,
+				"burst":               rl.burst,
 			},
 			"tracked_ips": allInfo,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(stats)
+		err := json.NewEncoder(w).Encode(stats)
+		if err != nil {
+			logger.Debug("Failed to encode json: %v", err)
+		}
 	})
 }
 

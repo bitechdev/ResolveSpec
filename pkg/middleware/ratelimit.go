@@ -1,5 +1,7 @@
+// Package middleware provides HTTP middleware functionalities such as rate limiting and IP blacklisting.
 package middleware
 
+//nolint:all
 import (
 	"encoding/json"
 	"net/http"

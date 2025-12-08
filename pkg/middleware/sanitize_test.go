@@ -85,8 +85,8 @@ func TestSanitizeMap(t *testing.T) {
 	sanitizer := DefaultSanitizer()
 
 	input := map[string]interface{}{
-		"name":   "<script>alert(1)</script>John",
-		"email":  "test@example.com",
+		"name":  "<script>alert(1)</script>John",
+		"email": "test@example.com",
 		"nested": map[string]interface{}{
 			"bio": "<iframe src='evil.com'>Bio</iframe>",
 		},

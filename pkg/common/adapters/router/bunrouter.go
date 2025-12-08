@@ -6,6 +6,7 @@ import (
 	"github.com/uptrace/bunrouter"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // BunRouterAdapter adapts uptrace/bunrouter to work with our Router interface
@@ -36,7 +37,10 @@ func (b *BunRouterAdapter) ServeHTTP(w common.ResponseWriter, r common.Request) 
 	// This method would be used when we need to serve through our interface
 	// For now, we'll work directly with the underlying router
 	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"ServeHTTP not implemented - use GetBunRouter() for direct access"}`))
+	_, err := w.Write([]byte(`{"error":"ServeHTTP not implemented - use GetBunRouter() for direct access"}`))
+	if err != nil {
+		logger.Warn("Failed to write. %v", err)
+	}
 }
 
 // GetBunRouter returns the underlying bunrouter for direct access

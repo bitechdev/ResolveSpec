@@ -45,4 +45,3 @@ func ValidateAndUnwrapModel(model interface{}) (*ValidateAndUnwrapModelResult, e
 		OriginalType: originalType,
 	}, nil
 }
-

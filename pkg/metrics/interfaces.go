@@ -3,6 +3,8 @@ package metrics
 import (
 	"net/http"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // Provider defines the interface for metric collection
@@ -57,12 +59,15 @@ func (n *NoOpProvider) IncRequestsInFlight()                                    
 func (n *NoOpProvider) DecRequestsInFlight()                                                  {}
 func (n *NoOpProvider) RecordDBQuery(operation, table string, duration time.Duration, err error) {
 }
-func (n *NoOpProvider) RecordCacheHit(provider string)            {}
-func (n *NoOpProvider) RecordCacheMiss(provider string)           {}
+func (n *NoOpProvider) RecordCacheHit(provider string)              {}
+func (n *NoOpProvider) RecordCacheMiss(provider string)             {}
 func (n *NoOpProvider) UpdateCacheSize(provider string, size int64) {}
 func (n *NoOpProvider) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Metrics provider not configured"))
+		_, err := w.Write([]byte("Metrics provider not configured"))
+		if err != nil {
+			logger.Warn("Failed to write. %v", err)
+		}
 	})
 }

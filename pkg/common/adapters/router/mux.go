@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // MuxAdapter adapts Gorilla Mux to work with our Router interface
@@ -33,7 +34,10 @@ func (m *MuxAdapter) ServeHTTP(w common.ResponseWriter, r common.Request) {
 	// This method would be used when we need to serve through our interface
 	// For now, we'll work directly with the underlying router
 	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"ServeHTTP not implemented - use GetMuxRouter() for direct access"}`))
+	_, err := w.Write([]byte(`{"error":"ServeHTTP not implemented - use GetMuxRouter() for direct access"}`))
+	if err != nil {
+		logger.Warn("Failed to write. %v", err)
+	}
 }
 
 // MuxRouteRegistration implements RouteRegistration for Mux

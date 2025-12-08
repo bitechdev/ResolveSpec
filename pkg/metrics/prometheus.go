@@ -12,14 +12,14 @@ import (
 
 // PrometheusProvider implements the Provider interface using Prometheus
 type PrometheusProvider struct {
-	requestDuration   *prometheus.HistogramVec
-	requestTotal      *prometheus.CounterVec
-	requestsInFlight  prometheus.Gauge
-	dbQueryDuration   *prometheus.HistogramVec
-	dbQueryTotal      *prometheus.CounterVec
-	cacheHits         *prometheus.CounterVec
-	cacheMisses       *prometheus.CounterVec
-	cacheSize         *prometheus.GaugeVec
+	requestDuration  *prometheus.HistogramVec
+	requestTotal     *prometheus.CounterVec
+	requestsInFlight prometheus.Gauge
+	dbQueryDuration  *prometheus.HistogramVec
+	dbQueryTotal     *prometheus.CounterVec
+	cacheHits        *prometheus.CounterVec
+	cacheMisses      *prometheus.CounterVec
+	cacheSize        *prometheus.GaugeVec
 }
 
 // NewPrometheusProvider creates a new Prometheus metrics provider

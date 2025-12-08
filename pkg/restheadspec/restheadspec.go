@@ -128,14 +128,16 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware Midd
 		}
 
 		// Register routes for this entity
+		// IMPORTANT: Register more specific routes before wildcard routes
+
 		// GET, POST for /{schema}/{entity}
 		muxRouter.Handle(entityPath, entityHandler).Methods("GET", "POST")
 
+		// GET for metadata (using HandleGet) - MUST be registered before /{id} route
+		muxRouter.Handle(metadataPath, metadataHandler).Methods("GET")
+
 		// GET, PUT, PATCH, DELETE, POST for /{schema}/{entity}/{id}
 		muxRouter.Handle(entityWithIDPath, entityWithIDHandler).Methods("GET", "PUT", "PATCH", "DELETE", "POST")
-
-		// GET for metadata (using HandleGet)
-		muxRouter.Handle(metadataPath, metadataHandler).Methods("GET")
 
 		// OPTIONS for CORS preflight - returns metadata
 		muxRouter.Handle(entityPath, optionsEntityHandler).Methods("OPTIONS")

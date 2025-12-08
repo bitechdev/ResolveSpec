@@ -9,7 +9,7 @@
 				"env": {
 					"CGO_ENABLED": "0"
 				},
-				"cwd": "${workspaceFolder}/bin",
+				"cwd": "${workspaceFolder}/bin"
 			},
 			"args": [
 				"../..."
@@ -17,11 +17,179 @@
 			"problemMatcher": [
 				"$go"
 			],
-			"group": "build",
+			"group": "build"
+		},
+		{
+			"type": "shell",
+			"label": "test: unit tests (all)",
+			"command": "go test ./pkg/resolvespec ./pkg/restheadspec -v -cover",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared",
+				"focus": true
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: unit tests (resolvespec)",
+			"command": "go test ./pkg/resolvespec -v -cover",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: unit tests (restheadspec)",
+			"command": "go test ./pkg/restheadspec -v -cover",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: integration tests (automated)",
+			"command": "./scripts/run-integration-tests.sh",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": true
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: integration tests (resolvespec only)",
+			"command": "./scripts/run-integration-tests.sh resolvespec",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: integration tests (restheadspec only)",
+			"command": "./scripts/run-integration-tests.sh restheadspec",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: coverage report",
+			"command": "make coverage",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: integration coverage report",
+			"command": "make coverage-integration",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "docker: start postgres",
+			"command": "make docker-up",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "docker: stop postgres",
+			"command": "make docker-down",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"type": "shell",
+			"label": "docker: clean postgres data",
+			"command": "make clean",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
 		},
 		{
 			"type": "go",
-			"label": "go: test workspace",
+			"label": "go: test workspace (with race)",
 			"command": "test",
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -36,13 +204,10 @@
 			"problemMatcher": [
 				"$go"
 			],
-			"group": {
-				"kind": "test",
-				"isDefault": true
-			},
+			"group": "test",
 			"presentation": {
 				"reveal": "always",
-				"panel": "new"
+				"panel": "shared"
 			}
 		},
 		{
@@ -69,23 +234,45 @@
 		},
 		{
 			"type": "shell",
-			"label": "go: full test suite",
+			"label": "test: all tests (unit + integration)",
+			"command": "make test",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"dependsOn": [
+				"docker: start postgres"
+			],
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"focus": true
+			}
+		},
+		{
+			"type": "shell",
+			"label": "test: full suite with checks",
 			"dependsOrder": "sequence",
 			"dependsOn": [
 				"go: vet workspace",
-				"go: test workspace"
+				"test: unit tests (all)",
+				"test: integration tests (automated)"
 			],
 			"problemMatcher": [],
-			"group": {
-				"kind": "test",
-				"isDefault": false
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
 			}
 		},
 		{
 			"type": "shell",
 			"label": "Make Release",
 			"problemMatcher": [],
-			"command": "sh ${workspaceFolder}/make_release.sh",
+			"command": "sh ${workspaceFolder}/make_release.sh"
 		}
 	]
 }

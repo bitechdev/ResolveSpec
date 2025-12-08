@@ -1,0 +1,56 @@
+{
+	"go.testFlags": [
+		"-v"
+	],
+	"go.testTimeout": "300s",
+	"go.coverOnSave": false,
+	"go.coverOnSingleTest": true,
+	"go.coverageDecorator": {
+		"type": "gutter"
+	},
+	"go.testEnvVars": {
+		"TEST_DATABASE_URL": "host=localhost user=postgres password=postgres dbname=resolvespec_test port=5432 sslmode=disable"
+	},
+	"go.toolsEnvVars": {
+		"CGO_ENABLED": "0"
+	},
+	"go.buildTags": "",
+	"go.testTags": "",
+	"files.exclude": {
+		"**/.git": true,
+		"**/.DS_Store": true,
+		"**/coverage.out": true,
+		"**/coverage.html": true,
+		"**/coverage-integration.out": true,
+		"**/coverage-integration.html": true
+	},
+	"files.watcherExclude": {
+		"**/.git/objects/**": true,
+		"**/.git/subtree-cache/**": true,
+		"**/node_modules/*/**": true,
+		"**/.hg/store/**": true,
+		"**/vendor/**": true
+	},
+	"editor.formatOnSave": true,
+	"editor.codeActionsOnSave": {
+		"source.organizeImports": "explicit"
+	},
+	"[go]": {
+		"editor.defaultFormatter": "golang.go",
+		"editor.formatOnSave": true,
+		"editor.insertSpaces": false,
+		"editor.tabSize": 4
+	},
+	"gopls": {
+		"ui.completion.usePlaceholders": true,
+		"ui.semanticTokens": true,
+		"ui.codelenses": {
+			"generate": true,
+			"regenerate_cgo": true,
+			"test": true,
+			"tidy": true,
+			"upgrade_dependency": true,
+			"vendor": true
+		}
+	}
+}

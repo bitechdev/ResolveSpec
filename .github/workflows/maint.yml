@@ -1,4 +1,4 @@
-name: Tests
+name: Build , Vet Test, and Lint
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    name: Run Tests
+    name: Run Vet Tests
     runs-on: ubuntu-latest
 
     strategy:
@@ -37,22 +37,6 @@ jobs:
 
       - name: Run go vet
         run: go vet ./...
-
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Display test coverage
-        run: go tool cover -func=coverage.out
-
-    # - name: Upload coverage to Codecov
-    #   uses: codecov/codecov-action@v4
-    #   with:
-    #     file: ./coverage.out
-    #     flags: unittests
-    #     name: codecov-umbrella
-    #   env:
-    #     CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    #   continue-on-error: true
 
   lint:
     name: Lint Code

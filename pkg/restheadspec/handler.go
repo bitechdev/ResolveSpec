@@ -226,8 +226,20 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 		return
 	}
 
-	metadata := h.generateMetadata(schema, entity, model)
-	h.sendResponse(w, metadata, nil)
+	// Parse request options from headers to get response format settings
+	options := h.parseOptionsFromHeaders(r, model)
+
+	tableMetadata := h.generateMetadata(schema, entity, model)
+	// Send with formatted response to respect DetailApi/SimpleApi/Syncfusion format
+	// Create empty metadata for response wrapper
+	responseMetadata := &common.Metadata{
+		Total:    0,
+		Filtered: 0,
+		Count:    0,
+		Limit:    0,
+		Offset:   0,
+	}
+	h.sendFormattedResponse(w, tableMetadata, responseMetadata, options)
 }
 
 // handleMeta processes meta operation requests

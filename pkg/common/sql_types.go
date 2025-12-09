@@ -71,14 +71,14 @@ func (n *SqlNull[T]) Scan(value any) error {
 	// Fallback: parse from string/bytes.
 	switch v := value.(type) {
 	case string:
-		return n.fromString(v)
+		return n.FromString(v)
 	case []byte:
-		return n.fromString(string(v))
+		return n.FromString(string(v))
 	default:
-		return n.fromString(fmt.Sprintf("%v", value))
+		return n.FromString(fmt.Sprintf("%v", value))
 	}
 }
-func (n *SqlNull[T]) fromString(s string) error {
+func (n *SqlNull[T]) FromString(s string) error {
 	s = strings.TrimSpace(s)
 	n.Valid = false
 	n.Val = *new(T)
@@ -156,7 +156,7 @@ func (n *SqlNull[T]) UnmarshalJSON(b []byte) error {
 	// Fallback: unmarshal as string and parse.
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
-		return n.fromString(s)
+		return n.FromString(s)
 	}
 
 	return fmt.Errorf("cannot unmarshal %s into SqlNull[%T]", b, n.Val)
@@ -512,6 +512,30 @@ func TryIfInt64(v any, def int64) int64 {
 // Constructor helpers - clean and fast value creation
 func Null[T any](v T, valid bool) SqlNull[T] {
 	return SqlNull[T]{Val: v, Valid: valid}
+}
+
+func NewSql[T any](value any) SqlNull[T] {
+	n := SqlNull[T]{}
+
+	if value == nil {
+		return n
+	}
+
+	// Fast path: exact match
+	if v, ok := value.(T); ok {
+		n.Val = v
+		n.Valid = true
+		return n
+	}
+
+	// Try from another SqlNull
+	if sn, ok := value.(SqlNull[T]); ok {
+		return sn
+	}
+
+	// Convert via string
+	_ = n.FromString(fmt.Sprintf("%v", value))
+	return n
 }
 
 func NewSqlInt16(v int16) SqlInt16 {

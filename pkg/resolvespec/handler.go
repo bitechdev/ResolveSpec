@@ -282,17 +282,61 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
 	}
 
+	// Apply cursor-based pagination
+	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
+		logger.Debug("Applying cursor pagination")
+
+		// Get primary key name
+		pkName := reflection.GetPrimaryKeyName(model)
+
+		// Extract model columns for validation
+		modelColumns := reflection.GetModelColumns(model)
+
+		// Get cursor filter SQL
+		cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+		if err != nil {
+			logger.Error("Error building cursor filter: %v", err)
+			h.sendError(w, http.StatusBadRequest, "cursor_error", "Invalid cursor pagination", err)
+			return
+		}
+
+		// Apply cursor filter to query
+		if cursorFilter != "" {
+			logger.Debug("Applying cursor filter: %s", cursorFilter)
+			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName))
+			if sanitizedCursor != "" {
+				query = query.Where(sanitizedCursor)
+			}
+		}
+	}
+
 	// Get total count before pagination
 	var total int
 
 	// Try to get from cache first
-	cacheKeyHash := cache.BuildQueryCacheKey(
-		tableName,
-		options.Filters,
-		options.Sort,
-		"", // No custom SQL WHERE in resolvespec
-		"", // No custom SQL OR in resolvespec
-	)
+	// Use extended cache key if cursors are present
+	var cacheKeyHash string
+	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
+		cacheKeyHash = cache.BuildExtendedQueryCacheKey(
+			tableName,
+			options.Filters,
+			options.Sort,
+			"", // No custom SQL WHERE in resolvespec
+			"", // No custom SQL OR in resolvespec
+			nil, // No expand options in resolvespec
+			false, // distinct not used here
+			options.CursorForward,
+			options.CursorBackward,
+		)
+	} else {
+		cacheKeyHash = cache.BuildQueryCacheKey(
+			tableName,
+			options.Filters,
+			options.Sort,
+			"", // No custom SQL WHERE in resolvespec
+			"", // No custom SQL OR in resolvespec
+		)
+	}
 	cacheKey := cache.GetQueryTotalCacheKey(cacheKeyHash)
 
 	// Try to retrieve from cache

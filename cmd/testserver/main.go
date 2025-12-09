@@ -6,8 +6,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/config"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/server"
 	"github.com/bitechdev/ResolveSpec/pkg/testmodels"
 
 	"github.com/bitechdev/ResolveSpec/pkg/resolvespec"
@@ -19,12 +21,27 @@ import (
 )
 
 func main() {
-	// Initialize logger
-	logger.Init(true)
+	// Load configuration
+	cfgMgr := config.NewManager()
+	if err := cfgMgr.Load(); err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	cfg, err := cfgMgr.GetConfig()
+	if err != nil {
+		log.Fatalf("Failed to get configuration: %v", err)
+	}
+
+	// Initialize logger with configuration
+	logger.Init(cfg.Logger.Dev)
+	if cfg.Logger.Path != "" {
+		logger.UpdateLoggerPath(cfg.Logger.Path, cfg.Logger.Dev)
+	}
 	logger.Info("ResolveSpec test server starting")
+	logger.Info("Configuration loaded - Server will listen on: %s", cfg.Server.Addr)
 
 	// Initialize database
-	db, err := initDB()
+	db, err := initDB(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize database: %+v", err)
 		os.Exit(1)
@@ -50,29 +67,51 @@ func main() {
 	// Setup routes using new SetupMuxRoutes function (without authentication)
 	resolvespec.SetupMuxRoutes(r, handler, nil)
 
-	// Start server
-	logger.Info("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", r); err != nil {
+	// Create graceful server with configuration
+	srv := server.NewGracefulServer(server.Config{
+		Addr:            cfg.Server.Addr,
+		Handler:         r,
+		ShutdownTimeout: cfg.Server.ShutdownTimeout,
+		DrainTimeout:    cfg.Server.DrainTimeout,
+		ReadTimeout:     cfg.Server.ReadTimeout,
+		WriteTimeout:    cfg.Server.WriteTimeout,
+		IdleTimeout:     cfg.Server.IdleTimeout,
+	})
+
+	// Start server with graceful shutdown
+	logger.Info("Starting server on %s", cfg.Server.Addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("Server failed to start: %v", err)
 		os.Exit(1)
 	}
 }
 
-func initDB() (*gorm.DB, error) {
+func initDB(cfg *config.Config) (*gorm.DB, error) {
+	// Configure GORM logger based on config
+	logLevel := gormlog.Info
+	if !cfg.Logger.Dev {
+		logLevel = gormlog.Warn
+	}
 
 	newLogger := gormlog.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		gormlog.Config{
-			SlowThreshold:             time.Second,  // Slow SQL threshold
-			LogLevel:                  gormlog.Info, // Log level
-			IgnoreRecordNotFoundError: true,         // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      true,         // Don't include params in the SQL log
-			Colorful:                  true,         // Disable color
+			SlowThreshold:             time.Second, // Slow SQL threshold
+			LogLevel:                  logLevel,    // Log level
+			IgnoreRecordNotFoundError: true,        // Ignore ErrRecordNotFound error for logger
+			ParameterizedQueries:      true,        // Don't include params in the SQL log
+			Colorful:                  cfg.Logger.Dev,
 		},
 	)
 
+	// Use database URL from config if available, otherwise use default SQLite
+	dbURL := cfg.Database.URL
+	if dbURL == "" {
+		dbURL = "test.db"
+	}
+
 	// Create SQLite database
-	db, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{Logger: newLogger, FullSaveAssociations: false})
+	db, err := gorm.Open(sqlite.Open(dbURL), &gorm.Config{Logger: newLogger, FullSaveAssociations: false})
 	if err != nil {
 		return nil, err
 	}

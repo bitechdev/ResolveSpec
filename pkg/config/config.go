@@ -1,0 +1,80 @@
+package config
+
+import "time"
+
+// Config represents the complete application configuration
+type Config struct {
+	Server     ServerConfig     `mapstructure:"server"`
+	Tracing    TracingConfig    `mapstructure:"tracing"`
+	Cache      CacheConfig      `mapstructure:"cache"`
+	Logger     LoggerConfig     `mapstructure:"logger"`
+	Middleware MiddlewareConfig `mapstructure:"middleware"`
+	CORS       CORSConfig       `mapstructure:"cors"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+}
+
+// ServerConfig holds server-related configuration
+type ServerConfig struct {
+	Addr            string        `mapstructure:"addr"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	DrainTimeout    time.Duration `mapstructure:"drain_timeout"`
+	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
+}
+
+// TracingConfig holds OpenTelemetry tracing configuration
+type TracingConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	ServiceName    string `mapstructure:"service_name"`
+	ServiceVersion string `mapstructure:"service_version"`
+	Endpoint       string `mapstructure:"endpoint"`
+}
+
+// CacheConfig holds cache provider configuration
+type CacheConfig struct {
+	Provider string         `mapstructure:"provider"` // memory, redis, memcache
+	Redis    RedisConfig    `mapstructure:"redis"`
+	Memcache MemcacheConfig `mapstructure:"memcache"`
+}
+
+// RedisConfig holds Redis-specific configuration
+type RedisConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
+// MemcacheConfig holds Memcache-specific configuration
+type MemcacheConfig struct {
+	Servers      []string      `mapstructure:"servers"`
+	MaxIdleConns int           `mapstructure:"max_idle_conns"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+}
+
+// LoggerConfig holds logger configuration
+type LoggerConfig struct {
+	Dev  bool   `mapstructure:"dev"`
+	Path string `mapstructure:"path"`
+}
+
+// MiddlewareConfig holds middleware configuration
+type MiddlewareConfig struct {
+	RateLimitRPS   float64 `mapstructure:"rate_limit_rps"`
+	RateLimitBurst int     `mapstructure:"rate_limit_burst"`
+	MaxRequestSize int64   `mapstructure:"max_request_size"`
+}
+
+// CORSConfig holds CORS configuration
+type CORSConfig struct {
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	AllowedMethods []string `mapstructure:"allowed_methods"`
+	AllowedHeaders []string `mapstructure:"allowed_headers"`
+	MaxAge         int      `mapstructure:"max_age"`
+}
+
+// DatabaseConfig holds database configuration (primarily for testing)
+type DatabaseConfig struct {
+	URL string `mapstructure:"url"`
+}

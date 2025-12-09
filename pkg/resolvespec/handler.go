@@ -321,9 +321,9 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			tableName,
 			options.Filters,
 			options.Sort,
-			"", // No custom SQL WHERE in resolvespec
-			"", // No custom SQL OR in resolvespec
-			nil, // No expand options in resolvespec
+			"",    // No custom SQL WHERE in resolvespec
+			"",    // No custom SQL OR in resolvespec
+			nil,   // No expand options in resolvespec
 			false, // distinct not used here
 			options.CursorForward,
 			options.CursorBackward,

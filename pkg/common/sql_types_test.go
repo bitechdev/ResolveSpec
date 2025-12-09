@@ -16,11 +16,11 @@ func TestNewSqlInt16(t *testing.T) {
 		input    interface{}
 		expected SqlInt16
 	}{
-		{"int", 42, NewSqlInt16(42)},
+		{"int", 42, Null(int16(42), true)},
 		{"int32", int32(100), NewSqlInt16(100)},
 		{"int64", int64(200), NewSqlInt16(200)},
 		{"string", "123", NewSqlInt16(123)},
-		{"nil", nil, NewSqlInt16(0)},
+		{"nil", nil, Null(int16(0), false)},
 	}
 
 	for _, tt := range tests {
@@ -42,9 +42,9 @@ func TestNewSqlInt16_Value(t *testing.T) {
 		input    SqlInt16
 		expected driver.Value
 	}{
-		{"zero", NewSqlInt16(0), nil},
-		{"positive", NewSqlInt16(42), int64(42)},
-		{"negative", NewSqlInt16(-10), int64(-10)},
+		{"zero", Null(int16(0), false), nil},
+		{"positive", NewSqlInt16(42), int16(42)},
+		{"negative", NewSqlInt16(-10), int16(-10)},
 	}
 
 	for _, tt := range tests {
@@ -486,7 +486,7 @@ func TestSqlUUID_Value(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Value failed: %v", err)
 	}
-	if val != testUUID.String() {
+	if val != testUUID {
 		t.Errorf("expected %s, got %s", testUUID.String(), val)
 	}
 

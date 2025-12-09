@@ -78,7 +78,6 @@ func (n *SqlNull[T]) Scan(value any) error {
 		return n.fromString(fmt.Sprintf("%v", value))
 	}
 }
-
 func (n *SqlNull[T]) fromString(s string) error {
 	s = strings.TrimSpace(s)
 	n.Valid = false
@@ -90,19 +89,14 @@ func (n *SqlNull[T]) fromString(s string) error {
 
 	var zero T
 	switch any(zero).(type) {
-	case int, int8, int16, int32, int64:
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-			n.Val = any(int64(i)).(T) // Cast to T (e.g., int16)
-			n.Valid = true
-		}
-	case uint, uint8, uint16, uint32, uint64:
-		if u, err := strconv.ParseUint(s, 10, 64); err == nil {
-			n.Val = any(u).(T)
+			reflect.ValueOf(&n.Val).Elem().SetInt(i)
 			n.Valid = true
 		}
 	case float32, float64:
 		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			n.Val = any(f).(T)
+			reflect.ValueOf(&n.Val).Elem().SetFloat(f)
 			n.Valid = true
 		}
 	case bool:
@@ -124,7 +118,6 @@ func (n *SqlNull[T]) fromString(s string) error {
 		n.Val = any(s).(T)
 		n.Valid = true
 	}
-
 	return nil
 }
 
@@ -517,6 +510,9 @@ func TryIfInt64(v any, def int64) int64 {
 }
 
 // Constructor helpers - clean and fast value creation
+func Null[T any](v T, valid bool) SqlNull[T] {
+	return SqlNull[T]{Val: v, Valid: valid}
+}
 
 func NewSqlInt16(v int16) SqlInt16 {
 	return SqlInt16{Val: v, Valid: true}

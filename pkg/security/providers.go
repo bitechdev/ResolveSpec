@@ -139,6 +139,8 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 	} else {
 		// Remove "Bearer " prefix if present
 		sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
+		// Remove "Token " prefix if present
+		sessionToken = strings.TrimPrefix(sessionToken, "Token ")
 	}
 
 	if sessionToken == "" {
@@ -164,6 +166,10 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 			return nil, fmt.Errorf("%s", errorMsg.String)
 		}
 		return nil, fmt.Errorf("invalid or expired session")
+	}
+
+	if !userJSON.Valid {
+		return nil, fmt.Errorf("no user data in session")
 	}
 
 	// Parse UserContext

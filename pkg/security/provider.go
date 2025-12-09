@@ -135,7 +135,7 @@ func (m *SecurityList) ColumSecurityApplyOnRecord(prevRecord reflect.Value, newR
 
 	colsecList, ok := m.ColumnSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
 	if !ok || colsecList == nil {
-		return cols, fmt.Errorf("no security data")
+		return cols, fmt.Errorf("no column security data")
 	}
 
 	for i := range colsecList {
@@ -307,7 +307,7 @@ func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType refl
 
 	colsecList, ok := m.ColumnSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
 	if !ok || colsecList == nil {
-		return records, fmt.Errorf("no security data")
+		return records, fmt.Errorf("nocolumn security data")
 	}
 
 	for i := range colsecList {
@@ -448,7 +448,7 @@ func (m *SecurityList) GetRowSecurityTemplate(pUserID int, pSchema, pTablename s
 
 	rowSec, ok := m.RowSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
 	if !ok {
-		return RowSecurity{}, fmt.Errorf("no security data")
+		return RowSecurity{}, fmt.Errorf("no row security data")
 	}
 
 	return rowSec, nil

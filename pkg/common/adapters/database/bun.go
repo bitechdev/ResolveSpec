@@ -189,8 +189,54 @@ func (b *BunSelectQuery) ColumnExpr(query string, args ...interface{}) common.Se
 }
 
 func (b *BunSelectQuery) Where(query string, args ...interface{}) common.SelectQuery {
+	// If we have a table alias defined, check if the query references a different alias
+	// This can happen in preloads where the user expects a certain alias but Bun generates another
+	if b.tableAlias != "" && b.tableName != "" {
+		// Detect if query contains a qualified column reference (e.g., "APIL.column")
+		// and replace it with the unqualified version or the correct alias
+		query = normalizeTableAlias(query, b.tableAlias, b.tableName)
+	}
 	b.query = b.query.Where(query, args...)
 	return b
+}
+
+// normalizeTableAlias replaces table alias prefixes in SQL conditions
+// This handles cases where a user references a table alias that doesn't match
+// what Bun generates (common in preload contexts)
+func normalizeTableAlias(query, expectedAlias, tableName string) string {
+	// Pattern: <word>.<column> where <word> might be an incorrect alias
+	// We'll look for patterns like "APIL.column" and either:
+	// 1. Remove the alias prefix entirely (safest)
+	// 2. Replace with the expected alias
+
+	// For now, we'll use a simple approach: if the query contains a dot (qualified reference)
+	// and that prefix is not the expected alias or table name, strip it
+
+	// Split on spaces and parentheses to find qualified references
+	parts := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == '(' || r == ')' || r == ','
+	})
+
+	modified := query
+	for _, part := range parts {
+		// Check if this looks like a qualified column reference
+		if dotIndex := strings.Index(part, "."); dotIndex > 0 {
+			prefix := part[:dotIndex]
+			column := part[dotIndex+1:]
+
+			// Check if the prefix matches our expected alias or table name (case-insensitive)
+			if !strings.EqualFold(prefix, expectedAlias) &&
+			   !strings.EqualFold(prefix, tableName) &&
+			   !strings.EqualFold(prefix, strings.ToLower(tableName)) {
+				// This is a different alias - remove the prefix
+				logger.Debug("Stripping incorrect alias '%s' from WHERE condition, keeping just '%s'", prefix, column)
+				// Replace the qualified reference with just the column name
+				modified = strings.ReplaceAll(modified, part, column)
+			}
+		}
+	}
+
+	return modified
 }
 
 func (b *BunSelectQuery) WhereOr(query string, args ...interface{}) common.SelectQuery {
@@ -381,6 +427,28 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 		wrapper := &BunSelectQuery{
 			query: sq,
 			db:    b.db,
+		}
+
+		// Try to extract table name and alias from the preload model
+		if model := sq.GetModel(); model != nil && model.Value() != nil {
+			modelValue := model.Value()
+
+			// Extract table name if model implements TableNameProvider
+			if provider, ok := modelValue.(common.TableNameProvider); ok {
+				fullTableName := provider.TableName()
+				wrapper.schema, wrapper.tableName = parseTableName(fullTableName)
+			}
+
+			// Extract table alias if model implements TableAliasProvider
+			if provider, ok := modelValue.(common.TableAliasProvider); ok {
+				wrapper.tableAlias = provider.TableAlias()
+				// Apply the alias to the Bun query so conditions can reference it
+				if wrapper.tableAlias != "" {
+					// Note: Bun's Relation() already sets up the table, but we can add
+					// the alias explicitly if needed
+					logger.Debug("Preload relation '%s' using table alias: %s", relation, wrapper.tableAlias)
+				}
+			}
 		}
 
 		// Start with the interface value (not pointer)

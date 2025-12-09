@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/bitechdev/ResolveSpec/pkg/cache"
 )
 
 // Test HeaderAuthenticator
@@ -158,6 +160,243 @@ func TestParseIntHeader(t *testing.T) {
 	})
 }
 
+// Test DatabaseAuthenticator caching
+func TestDatabaseAuthenticatorCaching(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create mock db: %v", err)
+	}
+	defer db.Close()
+
+	// Create a test cache instance
+	cacheProvider := cache.NewMemoryProvider(&cache.Options{
+		DefaultTTL: 1 * time.Minute,
+		MaxSize:    1000,
+	})
+	testCache := cache.NewCache(cacheProvider)
+
+	// Create authenticator with short cache TTL for testing
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{
+		CacheTTL: 100 * time.Millisecond,
+		Cache:    testCache,
+	})
+
+	t.Run("cache hit avoids database call", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer cached-token-123")
+
+		// First call - should hit database
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":1,"user_name":"testuser","session_id":"cached-token-123"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("cached-token-123", "authenticate").
+			WillReturnRows(rows)
+
+		userCtx1, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("first authenticate failed: %v", err)
+		}
+		if userCtx1.UserID != 1 {
+			t.Errorf("expected UserID 1, got %d", userCtx1.UserID)
+		}
+
+		// Second call - should use cache, no database call expected
+		userCtx2, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("second authenticate failed: %v", err)
+		}
+		if userCtx2.UserID != 1 {
+			t.Errorf("expected UserID 1, got %d", userCtx2.UserID)
+		}
+
+		// Verify no unexpected database calls
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("cache expiration triggers database call", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer expire-token-456")
+
+		// First call - populate cache
+		rows1 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":2,"user_name":"expireuser","session_id":"expire-token-456"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("expire-token-456", "authenticate").
+			WillReturnRows(rows1)
+
+		_, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("first authenticate failed: %v", err)
+		}
+
+		// Wait for cache to expire
+		time.Sleep(150 * time.Millisecond)
+
+		// Second call - cache expired, should hit database again
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":2,"user_name":"expireuser","session_id":"expire-token-456"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("expire-token-456", "authenticate").
+			WillReturnRows(rows2)
+
+		_, err = auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("second authenticate after expiration failed: %v", err)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("logout clears cache", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer logout-token-789")
+
+		// First call - populate cache
+		rows1 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":3,"user_name":"logoutuser","session_id":"logout-token-789"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("logout-token-789", "authenticate").
+			WillReturnRows(rows1)
+
+		_, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("authenticate failed: %v", err)
+		}
+
+		// Logout - should clear cache
+		logoutRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(true, nil, nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_logout`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(logoutRows)
+
+		err = auth.Logout(context.Background(), LogoutRequest{
+			Token:  "logout-token-789",
+			UserID: 3,
+		})
+		if err != nil {
+			t.Fatalf("logout failed: %v", err)
+		}
+
+		// Next authenticate should hit database again since cache was cleared
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":3,"user_name":"logoutuser","session_id":"logout-token-789"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("logout-token-789", "authenticate").
+			WillReturnRows(rows2)
+
+		_, err = auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("authenticate after logout failed: %v", err)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("manual cache clear", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer manual-clear-token")
+
+		// Populate cache
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":4,"user_name":"clearuser","session_id":"manual-clear-token"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("manual-clear-token", "authenticate").
+			WillReturnRows(rows)
+
+		_, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("authenticate failed: %v", err)
+		}
+
+		// Manually clear cache
+		auth.ClearCache("manual-clear-token")
+
+		// Next call should hit database
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":4,"user_name":"clearuser","session_id":"manual-clear-token"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("manual-clear-token", "authenticate").
+			WillReturnRows(rows2)
+
+		_, err = auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("authenticate after cache clear failed: %v", err)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("clear user cache", func(t *testing.T) {
+		// Populate cache with multiple tokens for the same user
+		req1 := httptest.NewRequest("GET", "/test", nil)
+		req1.Header.Set("Authorization", "Bearer user-token-1")
+
+		rows1 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":5,"user_name":"multiuser","session_id":"user-token-1"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("user-token-1", "authenticate").
+			WillReturnRows(rows1)
+
+		_, err := auth.Authenticate(req1)
+		if err != nil {
+			t.Fatalf("first authenticate failed: %v", err)
+		}
+
+		req2 := httptest.NewRequest("GET", "/test", nil)
+		req2.Header.Set("Authorization", "Bearer user-token-2")
+
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":5,"user_name":"multiuser","session_id":"user-token-2"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("user-token-2", "authenticate").
+			WillReturnRows(rows2)
+
+		_, err = auth.Authenticate(req2)
+		if err != nil {
+			t.Fatalf("second authenticate failed: %v", err)
+		}
+
+		// Clear all cache entries for user 5
+		auth.ClearUserCache(5)
+
+		// Both tokens should now require database calls
+		rows3 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":5,"user_name":"multiuser","session_id":"user-token-1"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("user-token-1", "authenticate").
+			WillReturnRows(rows3)
+
+		_, err = auth.Authenticate(req1)
+		if err != nil {
+			t.Fatalf("authenticate after user cache clear failed: %v", err)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+}
+
 // Test DatabaseAuthenticator
 func TestDatabaseAuthenticator(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -281,7 +520,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			AddRow(true, nil, `{"user_id":2,"user_name":"cookieuser","session_id":"cookie-token-456"}`)
 
 		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
-			WithArgs("cookie-token-456", "authenticate").
+			WithArgs("cookie-token-456", "cookie").
 			WillReturnRows(rows)
 
 		userCtx, err := auth.Authenticate(req)

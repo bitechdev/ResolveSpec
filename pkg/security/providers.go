@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/cache"
 )
 
 // Production-Ready Authenticators
@@ -58,11 +60,41 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 // resolvespec_session_update, resolvespec_refresh_token
 // See database_schema.sql for procedure definitions
 type DatabaseAuthenticator struct {
-	db *sql.DB
+	db       *sql.DB
+	cache    *cache.Cache
+	cacheTTL time.Duration
+}
+
+// DatabaseAuthenticatorOptions configures the database authenticator
+type DatabaseAuthenticatorOptions struct {
+	// CacheTTL is the duration to cache user contexts
+	// Default: 5 minutes
+	CacheTTL time.Duration
+	// Cache is an optional cache instance. If nil, uses the default cache
+	Cache *cache.Cache
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
-	return &DatabaseAuthenticator{db: db}
+	return NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{
+		CacheTTL: 5 * time.Minute,
+	})
+}
+
+func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorOptions) *DatabaseAuthenticator {
+	if opts.CacheTTL == 0 {
+		opts.CacheTTL = 5 * time.Minute
+	}
+
+	cacheInstance := opts.Cache
+	if cacheInstance == nil {
+		cacheInstance = cache.GetDefaultCache()
+	}
+
+	return &DatabaseAuthenticator{
+		db:       db,
+		cache:    cacheInstance,
+		cacheTTL: opts.CacheTTL,
+	}
 }
 
 func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
@@ -124,17 +156,25 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 		return fmt.Errorf("logout failed")
 	}
 
+	// Clear cache for this token
+	if req.Token != "" {
+		cacheKey := fmt.Sprintf("auth:session:%s", req.Token)
+		_ = a.cache.Delete(ctx, cacheKey)
+	}
+
 	return nil
 }
 
 func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 	// Extract session token from header or cookie
 	sessionToken := r.Header.Get("Authorization")
+	reference := "authenticate"
 	if sessionToken == "" {
 		// Try cookie
 		cookie, err := r.Cookie("session_token")
 		if err == nil {
 			sessionToken = cookie.Value
+			reference = "cookie"
 		}
 	} else {
 		// Remove "Bearer " prefix if present
@@ -147,41 +187,70 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 		return nil, fmt.Errorf("session token required")
 	}
 
-	// Call resolvespec_session stored procedure
-	// reference could be route, controller name, or any identifier
-	reference := "authenticate"
+	// Build cache key
+	cacheKey := fmt.Sprintf("auth:session:%s", sessionToken)
 
-	var success bool
-	var errorMsg sql.NullString
-	var userJSON sql.NullString
-
-	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
-	err := a.db.QueryRowContext(r.Context(), query, sessionToken, reference).Scan(&success, &errorMsg, &userJSON)
-	if err != nil {
-		return nil, fmt.Errorf("session query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return nil, fmt.Errorf("%s", errorMsg.String)
-		}
-		return nil, fmt.Errorf("invalid or expired session")
-	}
-
-	if !userJSON.Valid {
-		return nil, fmt.Errorf("no user data in session")
-	}
-
-	// Parse UserContext
+	// Use cache.GetOrSet to get from cache or load from database
 	var userCtx UserContext
-	if err := json.Unmarshal([]byte(userJSON.String), &userCtx); err != nil {
-		return nil, fmt.Errorf("failed to parse user context: %w", err)
+	err := a.cache.GetOrSet(r.Context(), cacheKey, &userCtx, a.cacheTTL, func() (interface{}, error) {
+		// This function is called only if cache miss
+		var success bool
+		var errorMsg sql.NullString
+		var userJSON sql.NullString
+
+		query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
+		err := a.db.QueryRowContext(r.Context(), query, sessionToken, reference).Scan(&success, &errorMsg, &userJSON)
+		if err != nil {
+			return nil, fmt.Errorf("session query failed: %w", err)
+		}
+
+		if !success {
+			if errorMsg.Valid {
+				return nil, fmt.Errorf("%s", errorMsg.String)
+			}
+			return nil, fmt.Errorf("invalid or expired session")
+		}
+
+		if !userJSON.Valid {
+			return nil, fmt.Errorf("no user data in session")
+		}
+
+		// Parse UserContext
+		var user UserContext
+		if err := json.Unmarshal([]byte(userJSON.String), &user); err != nil {
+			return nil, fmt.Errorf("failed to parse user context: %w", err)
+		}
+
+		return &user, nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
 
 	// Update last activity timestamp asynchronously
 	go a.updateSessionActivity(r.Context(), sessionToken, &userCtx)
 
 	return &userCtx, nil
+}
+
+// ClearCache removes a specific token from the cache or clears all cache if token is empty
+func (a *DatabaseAuthenticator) ClearCache(token string) error {
+	ctx := context.Background()
+	if token != "" {
+		cacheKey := fmt.Sprintf("auth:session:%s", token)
+		return a.cache.Delete(ctx, cacheKey)
+	}
+	// Clear all auth cache entries
+	return a.cache.DeleteByPattern(ctx, "auth:session:*")
+}
+
+// ClearUserCache removes all cache entries for a specific user ID
+func (a *DatabaseAuthenticator) ClearUserCache(userID int) error {
+	ctx := context.Background()
+	// Clear all sessions for this user
+	pattern := "auth:session:*"
+	return a.cache.DeleteByPattern(ctx, pattern)
 }
 
 // updateSessionActivity updates the last activity timestamp for the session

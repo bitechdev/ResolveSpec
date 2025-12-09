@@ -104,10 +104,12 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 
 // GormSelectQuery implements SelectQuery for GORM
 type GormSelectQuery struct {
-	db         *gorm.DB
-	schema     string // Separated schema name
-	tableName  string // Just the table name, without schema
-	tableAlias string
+	db             *gorm.DB
+	schema         string // Separated schema name
+	tableName      string // Just the table name, without schema
+	tableAlias     string
+	inJoinContext  bool   // Track if we're in a JOIN relation context
+	joinTableAlias string // Alias to use for JOIN conditions
 }
 
 func (g *GormSelectQuery) Model(model interface{}) common.SelectQuery {
@@ -151,8 +153,59 @@ func (g *GormSelectQuery) ColumnExpr(query string, args ...interface{}) common.S
 }
 
 func (g *GormSelectQuery) Where(query string, args ...interface{}) common.SelectQuery {
+	// If we're in a JOIN context, add table prefix to unqualified columns
+	if g.inJoinContext && g.joinTableAlias != "" {
+		query = addTablePrefixGorm(query, g.joinTableAlias)
+	}
 	g.db = g.db.Where(query, args...)
 	return g
+}
+
+// addTablePrefixGorm adds a table prefix to unqualified column references (GORM version)
+func addTablePrefixGorm(query, tableAlias string) string {
+	if tableAlias == "" || query == "" {
+		return query
+	}
+
+	// Split on spaces and parentheses to find column references
+	parts := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == '(' || r == ')' || r == ','
+	})
+
+	modified := query
+	for _, part := range parts {
+		// Check if this looks like an unqualified column reference
+		if !strings.Contains(part, ".") {
+			// Extract potential column name (before = or other operators)
+			for _, op := range []string{"=", "!=", "<>", ">", ">=", "<", "<=", " LIKE ", " IN ", " IS "} {
+				if strings.Contains(part, op) {
+					colName := strings.Split(part, op)[0]
+					colName = strings.TrimSpace(colName)
+					if colName != "" && !isOperatorOrKeywordGorm(colName) {
+						// Add table prefix
+						prefixed := tableAlias + "." + colName + strings.TrimPrefix(part, colName)
+						modified = strings.ReplaceAll(modified, part, prefixed)
+						logger.Debug("Adding table prefix '%s' to column '%s' in JOIN condition", tableAlias, colName)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	return modified
+}
+
+// isOperatorOrKeywordGorm checks if a string is likely an operator or SQL keyword (GORM version)
+func isOperatorOrKeywordGorm(s string) bool {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	keywords := []string{"AND", "OR", "NOT", "IN", "IS", "NULL", "TRUE", "FALSE", "LIKE", "BETWEEN"}
+	for _, kw := range keywords {
+		if s == kw {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *GormSelectQuery) WhereOr(query string, args ...interface{}) common.SelectQuery {
@@ -238,6 +291,27 @@ func (g *GormSelectQuery) Preload(relation string, conditions ...interface{}) co
 }
 
 func (g *GormSelectQuery) PreloadRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	// Auto-detect relationship type and choose optimal loading strategy
+	// Get the model from GORM's statement if available
+	if g.db.Statement != nil && g.db.Statement.Model != nil {
+		relType := reflection.GetRelationType(g.db.Statement.Model, relation)
+
+		// Log the detected relationship type
+		logger.Debug("PreloadRelation '%s' detected as: %s", relation, relType)
+
+		// If this is a belongs-to or has-one relation, use JOIN for better performance
+		if relType.ShouldUseJoin() {
+			logger.Info("Using JOIN strategy for %s relation '%s'", relType, relation)
+			return g.JoinRelation(relation, apply...)
+		}
+
+		// For has-many, many-to-many, or unknown: use separate query (safer default)
+		if relType == reflection.RelationHasMany || relType == reflection.RelationManyToMany {
+			logger.Debug("Using separate query for %s relation '%s'", relType, relation)
+		}
+	}
+
+	// Use GORM's Preload (separate query strategy)
 	g.db = g.db.Preload(relation, func(db *gorm.DB) *gorm.DB {
 		if len(apply) == 0 {
 			return db
@@ -262,6 +336,42 @@ func (g *GormSelectQuery) PreloadRelation(relation string, apply ...func(common.
 		}
 
 		return db // fallback
+	})
+
+	return g
+}
+
+func (g *GormSelectQuery) JoinRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	// JoinRelation uses a JOIN instead of a separate preload query
+	// This is more efficient for many-to-one or one-to-one relationships
+	// as it avoids additional round trips to the database
+
+	// GORM's Joins() method forces a JOIN for the preload
+	logger.Debug("JoinRelation '%s' - Using GORM Joins() with automatic WHERE prefix addition", relation)
+
+	g.db = g.db.Joins(relation, func(db *gorm.DB) *gorm.DB {
+		if len(apply) == 0 {
+			return db
+		}
+
+		wrapper := &GormSelectQuery{
+			db:             db,
+			inJoinContext:  true,                      // Mark as JOIN context
+			joinTableAlias: strings.ToLower(relation), // Use relation name as alias
+		}
+		current := common.SelectQuery(wrapper)
+
+		for _, fn := range apply {
+			if fn != nil {
+				current = fn(current)
+			}
+		}
+
+		if finalGorm, ok := current.(*GormSelectQuery); ok {
+			return finalGorm.db
+		}
+
+		return db
 	})
 
 	return g

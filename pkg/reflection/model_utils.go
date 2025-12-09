@@ -750,6 +750,118 @@ func ConvertToNumericType(value string, kind reflect.Kind) (interface{}, error) 
 	return nil, fmt.Errorf("unsupported numeric type: %v", kind)
 }
 
+// RelationType represents the type of database relationship
+type RelationType string
+
+const (
+	RelationHasMany    RelationType = "has-many"     // 1:N - use separate query
+	RelationBelongsTo  RelationType = "belongs-to"   // N:1 - use JOIN
+	RelationHasOne     RelationType = "has-one"      // 1:1 - use JOIN
+	RelationManyToMany RelationType = "many-to-many" // M:N - use separate query
+	RelationUnknown    RelationType = "unknown"
+)
+
+// ShouldUseJoin returns true if the relation type should use a JOIN instead of separate query
+func (rt RelationType) ShouldUseJoin() bool {
+	return rt == RelationBelongsTo || rt == RelationHasOne
+}
+
+// GetRelationType inspects the model's struct tags to determine the relationship type
+// It checks both Bun and GORM tags to identify the relationship cardinality
+func GetRelationType(model interface{}, fieldName string) RelationType {
+	if model == nil || fieldName == "" {
+		return RelationUnknown
+	}
+
+	modelType := reflect.TypeOf(model)
+	if modelType == nil {
+		return RelationUnknown
+	}
+
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return RelationUnknown
+	}
+
+	// Find the field
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+
+		// Check if field name matches (case-insensitive)
+		if !strings.EqualFold(field.Name, fieldName) {
+			continue
+		}
+
+		// Check Bun tags first
+		bunTag := field.Tag.Get("bun")
+		if bunTag != "" && strings.Contains(bunTag, "rel:") {
+			// Parse bun relation tag: rel:has-many, rel:belongs-to, rel:has-one, rel:many-to-many
+			parts := strings.Split(bunTag, ",")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if strings.HasPrefix(part, "rel:") {
+					relType := strings.TrimPrefix(part, "rel:")
+					switch relType {
+					case "has-many":
+						return RelationHasMany
+					case "belongs-to":
+						return RelationBelongsTo
+					case "has-one":
+						return RelationHasOne
+					case "many-to-many", "m2m":
+						return RelationManyToMany
+					}
+				}
+			}
+		}
+
+		// Check GORM tags
+		gormTag := field.Tag.Get("gorm")
+		if gormTag != "" {
+			// GORM uses different patterns:
+			// - foreignKey: usually indicates belongs-to or has-one
+			// - many2many: indicates many-to-many
+			// - Field type (slice vs pointer) helps determine cardinality
+
+			if strings.Contains(gormTag, "many2many:") {
+				return RelationManyToMany
+			}
+
+			// Check field type for cardinality hints
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Slice {
+				// Slice indicates has-many or many-to-many
+				return RelationHasMany
+			}
+			if fieldType.Kind() == reflect.Ptr {
+				// Pointer to single struct usually indicates belongs-to or has-one
+				// Check if it has foreignKey (belongs-to) or references (has-one)
+				if strings.Contains(gormTag, "foreignKey:") {
+					return RelationBelongsTo
+				}
+				return RelationHasOne
+			}
+		}
+
+		// Fall back to field type inference
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Slice {
+			// Slice of structs → has-many
+			return RelationHasMany
+		}
+		if fieldType.Kind() == reflect.Ptr || fieldType.Kind() == reflect.Struct {
+			// Single struct → belongs-to (default assumption for safety)
+			// Using belongs-to as default ensures we use JOIN, which is safer
+			return RelationBelongsTo
+		}
+	}
+
+	return RelationUnknown
+}
+
 // GetRelationModel gets the model type for a relation field
 // It searches for the field by name in the following order (case-insensitive):
 // 1. Actual field name

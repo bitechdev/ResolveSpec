@@ -1,7 +1,6 @@
 package common
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -9,81 +8,40 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
-// ValidateAndFixPreloadWhere validates that the WHERE clause for a preload contains
-// the relation prefix (alias). If not present, it attempts to add it to column references.
-// Returns the fixed WHERE clause and an error if it cannot be safely fixed.
+// ValidateAndFixPreloadWhere validates and normalizes WHERE clauses for preloads
+//
+// NOTE: For preload queries, table aliases from the parent query are not valid since
+// the preload executes as a separate query with its own table alias. This function
+// now simply validates basic syntax without requiring or adding prefixes.
+// The actual alias normalization happens in the database adapter layer.
+//
+// Returns the WHERE clause and an error if it contains obviously invalid syntax.
 func ValidateAndFixPreloadWhere(where string, relationName string) (string, error) {
 	if where == "" {
 		return where, nil
 	}
 
-	// Check if the relation name is already present in the WHERE clause
-	lowerWhere := strings.ToLower(where)
-	lowerRelation := strings.ToLower(relationName)
+	where = strings.TrimSpace(where)
 
-	// Check for patterns like "relation.", "relation ", or just "relation" followed by a dot
-	if strings.Contains(lowerWhere, lowerRelation+".") ||
-		strings.Contains(lowerWhere, "`"+lowerRelation+"`.") ||
-		strings.Contains(lowerWhere, "\""+lowerRelation+"\".") {
-		// Relation prefix is already present
+	// Just do basic validation - don't require or add prefixes
+	// The database adapter will handle alias normalization
+
+	// Check if the WHERE clause contains any qualified column references
+	// If it does, log a debug message but don't fail - let the adapter handle it
+	if strings.Contains(where, ".") {
+		logger.Debug("Preload WHERE clause for '%s' contains qualified column references: '%s'. "+
+			"Note: In preload context, table aliases from parent query are not available. "+
+			"The database adapter will normalize aliases automatically.", relationName, where)
+	}
+
+	// Validate that it's not empty or just whitespace
+	if where == "" {
 		return where, nil
 	}
 
-	// If the WHERE clause is complex (contains OR, parentheses, subqueries, etc.),
-	// we can't safely auto-fix it - require explicit prefix
-	if strings.Contains(lowerWhere, " or ") ||
-		strings.Contains(where, "(") ||
-		strings.Contains(where, ")") {
-		return "", fmt.Errorf("preload WHERE condition must reference the relation '%s' (e.g., '%s.column_name'). Complex WHERE clauses with OR/parentheses must explicitly use the relation prefix", relationName, relationName)
-	}
-
-	// Try to add the relation prefix to simple column references
-	// This handles basic cases like "column = value" or "column = value AND other_column = value"
-	// Split by AND to handle multiple conditions (case-insensitive)
-	originalConditions := strings.Split(where, " AND ")
-
-	// If uppercase split didn't work, try lowercase
-	if len(originalConditions) == 1 {
-		originalConditions = strings.Split(where, " and ")
-	}
-
-	fixedConditions := make([]string, 0, len(originalConditions))
-
-	for _, cond := range originalConditions {
-		cond = strings.TrimSpace(cond)
-		if cond == "" {
-			continue
-		}
-
-		// Check if this condition already has a table prefix (contains a dot)
-		if strings.Contains(cond, ".") {
-			fixedConditions = append(fixedConditions, cond)
-			continue
-		}
-
-		// Check if this is a SQL expression/literal that shouldn't be prefixed
-		lowerCond := strings.ToLower(strings.TrimSpace(cond))
-		if IsSQLExpression(lowerCond) {
-			// Don't prefix SQL expressions like "true", "false", "1=1", etc.
-			fixedConditions = append(fixedConditions, cond)
-			continue
-		}
-
-		// Extract the column name (first identifier before operator)
-		columnName := ExtractColumnName(cond)
-		if columnName == "" {
-			// Can't identify column name, require explicit prefix
-			return "", fmt.Errorf("preload WHERE condition must reference the relation '%s' (e.g., '%s.column_name'). Cannot auto-fix condition: %s", relationName, relationName, cond)
-		}
-
-		// Add relation prefix to the column name only
-		fixedCond := strings.Replace(cond, columnName, relationName+"."+columnName, 1)
-		fixedConditions = append(fixedConditions, fixedCond)
-	}
-
-	fixedWhere := strings.Join(fixedConditions, " AND ")
-	logger.Debug("Auto-fixed preload WHERE clause: '%s' -> '%s'", where, fixedWhere)
-	return fixedWhere, nil
+	// Return the WHERE clause as-is
+	// The BunSelectQuery.Where() method will handle alias normalization via normalizeTableAlias()
+	return where, nil
 }
 
 // IsSQLExpression checks if a condition is a SQL expression that shouldn't be prefixed

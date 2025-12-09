@@ -140,6 +140,8 @@ type BunSelectQuery struct {
 	tableName        string  // Just the table name, without schema
 	tableAlias       string
 	deferredPreloads []deferredPreload // Preloads to execute as separate queries
+	inJoinContext    bool              // Track if we're in a JOIN relation context
+	joinTableAlias   string            // Alias to use for JOIN conditions
 }
 
 // deferredPreload represents a preload that will be executed as a separate query
@@ -189,15 +191,65 @@ func (b *BunSelectQuery) ColumnExpr(query string, args ...interface{}) common.Se
 }
 
 func (b *BunSelectQuery) Where(query string, args ...interface{}) common.SelectQuery {
-	// If we have a table alias defined, check if the query references a different alias
-	// This can happen in preloads where the user expects a certain alias but Bun generates another
-	if b.tableAlias != "" && b.tableName != "" {
-		// Detect if query contains a qualified column reference (e.g., "APIL.column")
-		// and replace it with the unqualified version or the correct alias
+	// If we're in a JOIN context, add table prefix to unqualified columns
+	if b.inJoinContext && b.joinTableAlias != "" {
+		query = addTablePrefix(query, b.joinTableAlias)
+	} else if b.tableAlias != "" && b.tableName != "" {
+		// If we have a table alias defined, check if the query references a different alias
+		// This can happen in preloads where the user expects a certain alias but Bun generates another
 		query = normalizeTableAlias(query, b.tableAlias, b.tableName)
 	}
 	b.query = b.query.Where(query, args...)
 	return b
+}
+
+// addTablePrefix adds a table prefix to unqualified column references
+// This is used in JOIN contexts where conditions must reference the joined table
+func addTablePrefix(query, tableAlias string) string {
+	if tableAlias == "" || query == "" {
+		return query
+	}
+
+	// Split on spaces and parentheses to find column references
+	parts := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == '(' || r == ')' || r == ','
+	})
+
+	modified := query
+	for _, part := range parts {
+		// Check if this looks like an unqualified column reference
+		// (no dot, and likely a column name before an operator)
+		if !strings.Contains(part, ".") {
+			// Extract potential column name (before = or other operators)
+			for _, op := range []string{"=", "!=", "<>", ">", ">=", "<", "<=", " LIKE ", " IN ", " IS "} {
+				if strings.Contains(part, op) {
+					colName := strings.Split(part, op)[0]
+					colName = strings.TrimSpace(colName)
+					if colName != "" && !isOperatorOrKeyword(colName) {
+						// Add table prefix
+						prefixed := tableAlias + "." + colName + strings.TrimPrefix(part, colName)
+						modified = strings.ReplaceAll(modified, part, prefixed)
+						logger.Debug("Adding table prefix '%s' to column '%s' in JOIN condition", tableAlias, colName)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	return modified
+}
+
+// isOperatorOrKeyword checks if a string is likely an operator or SQL keyword
+func isOperatorOrKeyword(s string) bool {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	keywords := []string{"AND", "OR", "NOT", "IN", "IS", "NULL", "TRUE", "FALSE", "LIKE", "BETWEEN"}
+	for _, kw := range keywords {
+		if s == kw {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeTableAlias replaces table alias prefixes in SQL conditions
@@ -226,8 +278,8 @@ func normalizeTableAlias(query, expectedAlias, tableName string) string {
 
 			// Check if the prefix matches our expected alias or table name (case-insensitive)
 			if !strings.EqualFold(prefix, expectedAlias) &&
-			   !strings.EqualFold(prefix, tableName) &&
-			   !strings.EqualFold(prefix, strings.ToLower(tableName)) {
+				!strings.EqualFold(prefix, tableName) &&
+				!strings.EqualFold(prefix, strings.ToLower(tableName)) {
 				// This is a different alias - remove the prefix
 				logger.Debug("Stripping incorrect alias '%s' from WHERE condition, keeping just '%s'", prefix, column)
 				// Replace the qualified reference with just the column name
@@ -367,6 +419,27 @@ func (b *BunSelectQuery) Preload(relation string, conditions ...interface{}) com
 // }
 
 func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	// Auto-detect relationship type and choose optimal loading strategy
+	// Get the model from the query if available
+	model := b.query.GetModel()
+	if model != nil && model.Value() != nil {
+		relType := reflection.GetRelationType(model.Value(), relation)
+
+		// Log the detected relationship type
+		logger.Debug("PreloadRelation '%s' detected as: %s", relation, relType)
+
+		// If this is a belongs-to or has-one relation, use JOIN for better performance
+		if relType.ShouldUseJoin() {
+			logger.Info("Using JOIN strategy for %s relation '%s'", relType, relation)
+			return b.JoinRelation(relation, apply...)
+		}
+
+		// For has-many, many-to-many, or unknown: use separate query (safer default)
+		if relType == reflection.RelationHasMany || relType == reflection.RelationManyToMany {
+			logger.Debug("Using separate query for %s relation '%s'", relType, relation)
+		}
+	}
+
 	// Check if this relation chain would create problematic long aliases
 	relationParts := strings.Split(relation, ".")
 	aliasChain := strings.ToLower(strings.Join(relationParts, "__"))
@@ -471,6 +544,36 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 		return sq // fallback
 	})
 	return b
+}
+
+func (b *BunSelectQuery) JoinRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	// JoinRelation uses a LEFT JOIN instead of a separate query
+	// This is more efficient for many-to-one or one-to-one relationships
+
+	logger.Debug("JoinRelation '%s' - Using JOIN strategy with automatic WHERE prefix addition", relation)
+
+	// Wrap the apply functions to automatically add table prefix to WHERE conditions
+	wrappedApply := make([]func(common.SelectQuery) common.SelectQuery, 0, len(apply))
+	for _, fn := range apply {
+		if fn != nil {
+			wrappedFn := func(originalFn func(common.SelectQuery) common.SelectQuery) func(common.SelectQuery) common.SelectQuery {
+				return func(q common.SelectQuery) common.SelectQuery {
+					// Create a special wrapper that adds prefixes to WHERE conditions
+					if bunQuery, ok := q.(*BunSelectQuery); ok {
+						// Mark this query as being in JOIN context
+						bunQuery.inJoinContext = true
+						bunQuery.joinTableAlias = strings.ToLower(relation)
+					}
+					return originalFn(q)
+				}
+			}(fn)
+			wrappedApply = append(wrappedApply, wrappedFn)
+		}
+	}
+
+	// Use PreloadRelation with the wrapped functions
+	// Bun's Relation() will use JOIN for belongs-to and has-one relations
+	return b.PreloadRelation(relation, wrappedApply...)
 }
 
 func (b *BunSelectQuery) Order(order string) common.SelectQuery {

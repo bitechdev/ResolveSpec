@@ -282,7 +282,15 @@ func (g *GormSelectQuery) Scan(ctx context.Context, dest interface{}) (err error
 			err = logger.HandlePanic("GormSelectQuery.Scan", r)
 		}
 	}()
-	return g.db.WithContext(ctx).Find(dest).Error
+	err = g.db.WithContext(ctx).Find(dest).Error
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Find(dest)
+		})
+		logger.Error("GormSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
+	}
+	return err
 }
 
 func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
@@ -294,7 +302,15 @@ func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
 	if g.db.Statement.Model == nil {
 		return fmt.Errorf("ScanModel requires Model() to be set before scanning")
 	}
-	return g.db.WithContext(ctx).Find(g.db.Statement.Model).Error
+	err = g.db.WithContext(ctx).Find(g.db.Statement.Model).Error
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Find(g.db.Statement.Model)
+		})
+		logger.Error("GormSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
+	}
+	return err
 }
 
 func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
@@ -306,6 +322,13 @@ func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
 	}()
 	var count64 int64
 	err = g.db.WithContext(ctx).Count(&count64).Error
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Count(&count64)
+		})
+		logger.Error("GormSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
+	}
 	return int(count64), err
 }
 
@@ -318,6 +341,13 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 	}()
 	var count int64
 	err = g.db.WithContext(ctx).Limit(1).Count(&count).Error
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Limit(1).Count(&count)
+		})
+		logger.Error("GormSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
+	}
 	return count > 0, err
 }
 
@@ -456,6 +486,13 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 		}
 	}()
 	result := g.db.WithContext(ctx).Updates(g.updates)
+	if result.Error != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Updates(g.updates)
+		})
+		logger.Error("GormUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
+	}
 	return &GormResult{result: result}, result.Error
 }
 
@@ -488,6 +525,13 @@ func (g *GormDeleteQuery) Exec(ctx context.Context) (res common.Result, err erro
 		}
 	}()
 	result := g.db.WithContext(ctx).Delete(g.model)
+	if result.Error != nil {
+		// Log SQL string for debugging
+		sqlStr := g.db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+			return tx.Delete(g.model)
+		})
+		logger.Error("GormDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
+	}
 	return &GormResult{result: result}, result.Error
 }
 

@@ -410,6 +410,9 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 	// Execute the main query first
 	err = b.query.Scan(ctx, dest)
 	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := b.query.String()
+		logger.Error("BunSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
 		return err
 	}
 
@@ -438,6 +441,9 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 	// Execute the main query first
 	err = b.query.Scan(ctx)
 	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := b.query.String()
+		logger.Error("BunSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
 		return err
 	}
 
@@ -573,15 +579,25 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 	// If Model() was set, use bun's native Count() which works properly
 	if b.hasModel {
 		count, err := b.query.Count(ctx)
+		if err != nil {
+			// Log SQL string for debugging
+			sqlStr := b.query.String()
+			logger.Error("BunSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
+		}
 		return count, err
 	}
 
 	// Otherwise, wrap as subquery to avoid "Model(nil)" error
 	// This is needed when only Table() is set without a model
-	err = b.db.NewSelect().
+	countQuery := b.db.NewSelect().
 		TableExpr("(?) AS subquery", b.query).
-		ColumnExpr("COUNT(*)").
-		Scan(ctx, &count)
+		ColumnExpr("COUNT(*)")
+	err = countQuery.Scan(ctx, &count)
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := countQuery.String()
+		logger.Error("BunSelectQuery.Count (subquery) failed. SQL: %s. Error: %v", sqlStr, err)
+	}
 	return count, err
 }
 
@@ -592,7 +608,13 @@ func (b *BunSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 			exists = false
 		}
 	}()
-	return b.query.Exists(ctx)
+	exists, err = b.query.Exists(ctx)
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := b.query.String()
+		logger.Error("BunSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
+	}
+	return exists, err
 }
 
 // BunInsertQuery implements InsertQuery for Bun
@@ -729,6 +751,11 @@ func (b *BunUpdateQuery) Exec(ctx context.Context) (res common.Result, err error
 		}
 	}()
 	result, err := b.query.Exec(ctx)
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := b.query.String()
+		logger.Error("BunUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
+	}
 	return &BunResult{result: result}, err
 }
 
@@ -759,6 +786,11 @@ func (b *BunDeleteQuery) Exec(ctx context.Context) (res common.Result, err error
 		}
 	}()
 	result, err := b.query.Exec(ctx)
+	if err != nil {
+		// Log SQL string for debugging
+		sqlStr := b.query.String()
+		logger.Error("BunDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
+	}
 	return &BunResult{result: result}, err
 }
 

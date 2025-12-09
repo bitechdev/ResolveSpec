@@ -28,6 +28,10 @@ func NewModelRegistry() *DefaultModelRegistry {
 	}
 }
 
+func GetDefaultRegistry() *DefaultModelRegistry {
+	return defaultRegistry
+}
+
 func SetDefaultRegistry(registry *DefaultModelRegistry) {
 	registriesMutex.Lock()
 	defer registriesMutex.Unlock()

@@ -1,11 +1,12 @@
 package openapi
 
 import (
-	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
-	"github.com/bitechdev/ResolveSpec/pkg/restheadspec"
-	"github.com/bitechdev/ResolveSpec/pkg/resolvespec"
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
+
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/resolvespec"
+	"github.com/bitechdev/ResolveSpec/pkg/restheadspec"
 )
 
 // ExampleRestheadSpec shows how to configure OpenAPI generation for RestheadSpec
@@ -25,11 +26,11 @@ func ExampleRestheadSpec(db *gorm.DB) {
 	// 3. Configure OpenAPI generator
 	handler.SetOpenAPIGenerator(func() (string, error) {
 		generator := NewGenerator(GeneratorConfig{
-			Title:       "My API",
-			Description: "API documentation for my application",
-			Version:     "1.0.0",
-			BaseURL:     "http://localhost:8080",
-			Registry:    registry,
+			Title:               "My API",
+			Description:         "API documentation for my application",
+			Version:             "1.0.0",
+			BaseURL:             "http://localhost:8080",
+			Registry:            registry,
 			IncludeRestheadSpec: true,
 			IncludeResolveSpec:  false,
 			IncludeFuncSpec:     false,
@@ -66,11 +67,11 @@ func ExampleResolveSpec(db *gorm.DB) {
 	// 3. Configure OpenAPI generator
 	handler.SetOpenAPIGenerator(func() (string, error) {
 		generator := NewGenerator(GeneratorConfig{
-			Title:       "My API",
-			Description: "API documentation for my application",
-			Version:     "1.0.0",
-			BaseURL:     "http://localhost:8080",
-			Registry:    registry,
+			Title:               "My API",
+			Description:         "API documentation for my application",
+			Version:             "1.0.0",
+			BaseURL:             "http://localhost:8080",
+			Registry:            registry,
 			IncludeRestheadSpec: false,
 			IncludeResolveSpec:  true,
 			IncludeFuncSpec:     false,
@@ -110,11 +111,11 @@ func ExampleBothSpecs(db *gorm.DB) {
 	// Configure OpenAPI generator for both
 	generatorFunc := func() (string, error) {
 		generator := NewGenerator(GeneratorConfig{
-			Title:       "My Unified API",
-			Description: "Complete API documentation with both RestheadSpec and ResolveSpec endpoints",
-			Version:     "1.0.0",
-			BaseURL:     "http://localhost:8080",
-			Registry:    sharedRegistry,
+			Title:               "My Unified API",
+			Description:         "Complete API documentation with both RestheadSpec and ResolveSpec endpoints",
+			Version:             "1.0.0",
+			BaseURL:             "http://localhost:8080",
+			Registry:            sharedRegistry,
 			IncludeRestheadSpec: true,
 			IncludeResolveSpec:  true,
 			IncludeFuncSpec:     false,
@@ -165,11 +166,11 @@ func ExampleWithFuncSpec() {
 		}
 
 		generator := NewGenerator(GeneratorConfig{
-			Title:             "My API with Custom Queries",
-			Description:       "API with FuncSpec custom SQL endpoints",
-			Version:           "1.0.0",
-			BaseURL:           "http://localhost:8080",
-			Registry:          modelregistry.NewModelRegistry(),
+			Title:               "My API with Custom Queries",
+			Description:         "API with FuncSpec custom SQL endpoints",
+			Version:             "1.0.0",
+			BaseURL:             "http://localhost:8080",
+			Registry:            modelregistry.NewModelRegistry(),
 			IncludeRestheadSpec: false,
 			IncludeResolveSpec:  false,
 			IncludeFuncSpec:     true,
@@ -197,11 +198,11 @@ func ExampleCustomization() {
 	// Advanced configuration - create generator function
 	generatorFunc := func() (string, error) {
 		generator := NewGenerator(GeneratorConfig{
-			Title:       "My Advanced API",
-			Description: "Comprehensive API documentation with custom configuration",
-			Version:     "2.1.0",
-			BaseURL:     "https://api.myapp.com",
-			Registry:    registry,
+			Title:               "My Advanced API",
+			Description:         "Comprehensive API documentation with custom configuration",
+			Version:             "2.1.0",
+			BaseURL:             "https://api.myapp.com",
+			Registry:            registry,
 			IncludeRestheadSpec: true,
 			IncludeResolveSpec:  true,
 			IncludeFuncSpec:     false,

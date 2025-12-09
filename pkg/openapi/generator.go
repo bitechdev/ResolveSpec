@@ -20,9 +20,9 @@ type OpenAPISpec struct {
 }
 
 type Info struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description,omitempty"`
-	Version     string  `json:"version"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Version     string   `json:"version"`
 	Contact     *Contact `json:"contact,omitempty"`
 }
 
@@ -47,22 +47,22 @@ type PathItem struct {
 }
 
 type Operation struct {
-	Summary     string              `json:"summary,omitempty"`
-	Description string              `json:"description,omitempty"`
-	OperationID string              `json:"operationId,omitempty"`
-	Tags        []string            `json:"tags,omitempty"`
-	Parameters  []Parameter         `json:"parameters,omitempty"`
-	RequestBody *RequestBody        `json:"requestBody,omitempty"`
-	Responses   map[string]Response `json:"responses"`
+	Summary     string                `json:"summary,omitempty"`
+	Description string                `json:"description,omitempty"`
+	OperationID string                `json:"operationId,omitempty"`
+	Tags        []string              `json:"tags,omitempty"`
+	Parameters  []Parameter           `json:"parameters,omitempty"`
+	RequestBody *RequestBody          `json:"requestBody,omitempty"`
+	Responses   map[string]Response   `json:"responses"`
 	Security    []map[string][]string `json:"security,omitempty"`
 }
 
 type Parameter struct {
-	Name        string  `json:"name"`
-	In          string  `json:"in"` // "query", "header", "path", "cookie"
-	Description string  `json:"description,omitempty"`
-	Required    bool    `json:"required,omitempty"`
-	Schema      *Schema `json:"schema,omitempty"`
+	Name        string      `json:"name"`
+	In          string      `json:"in"` // "query", "header", "path", "cookie"
+	Description string      `json:"description,omitempty"`
+	Required    bool        `json:"required,omitempty"`
+	Schema      *Schema     `json:"schema,omitempty"`
 	Example     interface{} `json:"example,omitempty"`
 }
 
@@ -103,21 +103,21 @@ type Schema struct {
 }
 
 type SecurityScheme struct {
-	Type        string `json:"type"` // "apiKey", "http", "oauth2", "openIdConnect"
-	Description string `json:"description,omitempty"`
-	Name        string `json:"name,omitempty"`        // For apiKey
-	In          string `json:"in,omitempty"`          // For apiKey: "query", "header", "cookie"
-	Scheme      string `json:"scheme,omitempty"`      // For http: "basic", "bearer"
+	Type         string `json:"type"` // "apiKey", "http", "oauth2", "openIdConnect"
+	Description  string `json:"description,omitempty"`
+	Name         string `json:"name,omitempty"`         // For apiKey
+	In           string `json:"in,omitempty"`           // For apiKey: "query", "header", "cookie"
+	Scheme       string `json:"scheme,omitempty"`       // For http: "basic", "bearer"
 	BearerFormat string `json:"bearerFormat,omitempty"` // For http bearer
 }
 
 // GeneratorConfig holds configuration for OpenAPI spec generation
 type GeneratorConfig struct {
-	Title           string
-	Description     string
-	Version         string
-	BaseURL         string
-	Registry        *modelregistry.DefaultModelRegistry
+	Title               string
+	Description         string
+	Version             string
+	BaseURL             string
+	Registry            *modelregistry.DefaultModelRegistry
 	IncludeRestheadSpec bool
 	IncludeResolveSpec  bool
 	IncludeFuncSpec     bool
@@ -234,8 +234,8 @@ func (g *Generator) addCommonSchemas(spec *OpenAPISpec) {
 	spec.Components.Schemas["Response"] = Schema{
 		Type: "object",
 		Properties: map[string]*Schema{
-			"success": {Type: "boolean", Description: "Indicates if the operation was successful"},
-			"data":    {Description: "The response data"},
+			"success":  {Type: "boolean", Description: "Indicates if the operation was successful"},
+			"data":     {Description: "The response data"},
 			"metadata": {Ref: "#/components/schemas/Metadata"},
 			"error":    {Ref: "#/components/schemas/APIError"},
 		},

@@ -24,12 +24,12 @@ type FallbackHandler func(w common.ResponseWriter, r common.Request, params map[
 // Handler handles API requests using database and model abstractions
 // This handler reads filters, columns, and options from HTTP headers
 type Handler struct {
-	db                 common.Database
-	registry           common.ModelRegistry
-	hooks              *HookRegistry
-	nestedProcessor    *common.NestedCUDProcessor
-	fallbackHandler    FallbackHandler
-	openAPIGenerator   func() (string, error)
+	db               common.Database
+	registry         common.ModelRegistry
+	hooks            *HookRegistry
+	nestedProcessor  *common.NestedCUDProcessor
+	fallbackHandler  FallbackHandler
+	openAPIGenerator func() (string, error)
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -2413,7 +2413,10 @@ func (h *Handler) HandleOpenAPI(w common.ResponseWriter, r common.Request) {
 
 	w.SetHeader("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(spec))
+	_, err = w.Write([]byte(spec))
+	if err != nil {
+		logger.Error("Error sending OpenAPI spec response: %v", err)
+	}
 }
 
 // SetOpenAPIGenerator sets the OpenAPI generator function

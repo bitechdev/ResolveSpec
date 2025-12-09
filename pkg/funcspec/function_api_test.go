@@ -16,8 +16,8 @@ import (
 
 // MockDatabase implements common.Database interface for testing
 type MockDatabase struct {
-	QueryFunc          func(ctx context.Context, dest interface{}, query string, args ...interface{}) error
-	ExecFunc           func(ctx context.Context, query string, args ...interface{}) (common.Result, error)
+	QueryFunc            func(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	ExecFunc             func(ctx context.Context, query string, args ...interface{}) (common.Result, error)
 	RunInTransactionFunc func(ctx context.Context, fn func(common.Database) error) error
 }
 
@@ -161,9 +161,9 @@ func TestExtractInputVariables(t *testing.T) {
 	handler := NewHandler(&MockDatabase{})
 
 	tests := []struct {
-		name          string
-		sqlQuery      string
-		expectedVars  []string
+		name         string
+		sqlQuery     string
+		expectedVars []string
 	}{
 		{
 			name:         "No variables",
@@ -340,9 +340,9 @@ func TestSqlQryWhere(t *testing.T) {
 // TestGetIPAddress tests IP address extraction
 func TestGetIPAddress(t *testing.T) {
 	tests := []struct {
-		name      string
-		setupReq  func() *http.Request
-		expected  string
+		name     string
+		setupReq func() *http.Request
+		expected string
 	}{
 		{
 			name: "X-Forwarded-For header",
@@ -782,9 +782,10 @@ func TestReplaceMetaVariables(t *testing.T) {
 	handler := NewHandler(&MockDatabase{})
 
 	userCtx := &security.UserContext{
-		UserID:    123,
-		UserName:  "testuser",
-		SessionID: "456",
+		UserID:     123,
+		UserName:   "testuser",
+		SessionID:  "ABC456",
+		SessionRID: 456,
 	}
 
 	metainfo := map[string]interface{}{
@@ -820,6 +821,12 @@ func TestReplaceMetaVariables(t *testing.T) {
 			sqlQuery: "SELECT * FROM sessions WHERE session_id = [rid_session]",
 			expectedCheck: func(result string) bool {
 				return strings.Contains(result, "456")
+			},
+		}, {
+			name:     "Replace [id_session]",
+			sqlQuery: "SELECT * FROM sessions WHERE session_id = [id_session]",
+			expectedCheck: func(result string) bool {
+				return strings.Contains(result, "ABC456")
 			},
 		},
 	}

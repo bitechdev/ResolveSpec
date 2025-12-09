@@ -22,11 +22,12 @@ type FallbackHandler func(w common.ResponseWriter, r common.Request, params map[
 
 // Handler handles API requests using database and model abstractions
 type Handler struct {
-	db              common.Database
-	registry        common.ModelRegistry
-	nestedProcessor *common.NestedCUDProcessor
-	hooks           *HookRegistry
-	fallbackHandler FallbackHandler
+	db                 common.Database
+	registry           common.ModelRegistry
+	nestedProcessor    *common.NestedCUDProcessor
+	hooks              *HookRegistry
+	fallbackHandler    FallbackHandler
+	openAPIGenerator   func() (string, error)
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -74,6 +75,12 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 			h.handlePanic(w, "Handle", err)
 		}
 	}()
+
+	// Check for ?openapi query parameter
+	if r.UnderlyingRequest().URL.Query().Get("openapi") != "" {
+		h.HandleOpenAPI(w, r)
+		return
+	}
 
 	ctx := r.UnderlyingRequest().Context()
 
@@ -155,6 +162,12 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 			h.handlePanic(w, "HandleGet", err)
 		}
 	}()
+
+	// Check for ?openapi query parameter
+	if r.UnderlyingRequest().URL.Query().Get("openapi") != "" {
+		h.HandleOpenAPI(w, r)
+		return
+	}
 
 	schema := params["schema"]
 	entity := params["entity"]
@@ -1432,4 +1445,29 @@ func toSnakeCase(s string) string {
 		result.WriteRune(r)
 	}
 	return strings.ToLower(result.String())
+}
+
+// HandleOpenAPI generates and returns the OpenAPI specification
+func (h *Handler) HandleOpenAPI(w common.ResponseWriter, r common.Request) {
+	if h.openAPIGenerator == nil {
+		logger.Error("OpenAPI generator not configured")
+		h.sendError(w, http.StatusInternalServerError, "openapi_not_configured", "OpenAPI generation not configured", nil)
+		return
+	}
+
+	spec, err := h.openAPIGenerator()
+	if err != nil {
+		logger.Error("Failed to generate OpenAPI spec: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "openapi_generation_error", "Failed to generate OpenAPI specification", err)
+		return
+	}
+
+	w.SetHeader("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(spec))
+}
+
+// SetOpenAPIGenerator sets the OpenAPI generator function
+func (h *Handler) SetOpenAPIGenerator(generator func() (string, error)) {
+	h.openAPIGenerator = generator
 }

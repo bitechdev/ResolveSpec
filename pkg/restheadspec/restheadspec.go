@@ -99,6 +99,16 @@ type MiddlewareFunc func(http.Handler) http.Handler
 // authMiddleware is optional - if provided, routes will be protected with the middleware
 // Example: SetupMuxRoutes(router, handler, func(h http.Handler) http.Handler { return security.NewAuthHandler(securityList, h) })
 func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware MiddlewareFunc) {
+	// Add global /openapi route
+	openAPIHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		corsConfig := common.DefaultCORSConfig()
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+		reqAdapter := router.NewHTTPRequest(r)
+		handler.HandleOpenAPI(respAdapter, reqAdapter)
+	})
+	muxRouter.Handle("/openapi", openAPIHandler).Methods("GET", "OPTIONS")
+
 	// Get all registered models from the registry
 	allModels := handler.registry.GetAllModels()
 
@@ -264,11 +274,26 @@ func ExampleWithBun(bunDB *bun.DB) {
 func SetupBunRouterRoutes(bunRouter *router.StandardBunRouterAdapter, handler *Handler) {
 	r := bunRouter.GetBunRouter()
 
-	// Get all registered models from the registry
-	allModels := handler.registry.GetAllModels()
-
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
+
+	// Add global /openapi route
+	r.Handle("GET", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+		reqAdapter := router.NewBunRouterRequest(req)
+		handler.HandleOpenAPI(respAdapter, reqAdapter)
+		return nil
+	})
+
+	r.Handle("OPTIONS", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
+		respAdapter := router.NewHTTPResponseWriter(w)
+		common.SetCORSHeaders(respAdapter, corsConfig)
+		return nil
+	})
+
+	// Get all registered models from the registry
+	allModels := handler.registry.GetAllModels()
 
 	// Loop through each registered model and create explicit routes
 	for fullName := range allModels {

@@ -75,9 +75,9 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 	// Call resolvespec_login stored procedure
 	var success bool
 	var errorMsg sql.NullString
-	var dataJSON []byte
+	var dataJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_data FROM resolvespec_login($1::jsonb)`
+	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_login($1::jsonb)`
 	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
@@ -92,7 +92,7 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 
 	// Parse response
 	var response LoginResponse
-	if err := json.Unmarshal(dataJSON, &response); err != nil {
+	if err := json.Unmarshal([]byte(dataJSON.String), &response); err != nil {
 		return nil, fmt.Errorf("failed to parse login response: %w", err)
 	}
 
@@ -109,9 +109,9 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 	// Call resolvespec_logout stored procedure
 	var success bool
 	var errorMsg sql.NullString
-	var dataJSON []byte
+	var dataJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_data FROM resolvespec_logout($1::jsonb)`
+	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_logout($1::jsonb)`
 	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
@@ -151,9 +151,9 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 
 	var success bool
 	var errorMsg sql.NullString
-	var userJSON []byte
+	var userJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_user FROM resolvespec_session($1, $2)`
+	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
 	err := a.db.QueryRowContext(r.Context(), query, sessionToken, reference).Scan(&success, &errorMsg, &userJSON)
 	if err != nil {
 		return nil, fmt.Errorf("session query failed: %w", err)
@@ -168,7 +168,7 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 
 	// Parse UserContext
 	var userCtx UserContext
-	if err := json.Unmarshal(userJSON, &userCtx); err != nil {
+	if err := json.Unmarshal([]byte(userJSON.String), &userCtx); err != nil {
 		return nil, fmt.Errorf("failed to parse user context: %w", err)
 	}
 
@@ -189,9 +189,9 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 	// Call resolvespec_session_update stored procedure
 	var success bool
 	var errorMsg sql.NullString
-	var updatedUserJSON []byte
+	var updatedUserJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_user FROM resolvespec_session_update($1, $2::jsonb)`
+	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session_update($1, $2::jsonb)`
 	_ = a.db.QueryRowContext(ctx, query, sessionToken, userJSON).Scan(&success, &errorMsg, &updatedUserJSON)
 }
 
@@ -201,10 +201,9 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 	// First, we need to get the current user context for the refresh token
 	var success bool
 	var errorMsg sql.NullString
-	var userJSON []byte
-
+	var userJSON sql.NullString
 	// Get current session to pass to refresh
-	query := `SELECT p_success, p_error, p_user FROM resolvespec_session($1, $2)`
+	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
 	err := a.db.QueryRowContext(ctx, query, refreshToken, "refresh").Scan(&success, &errorMsg, &userJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token query failed: %w", err)
@@ -220,9 +219,9 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 	// Call resolvespec_refresh_token to generate new token
 	var newSuccess bool
 	var newErrorMsg sql.NullString
-	var newUserJSON []byte
+	var newUserJSON sql.NullString
 
-	refreshQuery := `SELECT p_success, p_error, p_user FROM resolvespec_refresh_token($1, $2::jsonb)`
+	refreshQuery := `SELECT p_success, p_error, p_user::text FROM resolvespec_refresh_token($1, $2::jsonb)`
 	err = a.db.QueryRowContext(ctx, refreshQuery, refreshToken, userJSON).Scan(&newSuccess, &newErrorMsg, &newUserJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token generation failed: %w", err)
@@ -237,7 +236,7 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 
 	// Parse refreshed user context
 	var userCtx UserContext
-	if err := json.Unmarshal(newUserJSON, &userCtx); err != nil {
+	if err := json.Unmarshal([]byte(newUserJSON.String), &userCtx); err != nil {
 		return nil, fmt.Errorf("failed to parse user context: %w", err)
 	}
 

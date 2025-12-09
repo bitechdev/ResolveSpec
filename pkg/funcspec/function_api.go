@@ -58,6 +58,9 @@ func (h *Handler) SqlQueryList(sqlquery string, pNoCount, pBlankparms, pAllowFil
 			}
 		}()
 
+		// Create local copy to avoid modifying the captured parameter across requests
+		sqlquery := sqlquery
+
 		ctx, cancel := context.WithTimeout(r.Context(), 900*time.Second)
 		defer cancel()
 
@@ -392,6 +395,9 @@ func (h *Handler) SqlQuery(sqlquery string, pBlankparms bool) HTTPFuncType {
 				http.Error(w, fmt.Sprintf("Internal server error: %v", err), http.StatusInternalServerError)
 			}
 		}()
+
+		// Create local copy to avoid modifying the captured parameter across requests
+		sqlquery := sqlquery
 
 		ctx, cancel := context.WithTimeout(r.Context(), 600*time.Second)
 		defer cancel()

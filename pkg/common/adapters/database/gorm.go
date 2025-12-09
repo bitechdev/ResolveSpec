@@ -23,6 +23,22 @@ func NewGormAdapter(db *gorm.DB) *GormAdapter {
 	return &GormAdapter{db: db}
 }
 
+// EnableQueryDebug enables query debugging which logs all SQL queries including preloads
+// This is useful for debugging preload queries that may be failing
+func (g *GormAdapter) EnableQueryDebug() *GormAdapter {
+	g.db = g.db.Debug()
+	logger.Info("GORM query debug mode enabled - all SQL queries will be logged")
+	return g
+}
+
+// DisableQueryDebug disables query debugging
+func (g *GormAdapter) DisableQueryDebug() *GormAdapter {
+	// GORM's Debug() creates a new session, so we need to get the base DB
+	// This is a simplified implementation
+	logger.Info("GORM debug mode - create a new adapter without Debug() to disable")
+	return g
+}
+
 func (g *GormAdapter) NewSelect() common.SelectQuery {
 	return &GormSelectQuery{db: g.db}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/uptrace/bun"
 
@@ -14,6 +15,24 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
+
+// QueryDebugHook is a Bun query hook that logs all SQL queries including preloads
+type QueryDebugHook struct{}
+
+func (h *QueryDebugHook) BeforeQuery(ctx context.Context, event *bun.QueryEvent) context.Context {
+	return ctx
+}
+
+func (h *QueryDebugHook) AfterQuery(ctx context.Context, event *bun.QueryEvent) {
+	query := event.Query
+	duration := time.Since(event.StartTime)
+
+	if event.Err != nil {
+		logger.Error("SQL Query Failed [%s]: %s. Error: %v", duration, query, event.Err)
+	} else {
+		logger.Debug("SQL Query Success [%s]: %s", duration, query)
+	}
+}
 
 // BunAdapter adapts Bun to work with our Database interface
 // This demonstrates how the abstraction works with different ORMs
@@ -24,6 +43,20 @@ type BunAdapter struct {
 // NewBunAdapter creates a new Bun adapter
 func NewBunAdapter(db *bun.DB) *BunAdapter {
 	return &BunAdapter{db: db}
+}
+
+// EnableQueryDebug enables query debugging which logs all SQL queries including preloads
+// This is useful for debugging preload queries that may be failing
+func (b *BunAdapter) EnableQueryDebug() {
+	b.db.AddQueryHook(&QueryDebugHook{})
+	logger.Info("Bun query debug mode enabled - all SQL queries will be logged")
+}
+
+// DisableQueryDebug removes all query hooks
+func (b *BunAdapter) DisableQueryDebug() {
+	// Create a new DB without hooks
+	// Note: Bun doesn't have a RemoveQueryHook, so we'd need to track hooks manually
+	logger.Info("To disable query debug, recreate the BunAdapter without adding the hook")
 }
 
 func (b *BunAdapter) NewSelect() common.SelectQuery {

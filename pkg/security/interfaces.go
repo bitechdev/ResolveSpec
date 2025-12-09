@@ -7,15 +7,16 @@ import (
 
 // UserContext holds authenticated user information
 type UserContext struct {
-	UserID    int            `json:"user_id"`
-	UserName  string         `json:"user_name"`
-	UserLevel int            `json:"user_level"`
-	SessionID string         `json:"session_id"`
-	RemoteID  string         `json:"remote_id"`
-	Roles     []string       `json:"roles"`
-	Email     string         `json:"email"`
-	Claims    map[string]any `json:"claims"`
-	Meta      map[string]any `json:"meta"` // Additional metadata that can hold any JSON-serializable values
+	UserID     int            `json:"user_id"`
+	UserName   string         `json:"user_name"`
+	UserLevel  int            `json:"user_level"`
+	SessionID  string         `json:"session_id"`
+	SessionRID int64          `json:"session_rid"`
+	RemoteID   string         `json:"remote_id"`
+	Roles      []string       `json:"roles"`
+	Email      string         `json:"email"`
+	Claims     map[string]any `json:"claims"`
+	Meta       map[string]any `json:"meta"` // Additional metadata that can hold any JSON-serializable values
 }
 
 // LoginRequest contains credentials for login

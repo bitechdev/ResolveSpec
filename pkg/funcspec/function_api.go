@@ -758,8 +758,10 @@ func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx
 	}
 
 	if strings.Contains(sqlquery, "[rid_session]") {
-		sessionID, _ := strconv.ParseInt(userCtx.SessionID, 10, 64)
-		sqlquery = strings.ReplaceAll(sqlquery, "[rid_session]", fmt.Sprintf("%d", sessionID))
+		sqlquery = strings.ReplaceAll(sqlquery, "[rid_session]", fmt.Sprintf("%d", userCtx.SessionRID))
+	}
+	if strings.Contains(sqlquery, "[id_session]") {
+		sqlquery = strings.ReplaceAll(sqlquery, "[id_session]", userCtx.SessionID)
 	}
 
 	if strings.Contains(sqlquery, "[method]") {

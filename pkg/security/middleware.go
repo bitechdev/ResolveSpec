@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"net/http"
+	"strconv"
 )
 
 // contextKey is a custom type for context keys to avoid collisions
@@ -14,6 +15,7 @@ const (
 	UserNameKey     contextKey = "user_name"
 	UserLevelKey    contextKey = "user_level"
 	SessionIDKey    contextKey = "session_id"
+	SessionRIDKey   contextKey = "session_rid"
 	RemoteIDKey     contextKey = "remote_id"
 	UserRolesKey    contextKey = "user_roles"
 	UserEmailKey    contextKey = "user_email"
@@ -58,6 +60,7 @@ func setUserContext(r *http.Request, userCtx *UserContext) *http.Request {
 	ctx = context.WithValue(ctx, UserNameKey, userCtx.UserName)
 	ctx = context.WithValue(ctx, UserLevelKey, userCtx.UserLevel)
 	ctx = context.WithValue(ctx, SessionIDKey, userCtx.SessionID)
+	ctx = context.WithValue(ctx, SessionRIDKey, userCtx.SessionRID)
 	ctx = context.WithValue(ctx, RemoteIDKey, userCtx.RemoteID)
 	ctx = context.WithValue(ctx, UserRolesKey, userCtx.Roles)
 
@@ -218,6 +221,16 @@ func GetUserLevel(ctx context.Context) (int, bool) {
 func GetSessionID(ctx context.Context) (string, bool) {
 	sessionID, ok := ctx.Value(SessionIDKey).(string)
 	return sessionID, ok
+}
+
+// GetSessionID extracts the session ID from context
+func GetSessionRID(ctx context.Context) (int64, bool) {
+	sessionRIDStr, ok := ctx.Value(SessionRIDKey).(string)
+	sessionRID, err := strconv.ParseInt(sessionRIDStr, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return sessionRID, ok
 }
 
 // GetRemoteID extracts the remote ID from context

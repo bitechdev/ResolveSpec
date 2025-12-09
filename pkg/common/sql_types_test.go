@@ -9,18 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestSqlInt16 tests SqlInt16 type
-func TestSqlInt16(t *testing.T) {
+// TestNewSqlInt16 tests NewSqlInt16 type
+func TestNewSqlInt16(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    interface{}
 		expected SqlInt16
 	}{
-		{"int", 42, SqlInt16(42)},
-		{"int32", int32(100), SqlInt16(100)},
-		{"int64", int64(200), SqlInt16(200)},
-		{"string", "123", SqlInt16(123)},
-		{"nil", nil, SqlInt16(0)},
+		{"int", 42, NewSqlInt16(42)},
+		{"int32", int32(100), NewSqlInt16(100)},
+		{"int64", int64(200), NewSqlInt16(200)},
+		{"string", "123", NewSqlInt16(123)},
+		{"nil", nil, NewSqlInt16(0)},
 	}
 
 	for _, tt := range tests {
@@ -36,15 +36,15 @@ func TestSqlInt16(t *testing.T) {
 	}
 }
 
-func TestSqlInt16_Value(t *testing.T) {
+func TestNewSqlInt16_Value(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    SqlInt16
 		expected driver.Value
 	}{
-		{"zero", SqlInt16(0), nil},
-		{"positive", SqlInt16(42), int64(42)},
-		{"negative", SqlInt16(-10), int64(-10)},
+		{"zero", NewSqlInt16(0), nil},
+		{"positive", NewSqlInt16(42), int64(42)},
+		{"negative", NewSqlInt16(-10), int64(-10)},
 	}
 
 	for _, tt := range tests {
@@ -60,8 +60,8 @@ func TestSqlInt16_Value(t *testing.T) {
 	}
 }
 
-func TestSqlInt16_JSON(t *testing.T) {
-	n := SqlInt16(42)
+func TestNewSqlInt16_JSON(t *testing.T) {
+	n := NewSqlInt16(42)
 
 	// Marshal
 	data, err := json.Marshal(n)
@@ -78,24 +78,24 @@ func TestSqlInt16_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte("123"), &n2); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	if n2 != 123 {
-		t.Errorf("expected 123, got %d", n2)
+	if n2.Int64() != 123 {
+		t.Errorf("expected 123, got %d", n2.Int64())
 	}
 }
 
-// TestSqlInt64 tests SqlInt64 type
-func TestSqlInt64(t *testing.T) {
+// TestNewSqlInt64 tests NewSqlInt64 type
+func TestNewSqlInt64(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    interface{}
 		expected SqlInt64
 	}{
-		{"int", 42, SqlInt64(42)},
-		{"int32", int32(100), SqlInt64(100)},
-		{"int64", int64(9223372036854775807), SqlInt64(9223372036854775807)},
-		{"uint32", uint32(100), SqlInt64(100)},
-		{"uint64", uint64(200), SqlInt64(200)},
-		{"nil", nil, SqlInt64(0)},
+		{"int", 42, NewSqlInt64(42)},
+		{"int32", int32(100), NewSqlInt64(100)},
+		{"int64", int64(9223372036854775807), NewSqlInt64(9223372036854775807)},
+		{"uint32", uint32(100), NewSqlInt64(100)},
+		{"uint64", uint64(200), NewSqlInt64(200)},
+		{"nil", nil, SqlInt64{}},
 	}
 
 	for _, tt := range tests {
@@ -135,8 +135,8 @@ func TestSqlFloat64(t *testing.T) {
 			if n.Valid != tt.valid {
 				t.Errorf("expected valid=%v, got valid=%v", tt.valid, n.Valid)
 			}
-			if tt.valid && n.Float64 != tt.expected {
-				t.Errorf("expected %v, got %v", tt.expected, n.Float64)
+			if tt.valid && n.Float64() != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, n.Float64())
 			}
 		})
 	}
@@ -162,7 +162,7 @@ func TestSqlTimeStamp(t *testing.T) {
 			if err := ts.Scan(tt.input); err != nil {
 				t.Fatalf("Scan failed: %v", err)
 			}
-			if ts.GetTime().IsZero() {
+			if ts.Time().IsZero() {
 				t.Error("expected non-zero time")
 			}
 		})
@@ -171,7 +171,7 @@ func TestSqlTimeStamp(t *testing.T) {
 
 func TestSqlTimeStamp_JSON(t *testing.T) {
 	now := time.Date(2024, 1, 15, 10, 30, 45, 0, time.UTC)
-	ts := SqlTimeStamp(now)
+	ts := NewSqlTimeStamp(now)
 
 	// Marshal
 	data, err := json.Marshal(ts)
@@ -188,8 +188,8 @@ func TestSqlTimeStamp_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`"2024-01-15T10:30:45"`), &ts2); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	if ts2.GetTime().Year() != 2024 {
-		t.Errorf("expected year 2024, got %d", ts2.GetTime().Year())
+	if ts2.Time().Year() != 2024 {
+		t.Errorf("expected year 2024, got %d", ts2.Time().Year())
 	}
 
 	// Test null
@@ -226,7 +226,7 @@ func TestSqlDate(t *testing.T) {
 }
 
 func TestSqlDate_JSON(t *testing.T) {
-	date := SqlDate(time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC))
+	date := NewSqlDate(time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC))
 
 	// Marshal
 	data, err := json.Marshal(date)
@@ -471,8 +471,8 @@ func TestSqlUUID_Scan(t *testing.T) {
 			if u.Valid != tt.valid {
 				t.Errorf("expected valid=%v, got valid=%v", tt.valid, u.Valid)
 			}
-			if tt.valid && u.String != tt.expected {
-				t.Errorf("expected %s, got %s", tt.expected, u.String)
+			if tt.valid && u.String() != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, u.String())
 			}
 		})
 	}
@@ -480,7 +480,7 @@ func TestSqlUUID_Scan(t *testing.T) {
 
 func TestSqlUUID_Value(t *testing.T) {
 	testUUID := uuid.New()
-	u := SqlUUID{String: testUUID.String(), Valid: true}
+	u := NewSqlUUID(testUUID)
 
 	val, err := u.Value()
 	if err != nil {
@@ -503,7 +503,7 @@ func TestSqlUUID_Value(t *testing.T) {
 
 func TestSqlUUID_JSON(t *testing.T) {
 	testUUID := uuid.New()
-	u := SqlUUID{String: testUUID.String(), Valid: true}
+	u := NewSqlUUID(testUUID)
 
 	// Marshal
 	data, err := json.Marshal(u)
@@ -520,8 +520,8 @@ func TestSqlUUID_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`"`+testUUID.String()+`"`), &u2); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
-	if u2.String != testUUID.String() {
-		t.Errorf("expected %s, got %s", testUUID.String(), u2.String)
+	if u2.String() != testUUID.String() {
+		t.Errorf("expected %s, got %s", testUUID.String(), u2.String())
 	}
 
 	// Test null

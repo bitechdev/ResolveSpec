@@ -193,6 +193,115 @@ func SetSecurityMiddleware(securityList *SecurityList) func(http.Handler) http.H
 	}
 }
 
+// WithAuth wraps an HTTPFuncType handler with required authentication
+// This function performs authentication and returns 401 if authentication fails
+// Use this for handlers that require authenticated users
+//
+// Usage:
+//
+//	handler := funcspec.NewHandler(db)
+//	wrappedHandler := security.WithAuth(handler.SqlQueryList("SELECT * FROM orders WHERE user_id = [rid_user]", false, false, false), securityList)
+//	router.HandleFunc("/api/orders", wrappedHandler)
+func WithAuth(handler func(http.ResponseWriter, *http.Request), securityList *SecurityList) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get the security provider
+		provider := securityList.Provider()
+		if provider == nil {
+			http.Error(w, "Security provider not configured", http.StatusInternalServerError)
+			return
+		}
+
+		// Authenticate the request
+		authenticatedReq, ok := authenticateRequest(w, r, provider)
+		if !ok {
+			return // authenticateRequest already wrote the error response
+		}
+
+		// Continue with authenticated context
+		handler(w, authenticatedReq)
+	}
+}
+
+// WithOptionalAuth wraps an HTTPFuncType handler with optional authentication
+// This function tries to authenticate but falls back to guest context if authentication fails
+// Use this for handlers that should show personalized content for authenticated users but still work for guests
+//
+// Usage:
+//
+//	handler := funcspec.NewHandler(db)
+//	wrappedHandler := security.WithOptionalAuth(handler.SqlQueryList("SELECT * FROM products", false, false, false), securityList)
+//	router.HandleFunc("/api/products", wrappedHandler)
+func WithOptionalAuth(handler func(http.ResponseWriter, *http.Request), securityList *SecurityList) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get the security provider
+		provider := securityList.Provider()
+		if provider == nil {
+			http.Error(w, "Security provider not configured", http.StatusInternalServerError)
+			return
+		}
+
+		// Try to authenticate
+		userCtx, err := provider.Authenticate(r)
+		if err != nil {
+			// Authentication failed - set guest context and continue
+			guestCtx := createGuestContext(r)
+			handler(w, setUserContext(r, guestCtx))
+			return
+		}
+
+		// Authentication succeeded - set user context
+		handler(w, setUserContext(r, userCtx))
+	}
+}
+
+// WithSecurityContext wraps an HTTPFuncType handler with security context
+// This function allows you to add security context to specific handler functions
+// without needing to apply middleware globally
+//
+// Usage:
+//
+//	handler := funcspec.NewHandler(db)
+//	wrappedHandler := security.WithSecurityContext(handler.SqlQueryList("SELECT * FROM users", false, false, false), securityList)
+//	router.HandleFunc("/api/users", wrappedHandler)
+func WithSecurityContext(handler func(http.ResponseWriter, *http.Request), securityList *SecurityList) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), SECURITY_CONTEXT_KEY, securityList)
+		handler(w, r.WithContext(ctx))
+	}
+}
+
+// WithAuthAndSecurity wraps an HTTPFuncType handler with both authentication and security context
+// This is a convenience function that combines WithAuth and WithSecurityContext
+// Use this when you need both authentication and security context for a handler
+//
+// Usage:
+//
+//	handler := funcspec.NewHandler(db)
+//	wrappedHandler := security.WithAuthAndSecurity(handler.SqlQueryList("SELECT * FROM users", false, false, false), securityList)
+//	router.HandleFunc("/api/users", wrappedHandler)
+func WithAuthAndSecurity(handler func(http.ResponseWriter, *http.Request), securityList *SecurityList) func(http.ResponseWriter, *http.Request) {
+	return WithAuth(WithSecurityContext(handler, securityList), securityList)
+}
+
+// WithOptionalAuthAndSecurity wraps an HTTPFuncType handler with optional authentication and security context
+// This is a convenience function that combines WithOptionalAuth and WithSecurityContext
+// Use this when you want optional authentication and security context for a handler
+//
+// Usage:
+//
+//	handler := funcspec.NewHandler(db)
+//	wrappedHandler := security.WithOptionalAuthAndSecurity(handler.SqlQueryList("SELECT * FROM products", false, false, false), securityList)
+//	router.HandleFunc("/api/products", wrappedHandler)
+func WithOptionalAuthAndSecurity(handler func(http.ResponseWriter, *http.Request), securityList *SecurityList) func(http.ResponseWriter, *http.Request) {
+	return WithOptionalAuth(WithSecurityContext(handler, securityList), securityList)
+}
+
+// GetSecurityList extracts the SecurityList from request context
+func GetSecurityList(ctx context.Context) (*SecurityList, bool) {
+	securityList, ok := ctx.Value(SECURITY_CONTEXT_KEY).(*SecurityList)
+	return securityList, ok
+}
+
 // GetUserContext extracts the full user context from request context
 func GetUserContext(ctx context.Context) (*UserContext, bool) {
 	userCtx, ok := ctx.Value(UserContextKey).(*UserContext)

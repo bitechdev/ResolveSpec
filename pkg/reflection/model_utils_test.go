@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -612,5 +613,1077 @@ func TestGetSQLModelColumnsVsGetModelColumns(t *testing.T) {
 	}
 	if !hasProfileData {
 		t.Errorf("GetModelColumns should include 'profile_data' (has json tag)")
+	}
+}
+
+// ============= Tests for helpers.go =============
+
+func TestLen(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected int
+	}{
+		{
+			name:     "slice of ints",
+			input:    []int{1, 2, 3, 4, 5},
+			expected: 5,
+		},
+		{
+			name:     "empty slice",
+			input:    []string{},
+			expected: 0,
+		},
+		{
+			name:     "array",
+			input:    [3]int{1, 2, 3},
+			expected: 3,
+		},
+		{
+			name:     "string",
+			input:    "hello",
+			expected: 5,
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: 0,
+		},
+		{
+			name:     "map",
+			input:    map[string]int{"a": 1, "b": 2, "c": 3},
+			expected: 3,
+		},
+		{
+			name:     "empty map",
+			input:    map[string]int{},
+			expected: 0,
+		},
+		{
+			name:     "pointer to slice",
+			input:    &[]int{1, 2, 3},
+			expected: 3,
+		},
+		{
+			name:     "non-lennable type (int)",
+			input:    42,
+			expected: 0,
+		},
+		{
+			name:     "non-lennable type (struct)",
+			input:    struct{}{},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Len(tt.input)
+			if result != tt.expected {
+				t.Errorf("Len() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExtractTableNameOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple table name",
+			input:    "users",
+			expected: "users",
+		},
+		{
+			name:     "schema.table",
+			input:    "public.users",
+			expected: "users",
+		},
+		{
+			name:     "table with comma",
+			input:    "users,",
+			expected: "users",
+		},
+		{
+			name:     "table with space",
+			input:    "users WHERE",
+			expected: "users",
+		},
+		{
+			name:     "schema.table with space",
+			input:    "public.users WHERE id = 1",
+			expected: "users",
+		},
+		{
+			name:     "schema.table with comma",
+			input:    "myschema.mytable, other_table",
+			expected: "mytable",
+		},
+		{
+			name:     "table with tab",
+			input:    "users\tJOIN",
+			expected: "users",
+		},
+		{
+			name:     "table with newline",
+			input:    "users\nWHERE",
+			expected: "users",
+		},
+		{
+			name:     "multiple dots",
+			input:    "db.schema.table WHERE",
+			expected: "table",
+		},
+		{
+			name:     "no delimiters",
+			input:    "tablename",
+			expected: "tablename",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractTableNameOnly(tt.input)
+			if result != tt.expected {
+				t.Errorf("ExtractTableNameOnly(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============= Tests for utility functions =============
+
+func TestExtractSourceColumn(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "column with ->> operator",
+			input:    "columna->>'val'",
+			expected: "columna",
+		},
+		{
+			name:     "column with -> operator",
+			input:    "columna->'key'",
+			expected: "columna",
+		},
+		{
+			name:     "simple column",
+			input:    "columna",
+			expected: "columna",
+		},
+		{
+			name:     "table.column with ->> operator",
+			input:    "table.columna->>'val'",
+			expected: "table.columna",
+		},
+		{
+			name:     "table.column with -> operator",
+			input:    "table.columna->'key'",
+			expected: "table.columna",
+		},
+		{
+			name:     "column with spaces before operator",
+			input:    "columna  ->>'value'",
+			expected: "columna",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractSourceColumn(tt.input)
+			if result != tt.expected {
+				t.Errorf("ExtractSourceColumn(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestToSnakeCase(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "CamelCase",
+			input:    "CamelCase",
+			expected: "camel_case",
+		},
+		{
+			name:     "camelCase",
+			input:    "camelCase",
+			expected: "camel_case",
+		},
+		{
+			name:     "UserID",
+			input:    "UserID",
+			expected: "user_i_d",
+		},
+		{
+			name:     "HTTPServer",
+			input:    "HTTPServer",
+			expected: "h_t_t_p_server",
+		},
+		{
+			name:     "lowercase",
+			input:    "lowercase",
+			expected: "lowercase",
+		},
+		{
+			name:     "UPPERCASE",
+			input:    "UPPERCASE",
+			expected: "u_p_p_e_r_c_a_s_e",
+		},
+		{
+			name:     "Single",
+			input:    "A",
+			expected: "a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToSnakeCase(tt.input)
+			if result != tt.expected {
+				t.Errorf("ToSnakeCase(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsNumericType(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     reflect.Kind
+		expected bool
+	}{
+		{"int", reflect.Int, true},
+		{"int8", reflect.Int8, true},
+		{"int16", reflect.Int16, true},
+		{"int32", reflect.Int32, true},
+		{"int64", reflect.Int64, true},
+		{"uint", reflect.Uint, true},
+		{"uint8", reflect.Uint8, true},
+		{"uint16", reflect.Uint16, true},
+		{"uint32", reflect.Uint32, true},
+		{"uint64", reflect.Uint64, true},
+		{"float32", reflect.Float32, true},
+		{"float64", reflect.Float64, true},
+		{"string", reflect.String, false},
+		{"bool", reflect.Bool, false},
+		{"struct", reflect.Struct, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsNumericType(tt.kind)
+			if result != tt.expected {
+				t.Errorf("IsNumericType(%v) = %v, want %v", tt.kind, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsStringType(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     reflect.Kind
+		expected bool
+	}{
+		{"string", reflect.String, true},
+		{"int", reflect.Int, false},
+		{"bool", reflect.Bool, false},
+		{"struct", reflect.Struct, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsStringType(tt.kind)
+			if result != tt.expected {
+				t.Errorf("IsStringType(%v) = %v, want %v", tt.kind, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsNumericValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		expected bool
+	}{
+		{"integer", "123", true},
+		{"negative integer", "-456", true},
+		{"float", "123.45", true},
+		{"negative float", "-123.45", true},
+		{"scientific notation", "1.23e10", true},
+		{"with spaces", "  789  ", true},
+		{"non-numeric", "abc", false},
+		{"mixed", "123abc", false},
+		{"empty string", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsNumericValue(tt.value)
+			if result != tt.expected {
+				t.Errorf("IsNumericValue(%q) = %v, want %v", tt.value, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConvertToNumericType(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       string
+		kind        reflect.Kind
+		expected    interface{}
+		expectError bool
+	}{
+		// Integer types
+		{"int", "123", reflect.Int, int(123), false},
+		{"int8", "100", reflect.Int8, int8(100), false},
+		{"int16", "1000", reflect.Int16, int16(1000), false},
+		{"int32", "100000", reflect.Int32, int32(100000), false},
+		{"int64", "9223372036854775807", reflect.Int64, int64(9223372036854775807), false},
+		{"negative int", "-456", reflect.Int, int(-456), false},
+		{"invalid int", "abc", reflect.Int, nil, true},
+
+		// Unsigned integer types
+		{"uint", "123", reflect.Uint, uint(123), false},
+		{"uint8", "255", reflect.Uint8, uint8(255), false},
+		{"uint16", "65535", reflect.Uint16, uint16(65535), false},
+		{"uint32", "4294967295", reflect.Uint32, uint32(4294967295), false},
+		{"uint64", "18446744073709551615", reflect.Uint64, uint64(18446744073709551615), false},
+		{"invalid uint", "abc", reflect.Uint, nil, true},
+		{"negative uint", "-1", reflect.Uint, nil, true},
+
+		// Float types
+		{"float32", "123.45", reflect.Float32, float32(123.45), false},
+		{"float64", "123.456789", reflect.Float64, float64(123.456789), false},
+		{"negative float", "-123.45", reflect.Float64, float64(-123.45), false},
+		{"scientific notation", "1.23e10", reflect.Float64, float64(1.23e10), false},
+		{"invalid float", "abc", reflect.Float32, nil, true},
+
+		// Edge cases
+		{"with spaces", "  789  ", reflect.Int, int(789), false},
+
+		// Unsupported types
+		{"unsupported type", "123", reflect.String, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ConvertToNumericType(tt.value, tt.kind)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("ConvertToNumericType(%q, %v) expected error, got nil", tt.value, tt.kind)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ConvertToNumericType(%q, %v) unexpected error: %v", tt.value, tt.kind, err)
+				return
+			}
+			if result != tt.expected {
+				t.Errorf("ConvertToNumericType(%q, %v) = %v, want %v", tt.value, tt.kind, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test model for GetColumnTypeFromModel
+type TypeTestModel struct {
+	ID       int     `json:"id"`
+	Name     string  `json:"name"`
+	Age      int     `json:"age"`
+	Balance  float64 `json:"balance"`
+	Active   bool    `json:"active"`
+	Metadata string  `json:"metadata"`
+}
+
+func TestGetColumnTypeFromModel(t *testing.T) {
+	model := TypeTestModel{
+		ID:       1,
+		Name:     "Test",
+		Age:      30,
+		Balance:  100.50,
+		Active:   true,
+		Metadata: `{"key": "value"}`,
+	}
+
+	tests := []struct {
+		name     string
+		model    interface{}
+		colName  string
+		expected reflect.Kind
+	}{
+		{"int field", model, "id", reflect.Int},
+		{"string field", model, "name", reflect.String},
+		{"int field by name", model, "age", reflect.Int},
+		{"float64 field", model, "balance", reflect.Float64},
+		{"bool field", model, "active", reflect.Bool},
+		{"string with JSON", model, "metadata", reflect.String},
+		{"non-existent field", model, "nonexistent", reflect.Invalid},
+		{"nil model", nil, "id", reflect.Invalid},
+		{"pointer to model", &model, "name", reflect.String},
+		{"column with JSON operator", model, "metadata->>'key'", reflect.String},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetColumnTypeFromModel(tt.model, tt.colName)
+			if result != tt.expected {
+				t.Errorf("GetColumnTypeFromModel(%v, %q) = %v, want %v", tt.model, tt.colName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============= Tests for relation functions =============
+
+// Models for relation testing
+type Author struct {
+	ID    int     `bun:"id,pk" json:"id"`
+	Name  string  `bun:"name" json:"name"`
+	Books []Book  `bun:"rel:has-many,join:id=author_id" json:"books"`
+}
+
+type Book struct {
+	ID         int        `bun:"id,pk" json:"id"`
+	Title      string     `bun:"title" json:"title"`
+	AuthorID   int        `bun:"author_id" json:"author_id"`
+	Author     *Author    `bun:"rel:belongs-to,join:author_id=id" json:"author"`
+	Publisher  *Publisher `bun:"rel:has-one,join:id=book_id" json:"publisher"`
+}
+
+type Publisher struct {
+	ID     int    `bun:"id,pk" json:"id"`
+	Name   string `bun:"name" json:"name"`
+	BookID int    `bun:"book_id" json:"book_id"`
+}
+
+type Student struct {
+	ID      int       `gorm:"column:id;primaryKey" json:"id"`
+	Name    string    `gorm:"column:name" json:"name"`
+	Courses []Course  `gorm:"many2many:student_courses" json:"courses"`
+}
+
+type Course struct {
+	ID       int       `gorm:"column:id;primaryKey" json:"id"`
+	Title    string    `gorm:"column:title" json:"title"`
+	Students []Student `gorm:"many2many:student_courses" json:"students"`
+}
+
+// Recursive relation model
+type Category struct {
+	ID         int         `bun:"id,pk" json:"id"`
+	Name       string      `bun:"name" json:"name"`
+	ParentID   *int        `bun:"parent_id" json:"parent_id"`
+	Parent     *Category   `bun:"rel:belongs-to,join:parent_id=id" json:"parent"`
+	Children   []Category  `bun:"rel:has-many,join:id=parent_id" json:"children"`
+}
+
+func TestGetRelationType(t *testing.T) {
+	tests := []struct {
+		name      string
+		model     interface{}
+		fieldName string
+		expected  RelationType
+	}{
+		// Bun relations
+		{"has-many relation", Author{}, "Books", RelationHasMany},
+		{"belongs-to relation", Book{}, "Author", RelationBelongsTo},
+		{"has-one relation", Book{}, "Publisher", RelationHasOne},
+
+		// GORM relations
+		{"many-to-many relation (GORM)", Student{}, "Courses", RelationManyToMany},
+		{"many-to-many reverse (GORM)", Course{}, "Students", RelationManyToMany},
+
+		// Recursive relations
+		{"recursive belongs-to", Category{}, "Parent", RelationBelongsTo},
+		{"recursive has-many", Category{}, "Children", RelationHasMany},
+
+		// Edge cases
+		{"non-existent field", Author{}, "NonExistent", RelationUnknown},
+		{"nil model", nil, "Books", RelationUnknown},
+		{"empty field name", Author{}, "", RelationUnknown},
+		{"pointer model", &Author{}, "Books", RelationHasMany},
+
+		// Case-insensitive field names
+		{"case-insensitive has-many", Author{}, "books", RelationHasMany},
+		{"case-insensitive belongs-to", Book{}, "author", RelationBelongsTo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetRelationType(tt.model, tt.fieldName)
+			if result != tt.expected {
+				t.Errorf("GetRelationType(%T, %q) = %v, want %v", tt.model, tt.fieldName, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestShouldUseJoin(t *testing.T) {
+	tests := []struct {
+		name     string
+		relType  RelationType
+		expected bool
+	}{
+		{"belongs-to should use JOIN", RelationBelongsTo, true},
+		{"has-one should use JOIN", RelationHasOne, true},
+		{"has-many should NOT use JOIN", RelationHasMany, false},
+		{"many-to-many should NOT use JOIN", RelationManyToMany, false},
+		{"unknown should NOT use JOIN", RelationUnknown, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.relType.ShouldUseJoin()
+			if result != tt.expected {
+				t.Errorf("RelationType(%v).ShouldUseJoin() = %v, want %v", tt.relType, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetRelationModel(t *testing.T) {
+	tests := []struct {
+		name      string
+		model     interface{}
+		fieldName string
+		isNil     bool
+	}{
+		{"has-many relation", Author{}, "Books", false},
+		{"belongs-to relation", Book{}, "Author", false},
+		{"has-one relation", Book{}, "Publisher", false},
+		{"many-to-many relation", Student{}, "Courses", false},
+
+		// Recursive relations
+		{"recursive belongs-to", Category{}, "Parent", false},
+		{"recursive has-many", Category{}, "Children", false},
+
+		// Nested/recursive field paths
+		{"nested recursive", Category{}, "Parent.Parent", false},
+		{"nested recursive children", Category{}, "Children", false},
+
+		// Edge cases
+		{"non-existent field", Author{}, "NonExistent", true},
+		{"nil model", nil, "Books", true},
+		{"empty field name", Author{}, "", true},
+		{"pointer model", &Author{}, "Books", false},
+
+		// Case-insensitive field names
+		{"case-insensitive has-many", Author{}, "books", false},
+		{"case-insensitive belongs-to", Book{}, "author", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetRelationModel(tt.model, tt.fieldName)
+			if tt.isNil {
+				if result != nil {
+					t.Errorf("GetRelationModel(%T, %q) = %v, want nil", tt.model, tt.fieldName, result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("GetRelationModel(%T, %q) = nil, want non-nil", tt.model, tt.fieldName)
+				}
+			}
+		})
+	}
+}
+
+// ============= Additional edge case tests for better coverage =============
+
+func TestGetPrimaryKeyName_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    any
+		expected string
+	}{
+		{
+			name:     "nil model",
+			model:    nil,
+			expected: "",
+		},
+		{
+			name:     "string model name (not implemented yet)",
+			model:    "SomeModel",
+			expected: "",
+		},
+		{
+			name:     "slice of models",
+			model:    []BunModelWithColumnTag{},
+			expected: "",
+		},
+		{
+			name:     "array of models",
+			model:    [3]BunModelWithColumnTag{},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetPrimaryKeyName(tt.model)
+			if result != tt.expected {
+				t.Errorf("GetPrimaryKeyName() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetPrimaryKeyValue_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    any
+		expected any
+	}{
+		{
+			name:     "nil model",
+			model:    nil,
+			expected: nil,
+		},
+		{
+			name:     "non-struct type",
+			model:    123,
+			expected: nil,
+		},
+		{
+			name:     "slice",
+			model:    []int{1, 2, 3},
+			expected: nil,
+		},
+		{
+			name:     "model without primary key tags - fallback to ID field",
+			model: struct {
+				ID   int
+				Name string
+			}{ID: 99, Name: "Test"},
+			expected: 99,
+		},
+		{
+			name:     "model without ID field",
+			model: struct {
+				Name string
+			}{Name: "Test"},
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetPrimaryKeyValue(tt.model)
+			if result != tt.expected {
+				t.Errorf("GetPrimaryKeyValue() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetModelColumns_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    any
+		expected []string
+	}{
+		{
+			name:     "nil type",
+			model:    nil,
+			expected: []string{},
+		},
+		{
+			name:     "non-struct type",
+			model:    123,
+			expected: []string{},
+		},
+		{
+			name:     "slice type",
+			model:    []BunModelWithColumnTag{},
+			expected: []string{"custom_id", "name"},
+		},
+		{
+			name:     "array type",
+			model:    [3]BunModelWithColumnTag{},
+			expected: []string{"custom_id", "name"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetModelColumns(tt.model)
+			if len(result) != len(tt.expected) {
+				t.Errorf("GetModelColumns() returned %d columns, want %d", len(result), len(tt.expected))
+				return
+			}
+			for i, col := range result {
+				if col != tt.expected[i] {
+					t.Errorf("GetModelColumns()[%d] = %v, want %v", i, col, tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestIsColumnWritable_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      any
+		columnName string
+		expected   bool
+	}{
+		{
+			name:       "nil model",
+			model:      nil,
+			columnName: "name",
+			expected:   false,
+		},
+		{
+			name:       "non-struct type",
+			model:      123,
+			columnName: "name",
+			expected:   false,
+		},
+		{
+			name:       "column not found in model (dynamic column)",
+			model:      BunModelWithColumnTag{},
+			columnName: "dynamic_column",
+			expected:   true, // Not found, allow it (might be dynamic)
+		},
+		{
+			name:       "pointer to model",
+			model:      &ModelWithEmbedded{},
+			columnName: "name",
+			expected:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsColumnWritable(tt.model, tt.columnName)
+			if result != tt.expected {
+				t.Errorf("IsColumnWritable(%s) = %v, want %v", tt.columnName, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsGormFieldReadOnly_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		expected bool
+	}{
+		{
+			name:     "read-only marker",
+			tag:      "column:name;->",
+			expected: true,
+		},
+		{
+			name:     "write restriction <-:false",
+			tag:      "column:name;<-:false",
+			expected: true,
+		},
+		{
+			name:     "write allowed <-:create",
+			tag:      "<-:create",
+			expected: false,
+		},
+		{
+			name:     "write allowed <-:update",
+			tag:      "<-:update",
+			expected: false,
+		},
+		{
+			name:     "no restrictions",
+			tag:      "column:name;type:varchar(255)",
+			expected: false,
+		},
+		{
+			name:     "empty tag",
+			tag:      "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isGormFieldReadOnly(tt.tag)
+			if result != tt.expected {
+				t.Errorf("isGormFieldReadOnly(%q) = %v, want %v", tt.tag, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetSQLModelColumns_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		model    any
+		expected []string
+	}{
+		{
+			name:     "nil model",
+			model:    nil,
+			expected: []string{},
+		},
+		{
+			name:     "non-struct type",
+			model:    123,
+			expected: []string{},
+		},
+		{
+			name:     "slice type",
+			model:    []Profile{},
+			expected: []string{"id", "bio", "user_id"},
+		},
+		{
+			name:     "array type",
+			model:    [2]Profile{},
+			expected: []string{"id", "bio", "user_id"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetSQLModelColumns(tt.model)
+			if len(result) != len(tt.expected) {
+				t.Errorf("GetSQLModelColumns() returned %d columns, want %d.\nGot: %v\nWant: %v",
+					len(result), len(tt.expected), result, tt.expected)
+				return
+			}
+			for i, col := range result {
+				if col != tt.expected[i] {
+					t.Errorf("GetSQLModelColumns()[%d] = %v, want %v.\nFull result: %v",
+						i, col, tt.expected[i], result)
+				}
+			}
+		})
+	}
+}
+
+// Test models with table:, rel:, join: tags for ExtractColumnFromBunTag
+type BunSpecialTagsModel struct {
+	Table     string     `bun:"table:users"`
+	Relation  []Post     `bun:"rel:has-many"`
+	Join      string     `bun:"join:id=user_id"`
+	NormalCol string     `bun:"normal_col"`
+}
+
+func TestExtractColumnFromBunTag_SpecialTags(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		expected string
+	}{
+		{
+			name:     "table tag",
+			tag:      "table:users",
+			expected: "",
+		},
+		{
+			name:     "rel tag",
+			tag:      "rel:has-many",
+			expected: "",
+		},
+		{
+			name:     "join tag",
+			tag:      "join:id=user_id",
+			expected: "",
+		},
+		{
+			name:     "normal column",
+			tag:      "normal_col,pk",
+			expected: "normal_col",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractColumnFromBunTag(tt.tag)
+			if result != tt.expected {
+				t.Errorf("ExtractColumnFromBunTag(%q) = %q, want %q", tt.tag, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test GORM fallback scenarios
+type GormFallbackModel struct {
+	UserID int `gorm:"foreignKey:UserId"`
+}
+
+func TestGetRelationType_GORMFallback(t *testing.T) {
+	tests := []struct {
+		name      string
+		model     interface{}
+		fieldName string
+		expected  RelationType
+	}{
+		{
+			name:      "GORM slice without many2many",
+			model:     Post{},
+			fieldName: "Tags",
+			expected:  RelationManyToMany, // Has many2many tag
+		},
+		{
+			name:      "GORM pointer with foreignKey",
+			model:     Post{},
+			fieldName: "User",
+			expected:  RelationBelongsTo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetRelationType(tt.model, tt.fieldName)
+			if result != tt.expected {
+				t.Errorf("GetRelationType(%T, %q) = %v, want %v", tt.model, tt.fieldName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Additional tests for better coverage of GetRelationType
+func TestGetRelationType_AdditionalCases(t *testing.T) {
+	// Test model with GORM has-one (pointer without foreignKey or with references)
+	type Address struct {
+		ID     int  `gorm:"column:id;primaryKey"`
+		UserID int  `gorm:"column:user_id"`
+	}
+
+	type UserWithAddress struct {
+		ID      int      `gorm:"column:id;primaryKey"`
+		Address *Address `gorm:"references:UserID"` // has-one relation
+	}
+
+	// Test model with field type inference
+	type Company struct {
+		ID   int
+		Name string
+	}
+
+	type Employee struct {
+		ID        int
+		Company   Company  // Single struct (not pointer, not slice) - belongs-to
+		Coworkers []Employee // Slice without bun/gorm tags - has-many
+	}
+
+	tests := []struct {
+		name      string
+		model     interface{}
+		fieldName string
+		expected  RelationType
+	}{
+		{
+			name:      "GORM has-one (pointer with references)",
+			model:     UserWithAddress{},
+			fieldName: "Address",
+			expected:  RelationHasOne,
+		},
+		{
+			name:      "Field type inference - single struct",
+			model:     Employee{},
+			fieldName: "Company",
+			expected:  RelationBelongsTo,
+		},
+		{
+			name:      "Field type inference - slice",
+			model:     Employee{},
+			fieldName: "Coworkers",
+			expected:  RelationHasMany,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetRelationType(tt.model, tt.fieldName)
+			if result != tt.expected {
+				t.Errorf("GetRelationType(%T, %q) = %v, want %v", tt.model, tt.fieldName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test for GetColumnTypeFromModel with more edge cases
+func TestGetColumnTypeFromModel_AdditionalCases(t *testing.T) {
+	type ModelWithSnakeCase struct {
+		UserID   int    `json:"user_id"`
+		UserName string // No tag, will match by snake_case conversion
+	}
+
+	model := ModelWithSnakeCase{
+		UserID:   123,
+		UserName: "John",
+	}
+
+	tests := []struct {
+		name     string
+		model    interface{}
+		colName  string
+		expected reflect.Kind
+	}{
+		{"field by snake_case name", model, "user_name", reflect.String},
+		{"non-struct model", 123, "field", reflect.Invalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetColumnTypeFromModel(tt.model, tt.colName)
+			if result != tt.expected {
+				t.Errorf("GetColumnTypeFromModel(%v, %q) = %v, want %v", tt.model, tt.colName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test for getRelationModelSingleLevel edge cases
+func TestGetRelationModel_WithTags(t *testing.T) {
+	// Test matching by gorm column tag
+	type Department struct {
+		ID   int    `gorm:"column:dept_id;primaryKey"`
+		Name string `gorm:"column:dept_name"`
+	}
+
+	type Manager struct {
+		ID         int         `gorm:"column:id;primaryKey"`
+		DeptID     int         `gorm:"column:department_id"`
+		Department *Department `gorm:"column:dept;foreignKey:DeptID"`
+	}
+
+	tests := []struct {
+		name      string
+		model     interface{}
+		fieldName string
+		isNil     bool
+	}{
+		// Test matching by gorm column name
+		{"match by gorm column", Manager{}, "dept", false},
+		// Test matching by json tag
+		{"match by json tag", Book{}, "author", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GetRelationModel(tt.model, tt.fieldName)
+			if tt.isNil {
+				if result != nil {
+					t.Errorf("GetRelationModel(%T, %q) = %v, want nil", tt.model, tt.fieldName, result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("GetRelationModel(%T, %q) = nil, want non-nil", tt.model, tt.fieldName)
+				}
+			}
+		})
 	}
 }

@@ -13,7 +13,7 @@ func TestNormalizeTableAlias(t *testing.T) {
 		want          string
 	}{
 		{
-			name:          "strips incorrect alias from simple condition",
+			name:          "strips plausible alias from simple condition",
 			query:         "APIL.rid_hub = 2576",
 			expectedAlias: "apiproviderlink",
 			tableName:     "apiproviderlink",
@@ -27,14 +27,14 @@ func TestNormalizeTableAlias(t *testing.T) {
 			want:          "apiproviderlink.rid_hub = 2576",
 		},
 		{
-			name:          "strips incorrect alias with multiple conditions",
+			name:          "strips plausible alias with multiple conditions",
 			query:         "APIL.rid_hub = ? AND APIL.active = ?",
 			expectedAlias: "apiproviderlink",
 			tableName:     "apiproviderlink",
 			want:          "rid_hub = ? AND active = ?",
 		},
 		{
-			name:          "handles mixed correct and incorrect aliases",
+			name:          "handles mixed correct and plausible aliases",
 			query:         "APIL.rid_hub = ? AND apiproviderlink.active = ?",
 			expectedAlias: "apiproviderlink",
 			tableName:     "apiproviderlink",
@@ -53,6 +53,20 @@ func TestNormalizeTableAlias(t *testing.T) {
 			expectedAlias: "apiproviderlink",
 			tableName:     "apiproviderlink",
 			want:          "rid_hub = ?",
+		},
+		{
+			name:          "keeps reference to different table (not in current table name)",
+			query:         "APIL.rid_hub = ?",
+			expectedAlias: "apiprovider",
+			tableName:     "apiprovider",
+			want:          "APIL.rid_hub = ?",
+		},
+		{
+			name:          "keeps reference with short prefix that might be ambiguous",
+			query:         "AP.rid = ?",
+			expectedAlias: "apiprovider",
+			tableName:     "apiprovider",
+			want:          "AP.rid = ?",
 		},
 	}
 

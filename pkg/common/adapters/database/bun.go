@@ -252,17 +252,32 @@ func isOperatorOrKeyword(s string) bool {
 	return false
 }
 
+// isAcronymMatch checks if prefix is an acronym of tableName
+// For example, "apil" matches "apiproviderlink" because each letter appears in sequence
+func isAcronymMatch(prefix, tableName string) bool {
+	if len(prefix) == 0 || len(tableName) == 0 {
+		return false
+	}
+
+	prefixIdx := 0
+	for i := 0; i < len(tableName) && prefixIdx < len(prefix); i++ {
+		if tableName[i] == prefix[prefixIdx] {
+			prefixIdx++
+		}
+	}
+
+	// All characters of prefix were found in sequence in tableName
+	return prefixIdx == len(prefix)
+}
+
 // normalizeTableAlias replaces table alias prefixes in SQL conditions
 // This handles cases where a user references a table alias that doesn't match
 // what Bun generates (common in preload contexts)
 func normalizeTableAlias(query, expectedAlias, tableName string) string {
 	// Pattern: <word>.<column> where <word> might be an incorrect alias
 	// We'll look for patterns like "APIL.column" and either:
-	// 1. Remove the alias prefix entirely (safest)
-	// 2. Replace with the expected alias
-
-	// For now, we'll use a simple approach: if the query contains a dot (qualified reference)
-	// and that prefix is not the expected alias or table name, strip it
+	// 1. Remove the alias prefix if it's clearly meant for this table
+	// 2. Leave it alone if it might be referring to another table (JOIN/preload)
 
 	// Split on spaces and parentheses to find qualified references
 	parts := strings.FieldsFunc(query, func(r rune) bool {
@@ -277,13 +292,39 @@ func normalizeTableAlias(query, expectedAlias, tableName string) string {
 			column := part[dotIndex+1:]
 
 			// Check if the prefix matches our expected alias or table name (case-insensitive)
-			if !strings.EqualFold(prefix, expectedAlias) &&
-				!strings.EqualFold(prefix, tableName) &&
-				!strings.EqualFold(prefix, strings.ToLower(tableName)) {
-				// This is a different alias - remove the prefix
-				logger.Debug("Stripping incorrect alias '%s' from WHERE condition, keeping just '%s'", prefix, column)
+			if strings.EqualFold(prefix, expectedAlias) ||
+				strings.EqualFold(prefix, tableName) ||
+				strings.EqualFold(prefix, strings.ToLower(tableName)) {
+				// Prefix matches current table, it's safe but redundant - leave it
+				continue
+			}
+
+			// Check if the prefix could plausibly be an alias/acronym for this table
+			// Only strip if we're confident it's meant for this table
+			// For example: "APIL" could be an acronym for "apiproviderlink"
+			prefixLower := strings.ToLower(prefix)
+			tableNameLower := strings.ToLower(tableName)
+
+			// Check if prefix is a substring of table name
+			isSubstring := strings.Contains(tableNameLower, prefixLower) && len(prefixLower) > 2
+
+			// Check if prefix is an acronym of table name
+			// e.g., "APIL" matches "ApiProviderLink" (A-p-I-providerL-ink)
+			isAcronym := false
+			if !isSubstring && len(prefixLower) > 2 {
+				isAcronym = isAcronymMatch(prefixLower, tableNameLower)
+			}
+
+			if isSubstring || isAcronym {
+				// This looks like it could be an alias for this table - strip it
+				logger.Debug("Stripping plausible alias '%s' from WHERE condition, keeping just '%s'", prefix, column)
 				// Replace the qualified reference with just the column name
 				modified = strings.ReplaceAll(modified, part, column)
+			} else {
+				// Prefix doesn't match the current table at all
+				// It's likely referring to a different table (JOIN/preload)
+				// DON'T strip it - leave the qualified reference as-is
+				logger.Debug("Keeping qualified reference '%s' - prefix '%s' doesn't match current table '%s'", part, prefix, tableName)
 			}
 		}
 	}

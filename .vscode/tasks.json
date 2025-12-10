@@ -230,7 +230,17 @@
 				"cwd": "${workspaceFolder}"
 			},
 			"problemMatcher": [],
-			"group": "test"
+			"group": "build"
+		},
+		{
+			"type": "shell",
+			"label": "go: lint workspace (fix)",
+			"command": "golangci-lint run --timeout=5m --fix",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"group": "build"
 		},
 		{
 			"type": "shell",

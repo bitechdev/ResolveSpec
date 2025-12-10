@@ -545,6 +545,96 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			t.Fatal("expected error when token is missing")
 		}
 	})
+
+	t.Run("authenticate with multiple comma-separated tokens", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Token invalid-token, Token valid-token-123")
+
+		// First token fails
+		rows1 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(false, "Invalid token", nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("invalid-token", "authenticate").
+			WillReturnRows(rows1)
+
+		// Second token succeeds
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":3,"user_name":"multitoken","session_id":"valid-token-123"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("valid-token-123", "authenticate").
+			WillReturnRows(rows2)
+
+		userCtx, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if userCtx.UserID != 3 {
+			t.Errorf("expected UserID 3, got %d", userCtx.UserID)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("authenticate with duplicate tokens", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Token 968CA5AE-4F83-4D55-A3C6-51AE4410E03A, Token 968CA5AE-4F83-4D55-A3C6-51AE4410E03A")
+
+		// First token succeeds
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":4,"user_name":"duplicateuser","session_id":"968CA5AE-4F83-4D55-A3C6-51AE4410E03A"}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("968CA5AE-4F83-4D55-A3C6-51AE4410E03A", "authenticate").
+			WillReturnRows(rows)
+
+		userCtx, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if userCtx.UserID != 4 {
+			t.Errorf("expected UserID 4, got %d", userCtx.UserID)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("authenticate with all tokens failing", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Token bad-token-1, Token bad-token-2")
+
+		// First token fails
+		rows1 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(false, "Invalid token", nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("bad-token-1", "authenticate").
+			WillReturnRows(rows1)
+
+		// Second token also fails
+		rows2 := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(false, "Invalid token", nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("bad-token-2", "authenticate").
+			WillReturnRows(rows2)
+
+		_, err := auth.Authenticate(req)
+		if err == nil {
+			t.Fatal("expected error when all tokens fail")
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
 }
 
 // Test DatabaseAuthenticator RefreshToken

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/cache"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // Production-Ready Authenticators
@@ -169,69 +170,98 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 	// Extract session token from header or cookie
 	sessionToken := r.Header.Get("Authorization")
 	reference := "authenticate"
+	var tokens []string
+
 	if sessionToken == "" {
 		// Try cookie
 		cookie, err := r.Cookie("session_token")
 		if err == nil {
-			sessionToken = cookie.Value
+			tokens = []string{cookie.Value}
 			reference = "cookie"
 		}
 	} else {
-		// Remove "Bearer " prefix if present
-		sessionToken = strings.TrimPrefix(sessionToken, "Bearer ")
-		// Remove "Token " prefix if present
-		sessionToken = strings.TrimPrefix(sessionToken, "Token ")
+		// Parse Authorization header which may contain multiple comma-separated tokens
+		// Format: "Token abc, Token def" or "Bearer abc" or just "abc"
+		rawTokens := strings.Split(sessionToken, ",")
+		for _, token := range rawTokens {
+			token = strings.TrimSpace(token)
+			// Remove "Bearer " prefix if present
+			token = strings.TrimPrefix(token, "Bearer ")
+			// Remove "Token " prefix if present
+			token = strings.TrimPrefix(token, "Token ")
+			token = strings.TrimSpace(token)
+			if token != "" {
+				tokens = append(tokens, token)
+			}
+		}
 	}
 
-	if sessionToken == "" {
+	if len(tokens) == 0 {
 		return nil, fmt.Errorf("session token required")
 	}
 
-	// Build cache key
-	cacheKey := fmt.Sprintf("auth:session:%s", sessionToken)
-
-	// Use cache.GetOrSet to get from cache or load from database
-	var userCtx UserContext
-	err := a.cache.GetOrSet(r.Context(), cacheKey, &userCtx, a.cacheTTL, func() (interface{}, error) {
-		// This function is called only if cache miss
-		var success bool
-		var errorMsg sql.NullString
-		var userJSON sql.NullString
-
-		query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
-		err := a.db.QueryRowContext(r.Context(), query, sessionToken, reference).Scan(&success, &errorMsg, &userJSON)
-		if err != nil {
-			return nil, fmt.Errorf("session query failed: %w", err)
-		}
-
-		if !success {
-			if errorMsg.Valid {
-				return nil, fmt.Errorf("%s", errorMsg.String)
-			}
-			return nil, fmt.Errorf("invalid or expired session")
-		}
-
-		if !userJSON.Valid {
-			return nil, fmt.Errorf("no user data in session")
-		}
-
-		// Parse UserContext
-		var user UserContext
-		if err := json.Unmarshal([]byte(userJSON.String), &user); err != nil {
-			return nil, fmt.Errorf("failed to parse user context: %w", err)
-		}
-
-		return &user, nil
-	})
-
-	if err != nil {
-		return nil, err
+	// Log warning if multiple tokens are provided
+	if len(tokens) > 1 {
+		logger.Warn("Multiple authentication tokens provided in Authorization header (%d tokens). This is unusual and may indicate a misconfigured client. Header: %s", len(tokens), sessionToken)
 	}
 
-	// Update last activity timestamp asynchronously
-	go a.updateSessionActivity(r.Context(), sessionToken, &userCtx)
+	// Try each token until one succeeds
+	var lastErr error
+	for _, token := range tokens {
+		// Build cache key
+		cacheKey := fmt.Sprintf("auth:session:%s", token)
 
-	return &userCtx, nil
+		// Use cache.GetOrSet to get from cache or load from database
+		var userCtx UserContext
+		err := a.cache.GetOrSet(r.Context(), cacheKey, &userCtx, a.cacheTTL, func() (any, error) {
+			// This function is called only if cache miss
+			var success bool
+			var errorMsg sql.NullString
+			var userJSON sql.NullString
+
+			query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
+			err := a.db.QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON)
+			if err != nil {
+				return nil, fmt.Errorf("session query failed: %w", err)
+			}
+
+			if !success {
+				if errorMsg.Valid {
+					return nil, fmt.Errorf("%s", errorMsg.String)
+				}
+				return nil, fmt.Errorf("invalid or expired session")
+			}
+
+			if !userJSON.Valid {
+				return nil, fmt.Errorf("no user data in session")
+			}
+
+			// Parse UserContext
+			var user UserContext
+			if err := json.Unmarshal([]byte(userJSON.String), &user); err != nil {
+				return nil, fmt.Errorf("failed to parse user context: %w", err)
+			}
+
+			return &user, nil
+		})
+
+		if err != nil {
+			lastErr = err
+			continue // Try next token
+		}
+
+		// Authentication succeeded with this token
+		// Update last activity timestamp asynchronously
+		go a.updateSessionActivity(r.Context(), token, &userCtx)
+
+		return &userCtx, nil
+	}
+
+	// All tokens failed
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("authentication failed for all provided tokens")
 }
 
 // ClearCache removes a specific token from the cache or clears all cache if token is empty

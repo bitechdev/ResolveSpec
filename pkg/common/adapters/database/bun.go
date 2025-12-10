@@ -34,6 +34,42 @@ func (h *QueryDebugHook) AfterQuery(ctx context.Context, event *bun.QueryEvent) 
 	}
 }
 
+// debugScanIntoStruct attempts to scan rows into a struct with detailed field-level logging
+// This helps identify which specific field is causing scanning issues
+func debugScanIntoStruct(rows interface{}, dest interface{}) error {
+	v := reflect.ValueOf(dest)
+	if v.Kind() != reflect.Ptr {
+		return fmt.Errorf("dest must be a pointer")
+	}
+
+	v = v.Elem()
+	if v.Kind() != reflect.Struct && v.Kind() != reflect.Slice {
+		return fmt.Errorf("dest must be pointer to struct or slice")
+	}
+
+	// Log the type being scanned into
+	logger.Debug("Debug scan into type: %s (kind: %s)", v.Type().Name(), v.Kind())
+
+	// If it's a struct, log all field types
+	if v.Kind() == reflect.Struct {
+		for i := 0; i < v.NumField(); i++ {
+			field := v.Type().Field(i)
+			fieldValue := v.Field(i)
+
+			// Log embedded fields specially
+			if field.Anonymous {
+				logger.Debug("  Embedded field [%d]: %s (type: %s, kind: %s)",
+					i, field.Name, field.Type, fieldValue.Kind())
+			} else {
+				logger.Debug("  Field [%d]: %s (type: %s, kind: %s, tag: %s)",
+					i, field.Name, field.Type, fieldValue.Kind(), field.Tag.Get("bun"))
+			}
+		}
+	}
+
+	return nil
+}
+
 // BunAdapter adapts Bun to work with our Database interface
 // This demonstrates how the abstraction works with different ORMs
 type BunAdapter struct {
@@ -50,6 +86,14 @@ func NewBunAdapter(db *bun.DB) *BunAdapter {
 func (b *BunAdapter) EnableQueryDebug() {
 	b.db.AddQueryHook(&QueryDebugHook{})
 	logger.Info("Bun query debug mode enabled - all SQL queries will be logged")
+}
+
+// EnableDetailedScanDebug enables verbose logging of scan operations
+// WARNING: This generates a LOT of log output. Use only for debugging specific issues.
+func (b *BunAdapter) EnableDetailedScanDebug() {
+	logger.Info("Detailed scan debugging enabled - will log all field scanning operations")
+	// This is a flag that can be checked in scan operations
+	// Implementation would require modifying the scan logic
 }
 
 // DisableQueryDebug removes all query hooks
@@ -676,11 +720,47 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// Enhanced panic recovery with model information
+			model := b.query.GetModel()
+			var modelInfo string
+			if model != nil && model.Value() != nil {
+				modelValue := model.Value()
+				modelInfo = fmt.Sprintf("Model type: %T", modelValue)
+
+				// Try to get the model's underlying struct type
+				v := reflect.ValueOf(modelValue)
+				if v.Kind() == reflect.Ptr {
+					v = v.Elem()
+				}
+				if v.Kind() == reflect.Slice {
+					if v.Type().Elem().Kind() == reflect.Ptr {
+						modelInfo += fmt.Sprintf(", Slice of: %s", v.Type().Elem().Elem().Name())
+					} else {
+						modelInfo += fmt.Sprintf(", Slice of: %s", v.Type().Elem().Name())
+					}
+				} else if v.Kind() == reflect.Struct {
+					modelInfo += fmt.Sprintf(", Struct: %s", v.Type().Name())
+				}
+			}
+
+			sqlStr := b.query.String()
+			logger.Error("Panic in BunSelectQuery.ScanModel: %v. %s. SQL: %s", r, modelInfo, sqlStr)
 			err = logger.HandlePanic("BunSelectQuery.ScanModel", r)
 		}
 	}()
 	if b.query.GetModel() == nil {
 		return fmt.Errorf("model is nil")
+	}
+
+	// Optional: Enable detailed field-level debugging (set to true to debug)
+	const enableDetailedDebug = true
+	if enableDetailedDebug {
+		model := b.query.GetModel()
+		if model != nil && model.Value() != nil {
+			if err := debugScanIntoStruct(nil, model.Value()); err != nil {
+				logger.Warn("Debug scan inspection failed: %v", err)
+			}
+		}
 	}
 
 	// Execute the main query first

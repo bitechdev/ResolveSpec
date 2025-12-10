@@ -48,21 +48,42 @@ func debugScanIntoStruct(rows interface{}, dest interface{}) error {
 	}
 
 	// Log the type being scanned into
-	logger.Debug("Debug scan into type: %s (kind: %s)", v.Type().Name(), v.Kind())
+	typeName := v.Type().String()
+	logger.Debug("Debug scan into type: %s (kind: %s)", typeName, v.Kind())
 
-	// If it's a struct, log all field types
-	if v.Kind() == reflect.Struct {
-		for i := 0; i < v.NumField(); i++ {
-			field := v.Type().Field(i)
-			fieldValue := v.Field(i)
+	// Handle slice types - inspect the element type
+	var structType reflect.Type
+	if v.Kind() == reflect.Slice {
+		elemType := v.Type().Elem()
+		logger.Debug("  Slice element type: %s", elemType)
+
+		// If slice of pointers, get the underlying type
+		if elemType.Kind() == reflect.Ptr {
+			structType = elemType.Elem()
+		} else {
+			structType = elemType
+		}
+	} else if v.Kind() == reflect.Struct {
+		structType = v.Type()
+	}
+
+	// If we have a struct type, log all its fields
+	if structType != nil && structType.Kind() == reflect.Struct {
+		logger.Debug("  Struct %s has %d fields:", structType.Name(), structType.NumField())
+		for i := 0; i < structType.NumField(); i++ {
+			field := structType.Field(i)
 
 			// Log embedded fields specially
 			if field.Anonymous {
-				logger.Debug("  Embedded field [%d]: %s (type: %s, kind: %s)",
-					i, field.Name, field.Type, fieldValue.Kind())
+				logger.Debug("    [%d] EMBEDDED: %s (type: %s, kind: %s, bun:%q)",
+					i, field.Name, field.Type, field.Type.Kind(), field.Tag.Get("bun"))
 			} else {
-				logger.Debug("  Field [%d]: %s (type: %s, kind: %s, tag: %s)",
-					i, field.Name, field.Type, fieldValue.Kind(), field.Tag.Get("bun"))
+				bunTag := field.Tag.Get("bun")
+				if bunTag == "" {
+					bunTag = "(no tag)"
+				}
+				logger.Debug("    [%d] %s (type: %s, kind: %s, bun:%q)",
+					i, field.Name, field.Type, field.Type.Kind(), bunTag)
 			}
 		}
 	}

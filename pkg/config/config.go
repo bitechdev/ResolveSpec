@@ -83,11 +83,11 @@ type DatabaseConfig struct {
 // ErrorTrackingConfig holds error tracking configuration
 type ErrorTrackingConfig struct {
 	Enabled          bool    `mapstructure:"enabled"`
-	Provider         string  `mapstructure:"provider"`          // sentry, noop
-	DSN              string  `mapstructure:"dsn"`               // Sentry DSN
-	Environment      string  `mapstructure:"environment"`       // e.g., production, staging, development
-	Release          string  `mapstructure:"release"`           // Application version/release
-	Debug            bool    `mapstructure:"debug"`             // Enable debug mode
-	SampleRate       float64 `mapstructure:"sample_rate"`       // Error sample rate (0.0-1.0)
+	Provider         string  `mapstructure:"provider"`           // sentry, noop
+	DSN              string  `mapstructure:"dsn"`                // Sentry DSN
+	Environment      string  `mapstructure:"environment"`        // e.g., production, staging, development
+	Release          string  `mapstructure:"release"`            // Application version/release
+	Debug            bool    `mapstructure:"debug"`              // Enable debug mode
+	SampleRate       float64 `mapstructure:"sample_rate"`        // Error sample rate (0.0-1.0)
 	TracesSampleRate float64 `mapstructure:"traces_sample_rate"` // Traces sample rate (0.0-1.0)
 }

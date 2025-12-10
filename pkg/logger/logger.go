@@ -7,8 +7,9 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/bitechdev/ResolveSpec/pkg/errortracking"
 	"go.uber.org/zap"
+
+	errortracking "github.com/bitechdev/ResolveSpec/pkg/errortracking"
 )
 
 var Logger *zap.SugaredLogger

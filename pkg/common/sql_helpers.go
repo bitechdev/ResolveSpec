@@ -471,9 +471,10 @@ func findOperatorOutsideParentheses(s string, operator string) int {
 		}
 
 		// Track parenthesis depth
-		if ch == '(' {
+		switch ch {
+		case '(':
 			depth++
-		} else if ch == ')' {
+		case ')':
 			depth--
 		}
 

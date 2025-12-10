@@ -4,13 +4,14 @@ import "time"
 
 // Config represents the complete application configuration
 type Config struct {
-	Server     ServerConfig     `mapstructure:"server"`
-	Tracing    TracingConfig    `mapstructure:"tracing"`
-	Cache      CacheConfig      `mapstructure:"cache"`
-	Logger     LoggerConfig     `mapstructure:"logger"`
-	Middleware MiddlewareConfig `mapstructure:"middleware"`
-	CORS       CORSConfig       `mapstructure:"cors"`
-	Database   DatabaseConfig   `mapstructure:"database"`
+	Server        ServerConfig        `mapstructure:"server"`
+	Tracing       TracingConfig       `mapstructure:"tracing"`
+	Cache         CacheConfig         `mapstructure:"cache"`
+	Logger        LoggerConfig        `mapstructure:"logger"`
+	ErrorTracking ErrorTrackingConfig `mapstructure:"error_tracking"`
+	Middleware    MiddlewareConfig    `mapstructure:"middleware"`
+	CORS          CORSConfig          `mapstructure:"cors"`
+	Database      DatabaseConfig      `mapstructure:"database"`
 }
 
 // ServerConfig holds server-related configuration
@@ -77,4 +78,16 @@ type CORSConfig struct {
 // DatabaseConfig holds database configuration (primarily for testing)
 type DatabaseConfig struct {
 	URL string `mapstructure:"url"`
+}
+
+// ErrorTrackingConfig holds error tracking configuration
+type ErrorTrackingConfig struct {
+	Enabled          bool    `mapstructure:"enabled"`
+	Provider         string  `mapstructure:"provider"`          // sentry, noop
+	DSN              string  `mapstructure:"dsn"`               // Sentry DSN
+	Environment      string  `mapstructure:"environment"`       // e.g., production, staging, development
+	Release          string  `mapstructure:"release"`           // Application version/release
+	Debug            bool    `mapstructure:"debug"`             // Enable debug mode
+	SampleRate       float64 `mapstructure:"sample_rate"`       // Error sample rate (0.0-1.0)
+	TracesSampleRate float64 `mapstructure:"traces_sample_rate"` // Traces sample rate (0.0-1.0)
 }

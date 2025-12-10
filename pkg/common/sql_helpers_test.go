@@ -122,6 +122,18 @@ func TestSanitizeWhereClause(t *testing.T) {
 			tableName: "users",
 			expected:  "",
 		},
+		{
+			name:      "subquery with table alias should not be modified",
+			where:     "apiprovider.rid_apiprovider in (select l.rid_apiprovider from core.apiproviderlink l where l.rid_hub = 2576)",
+			tableName: "apiprovider",
+			expected:  "apiprovider.rid_apiprovider in (select l.rid_apiprovider from core.apiproviderlink l where l.rid_hub = 2576)",
+		},
+		{
+			name:      "complex subquery with AND and multiple operators",
+			where:     "apiprovider.type in ('softphone') AND (apiprovider.rid_apiprovider in (select l.rid_apiprovider from core.apiproviderlink l where l.rid_hub = 2576))",
+			tableName: "apiprovider",
+			expected:  "apiprovider.type in ('softphone') AND (apiprovider.rid_apiprovider in (select l.rid_apiprovider from core.apiproviderlink l where l.rid_hub = 2576))",
+		},
 	}
 
 	for _, tt := range tests {

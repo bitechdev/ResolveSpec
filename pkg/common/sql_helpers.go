@@ -393,6 +393,7 @@ func getValidColumnsForTable(tableName string) map[string]bool {
 // extractTableAndColumn extracts the table prefix and column name from a qualified reference
 // For example: "users.status = 'active'" returns ("users", "status")
 // Returns empty strings if no table prefix is found
+// This function is parenthesis-aware and will only look for operators outside of subqueries
 func extractTableAndColumn(cond string) (table string, column string) {
 	// Common SQL operators to find the column reference
 	operators := []string{" = ", " != ", " <> ", " > ", " >= ", " < ", " <= ", " LIKE ", " like ", " IN ", " in ", " IS ", " is "}
@@ -400,11 +401,18 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	var columnRef string
 
 	// Find the column reference (left side of the operator)
+	// We need to find the first operator that appears OUTSIDE of parentheses
+	minIdx := -1
+
 	for _, op := range operators {
-		if idx := strings.Index(cond, op); idx > 0 {
-			columnRef = strings.TrimSpace(cond[:idx])
-			break
+		idx := findOperatorOutsideParentheses(cond, op)
+		if idx > 0 && (minIdx == -1 || idx < minIdx) {
+			minIdx = idx
 		}
+	}
+
+	if minIdx > 0 {
+		columnRef = strings.TrimSpace(cond[:minIdx])
 	}
 
 	// If no operator found, the whole condition might be the column reference
@@ -435,6 +443,52 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	}
 
 	return "", ""
+}
+
+// findOperatorOutsideParentheses finds the first occurrence of an operator outside of parentheses
+// Returns the index of the operator, or -1 if not found or only found inside parentheses
+func findOperatorOutsideParentheses(s string, operator string) int {
+	depth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		// Track quote state (operators inside quotes should be ignored)
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+
+		// Skip if we're inside quotes
+		if inSingleQuote || inDoubleQuote {
+			continue
+		}
+
+		// Track parenthesis depth
+		if ch == '(' {
+			depth++
+		} else if ch == ')' {
+			depth--
+		}
+
+		// Only look for the operator when we're outside parentheses (depth == 0)
+		if depth == 0 {
+			// Check if the operator starts at this position
+			if i+len(operator) <= len(s) {
+				if s[i:i+len(operator)] == operator {
+					return i
+				}
+			}
+		}
+	}
+
+	return -1
 }
 
 // isValidColumn checks if a column name exists in the valid columns map

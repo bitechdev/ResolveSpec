@@ -286,6 +286,48 @@ func TestExtractTableAndColumn(t *testing.T) {
 			expectedTable: "",
 			expectedCol:   "",
 		},
+		{
+			name:          "function call with table.column - ifblnk",
+			input:         "ifblnk(users.status,0) in (1,2,3,4)",
+			expectedTable: "users",
+			expectedCol:   "status",
+		},
+		{
+			name:          "function call with table.column - coalesce",
+			input:         "coalesce(users.age, 0) = 25",
+			expectedTable: "users",
+			expectedCol:   "age",
+		},
+		{
+			name:          "nested function calls",
+			input:         "upper(trim(users.name)) = 'JOHN'",
+			expectedTable: "users",
+			expectedCol:   "name",
+		},
+		{
+			name:          "function with multiple args and table.column",
+			input:         "substring(users.email, 1, 5) = 'admin'",
+			expectedTable: "users",
+			expectedCol:   "email",
+		},
+		{
+			name:          "cast function with table.column",
+			input:         "cast(orders.total as decimal) > 100",
+			expectedTable: "orders",
+			expectedCol:   "total",
+		},
+		{
+			name:          "complex nested functions",
+			input:         "coalesce(nullif(users.status, ''), 'default') = 'active'",
+			expectedTable: "users",
+			expectedCol:   "status",
+		},
+		{
+			name:          "function with multiple table.column refs (extracts first)",
+			input:         "greatest(users.created_at, users.updated_at) > '2024-01-01'",
+			expectedTable: "users",
+			expectedCol:   "created_at",
+		},
 	}
 
 	for _, tt := range tests {
@@ -351,6 +393,14 @@ func TestSanitizeWhereClauseWithPreloads(t *testing.T) {
 				},
 			},
 			expected: "users.status = 'active' AND Department.name = 'Engineering'",
+		},
+
+		{
+			name:      "Function Call with correct table prefix - unchanged",
+			where:     "ifblnk(users.status,0) in (1,2,3,4)",
+			tableName: "users",
+			options:   nil,
+			expected:  "ifblnk(users.status,0) in (1,2,3,4)",
 		},
 		{
 			name:      "no options provided - works as before",

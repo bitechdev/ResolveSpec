@@ -430,7 +430,45 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	// Remove any quotes
 	columnRef = strings.Trim(columnRef, "`\"'")
 
-	// Check if it contains a dot (qualified reference)
+	// Check if there's a function call (contains opening parenthesis)
+	openParenIdx := strings.Index(columnRef, "(")
+
+	if openParenIdx >= 0 {
+		// There's a function call - find the FIRST dot after the opening paren
+		// This handles cases like: ifblnk(users.status, orders.status) - extracts users.status
+		dotIdx := strings.Index(columnRef[openParenIdx:], ".")
+		if dotIdx > 0 {
+			dotIdx += openParenIdx // Adjust to absolute position
+
+			// Extract table name (between paren and dot)
+			// Find the last opening paren before this dot
+			lastOpenParen := strings.LastIndex(columnRef[:dotIdx], "(")
+			table = columnRef[lastOpenParen+1 : dotIdx]
+
+			// Find the column name - it ends at comma, closing paren, whitespace, or end of string
+			columnStart := dotIdx + 1
+			columnEnd := len(columnRef)
+
+			for i := columnStart; i < len(columnRef); i++ {
+				ch := columnRef[i]
+				if ch == ',' || ch == ')' || ch == ' ' || ch == '\t' {
+					columnEnd = i
+					break
+				}
+			}
+
+			column = columnRef[columnStart:columnEnd]
+
+			// Remove quotes from table and column if present
+			table = strings.Trim(table, "`\"'")
+			column = strings.Trim(column, "`\"'")
+
+			return table, column
+		}
+	}
+
+	// No function call - check if it contains a dot (qualified reference)
+	// Use LastIndex to handle schema.table.column properly
 	if dotIdx := strings.LastIndex(columnRef, "."); dotIdx > 0 {
 		table = columnRef[:dotIdx]
 		column = columnRef[dotIdx+1:]

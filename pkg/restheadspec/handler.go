@@ -2266,14 +2266,14 @@ func filterExtendedOptions(validator *common.ColumnValidator, options ExtendedRe
 	filtered.ComputedQL = options.ComputedQL
 
 	// Filter Expand columns
-	filteredExpands := make([]ExpandOption, 0, len(options.Expand))
-	for _, expand := range options.Expand {
-		filteredExpand := expand
-		// Don't validate relation name, only columns
-		filteredExpand.Columns = validator.FilterValidColumns(expand.Columns)
-		filteredExpands = append(filteredExpands, filteredExpand)
-	}
-	filtered.Expand = filteredExpands
+	// filteredExpands := make([]ExpandOption, 0, len(options.Expand))
+	// for _, expand := range options.Expand {
+	// 	filteredExpand := expand
+	// 	// Don't validate relation name, only columns
+	// 	filteredExpand.Columns = validator.FilterValidColumns(expand.Columns)
+	// 	filteredExpands = append(filteredExpands, filteredExpand)
+	// }
+	// filtered.Expand = filteredExpands
 
 	return filtered
 }

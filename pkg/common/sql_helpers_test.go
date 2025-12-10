@@ -1,6 +1,7 @@
 package common
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
@@ -85,6 +86,42 @@ func TestSanitizeWhereClause(t *testing.T) {
 			tableName: "users",
 			expected:  "users.status = 'active' AND users.age > 18",
 		},
+		{
+			name:      "mixed case AND operators",
+			where:     "status = 'active' AND age > 18 and name = 'John'",
+			tableName: "users",
+			expected:  "status = 'active' AND age > 18 AND name = 'John'",
+		},
+		{
+			name:      "subquery with ORDER BY and LIMIT - allowed",
+			where:     "id IN (SELECT id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
+			tableName: "users",
+			expected:  "id IN (SELECT id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
+		},
+		{
+			name:      "dangerous DELETE keyword - blocked",
+			where:     "status = 'active'; DELETE FROM users",
+			tableName: "users",
+			expected:  "",
+		},
+		{
+			name:      "dangerous UPDATE keyword - blocked",
+			where:     "1=1; UPDATE users SET admin = true",
+			tableName: "users",
+			expected:  "",
+		},
+		{
+			name:      "dangerous TRUNCATE keyword - blocked",
+			where:     "status = 'active' OR TRUNCATE TABLE users",
+			tableName: "users",
+			expected:  "",
+		},
+		{
+			name:      "dangerous DROP keyword - blocked",
+			where:     "status = 'active'; DROP TABLE users",
+			tableName: "users",
+			expected:  "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -137,6 +174,11 @@ func TestStripOuterParentheses(t *testing.T) {
 			name:     "with spaces",
 			input:    "  ( true )  ",
 			expected: "true",
+		},
+		{
+			name:     "complex sub query",
+			input:    "(a = 1 AND b = 2 or c = 3 and (select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3)",
+			expected: "a = 1 AND b = 2 or c = 3 and (select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3",
 		},
 	}
 
@@ -335,6 +377,131 @@ type MasterTask struct {
 	Name   string `bun:"name"`
 	Status string `bun:"status"`
 	UserID int    `bun:"user_id"`
+}
+
+func TestSplitByAND(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "uppercase AND",
+			input:    "status = 'active' AND age > 18",
+			expected: []string{"status = 'active'", "age > 18"},
+		},
+		{
+			name:     "lowercase and",
+			input:    "status = 'active' and age > 18",
+			expected: []string{"status = 'active'", "age > 18"},
+		},
+		{
+			name:     "mixed case AND",
+			input:    "status = 'active' AND age > 18 and name = 'John'",
+			expected: []string{"status = 'active'", "age > 18", "name = 'John'"},
+		},
+		{
+			name:     "single condition",
+			input:    "status = 'active'",
+			expected: []string{"status = 'active'"},
+		},
+		{
+			name:     "multiple uppercase AND",
+			input:    "a = 1 AND b = 2 AND c = 3",
+			expected: []string{"a = 1", "b = 2", "c = 3"},
+		},
+		{
+			name:     "multiple case subquery",
+			input:    "a = 1 AND b = 2 AND c = 3 and (select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3",
+			expected: []string{"a = 1", "b = 2", "c = 3", "(select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := splitByAND(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("splitByAND(%q) returned %d conditions; want %d", tt.input, len(result), len(tt.expected))
+				return
+			}
+			for i := range result {
+				if strings.TrimSpace(result[i]) != strings.TrimSpace(tt.expected[i]) {
+					t.Errorf("splitByAND(%q)[%d] = %q; want %q", tt.input, i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestValidateWhereClauseSecurity(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectError bool
+	}{
+		{
+			name:        "safe WHERE clause",
+			input:       "status = 'active' AND age > 18",
+			expectError: false,
+		},
+		{
+			name:        "safe subquery",
+			input:       "id IN (SELECT id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
+			expectError: false,
+		},
+		{
+			name:        "DELETE keyword",
+			input:       "status = 'active'; DELETE FROM users",
+			expectError: true,
+		},
+		{
+			name:        "UPDATE keyword",
+			input:       "1=1; UPDATE users SET admin = true",
+			expectError: true,
+		},
+		{
+			name:        "TRUNCATE keyword",
+			input:       "status = 'active' OR TRUNCATE TABLE users",
+			expectError: true,
+		},
+		{
+			name:        "DROP keyword",
+			input:       "status = 'active'; DROP TABLE users",
+			expectError: true,
+		},
+		{
+			name:        "INSERT keyword",
+			input:       "status = 'active'; INSERT INTO users (name) VALUES ('hacker')",
+			expectError: true,
+		},
+		{
+			name:        "ALTER keyword",
+			input:       "1=1; ALTER TABLE users ADD COLUMN is_admin BOOLEAN",
+			expectError: true,
+		},
+		{
+			name:        "CREATE keyword",
+			input:       "1=1; CREATE TABLE malicious (id INT)",
+			expectError: true,
+		},
+		{
+			name:        "empty clause",
+			input:       "",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateWhereClauseSecurity(tt.input)
+			if tt.expectError && err == nil {
+				t.Errorf("validateWhereClauseSecurity(%q) expected error but got none", tt.input)
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("validateWhereClauseSecurity(%q) unexpected error: %v", tt.input, err)
+			}
+		})
+	}
 }
 
 func TestSanitizeWhereClauseWithModel(t *testing.T) {

@@ -1,6 +1,7 @@
 package common
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -78,6 +79,41 @@ func IsTrivialCondition(cond string) bool {
 	return false
 }
 
+// validateWhereClauseSecurity checks for dangerous SQL statements in WHERE clauses
+// Returns an error if any dangerous keywords are found
+func validateWhereClauseSecurity(where string) error {
+	if where == "" {
+		return nil
+	}
+
+	lowerWhere := strings.ToLower(where)
+
+	// List of dangerous SQL keywords that should never appear in WHERE clauses
+	dangerousKeywords := []string{
+		"delete ", "delete\t", "delete\n", "delete;",
+		"update ", "update\t", "update\n", "update;",
+		"truncate ", "truncate\t", "truncate\n", "truncate;",
+		"drop ", "drop\t", "drop\n", "drop;",
+		"alter ", "alter\t", "alter\n", "alter;",
+		"create ", "create\t", "create\n", "create;",
+		"insert ", "insert\t", "insert\n", "insert;",
+		"grant ", "grant\t", "grant\n", "grant;",
+		"revoke ", "revoke\t", "revoke\n", "revoke;",
+		"exec ", "exec\t", "exec\n", "exec;",
+		"execute ", "execute\t", "execute\n", "execute;",
+		";delete", ";update", ";truncate", ";drop", ";alter", ";create", ";insert",
+	}
+
+	for _, keyword := range dangerousKeywords {
+		if strings.Contains(lowerWhere, keyword) {
+			logger.Error("Dangerous SQL keyword detected in WHERE clause: %s", strings.TrimSpace(keyword))
+			return fmt.Errorf("dangerous SQL keyword detected in WHERE clause: %s", strings.TrimSpace(keyword))
+		}
+	}
+
+	return nil
+}
+
 // SanitizeWhereClause removes trivial conditions and fixes incorrect table prefixes
 // This function should be used everywhere a WHERE statement is sent to ensure clean, efficient SQL
 //
@@ -99,6 +135,12 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 	}
 
 	where = strings.TrimSpace(where)
+
+	// Validate that the WHERE clause doesn't contain dangerous SQL statements
+	if err := validateWhereClauseSecurity(where); err != nil {
+		logger.Debug("Security validation failed for WHERE clause: %v", err)
+		return ""
+	}
 
 	// Strip outer parentheses and re-trim
 	where = stripOuterParentheses(where)
@@ -221,19 +263,57 @@ func stripOuterParentheses(s string) string {
 }
 
 // splitByAND splits a WHERE clause by AND operators (case-insensitive)
-// This is a simple split that doesn't handle nested parentheses or complex expressions
+// This is parenthesis-aware and won't split on AND operators inside subqueries
 func splitByAND(where string) []string {
-	// First try uppercase AND
-	conditions := strings.Split(where, " AND ")
+	conditions := []string{}
+	currentCondition := strings.Builder{}
+	depth := 0 // Track parenthesis depth
+	i := 0
 
-	// If we didn't split on uppercase, try lowercase
-	if len(conditions) == 1 {
-		conditions = strings.Split(where, " and ")
+	for i < len(where) {
+		ch := where[i]
+
+		// Track parenthesis depth
+		if ch == '(' {
+			depth++
+			currentCondition.WriteByte(ch)
+			i++
+			continue
+		} else if ch == ')' {
+			depth--
+			currentCondition.WriteByte(ch)
+			i++
+			continue
+		}
+
+		// Only look for AND operators at depth 0 (not inside parentheses)
+		if depth == 0 {
+			// Check if we're at an AND operator (case-insensitive)
+			// We need at least " AND " (5 chars) or " and " (5 chars)
+			if i+5 <= len(where) {
+				substring := where[i : i+5]
+				lowerSubstring := strings.ToLower(substring)
+
+				if lowerSubstring == " and " {
+					// Found an AND operator at the top level
+					// Add the current condition to the list
+					conditions = append(conditions, currentCondition.String())
+					currentCondition.Reset()
+					// Skip past the AND operator
+					i += 5
+					continue
+				}
+			}
+		}
+
+		// Not an AND operator or we're inside parentheses, just add the character
+		currentCondition.WriteByte(ch)
+		i++
 	}
 
-	// If we still didn't split, try mixed case
-	if len(conditions) == 1 {
-		conditions = strings.Split(where, " And ")
+	// Add the last condition
+	if currentCondition.Len() > 0 {
+		conditions = append(conditions, currentCondition.String())
 	}
 
 	return conditions

@@ -450,7 +450,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 
 		// Apply the preload with recursive support
-		query = h.applyPreloadWithRecursion(query, preload, model, 0)
+		query = h.applyPreloadWithRecursion(query, preload, options.Preload, model, 0)
 	}
 
 	// Apply DISTINCT if requested
@@ -480,8 +480,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (AND condition)
 	if options.CustomSQLWhere != "" {
 		logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
-		// Sanitize without auto-prefixing since custom SQL may reference multiple tables
-		sanitizedWhere := common.SanitizeWhereClause(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
+		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+		sanitizedWhere := common.SanitizeWhereClause(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedWhere != "" {
 			query = query.Where(sanitizedWhere)
 		}
@@ -490,8 +490,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (OR condition)
 	if options.CustomSQLOr != "" {
 		logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
-		// Sanitize without auto-prefixing since custom SQL may reference multiple tables
-		sanitizedOr := common.SanitizeWhereClause(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
+		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+		sanitizedOr := common.SanitizeWhereClause(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedOr != "" {
 			query = query.WhereOr(sanitizedOr)
 		}
@@ -625,7 +625,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Apply cursor filter to query
 		if cursorFilter != "" {
 			logger.Debug("Applying cursor filter: %s", cursorFilter)
-			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName))
+			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 			if sanitizedCursor != "" {
 				query = query.Where(sanitizedCursor)
 			}
@@ -703,7 +703,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 }
 
 // applyPreloadWithRecursion applies a preload with support for ComputedQL and recursive preloading
-func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload common.PreloadOption, model interface{}, depth int) common.SelectQuery {
+func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload common.PreloadOption, allPreloads []common.PreloadOption, model interface{}, depth int) common.SelectQuery {
 	// Log relationship keys if they're specified (from XFiles)
 	if preload.RelatedKey != "" || preload.ForeignKey != "" || preload.PrimaryKey != "" {
 		logger.Debug("Preload %s has relationship keys - PK: %s, RelatedKey: %s, ForeignKey: %s",
@@ -799,7 +799,9 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 
 		// Apply WHERE clause
 		if len(preload.Where) > 0 {
-			sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation))
+			// Build RequestOptions with all preloads to allow references to sibling relations
+			preloadOpts := &common.RequestOptions{Preload: allPreloads}
+			sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
 			if len(sanitizedWhere) > 0 {
 				sq = sq.Where(sanitizedWhere)
 			}
@@ -832,7 +834,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		recursivePreload.Relation = preload.Relation + "." + lastRelationName
 
 		// Recursively apply preload until we reach depth 5
-		query = h.applyPreloadWithRecursion(query, recursivePreload, model, depth+1)
+		query = h.applyPreloadWithRecursion(query, recursivePreload, allPreloads, model, depth+1)
 	}
 
 	return query

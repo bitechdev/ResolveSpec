@@ -316,7 +316,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Apply cursor filter to query
 		if cursorFilter != "" {
 			logger.Debug("Applying cursor filter: %s", cursorFilter)
-			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName))
+			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options)
 			if sanitizedCursor != "" {
 				query = query.Where(sanitizedCursor)
 			}
@@ -1351,7 +1351,9 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 			}
 
 			if len(preload.Where) > 0 {
-				sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation))
+				// Build RequestOptions with all preloads to allow references to sibling relations
+				preloadOpts := &common.RequestOptions{Preload: preloads}
+				sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
 				if len(sanitizedWhere) > 0 {
 					sq = sq.Where(sanitizedWhere)
 				}

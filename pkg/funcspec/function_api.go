@@ -20,15 +20,23 @@ import (
 
 // Handler handles function-based SQL API requests
 type Handler struct {
-	db    common.Database
-	hooks *HookRegistry
+	db                common.Database
+	hooks             *HookRegistry
+	variablesCallback func(r *http.Request) map[string]interface{}
 }
 
 type SqlQueryOptions struct {
-	GetVariablesCallback func(w http.ResponseWriter, r *http.Request) map[string]interface{}
-	NoCount              bool
-	BlankParams          bool
-	AllowFilter          bool
+	NoCount     bool
+	BlankParams bool
+	AllowFilter bool
+}
+
+func NewSqlQueryOptions() SqlQueryOptions {
+	return SqlQueryOptions{
+		NoCount:     false,
+		BlankParams: true,
+		AllowFilter: true,
+	}
 }
 
 // NewHandler creates a new function API handler
@@ -43,6 +51,14 @@ func NewHandler(db common.Database) *Handler {
 // Implements common.SpecHandler interface
 func (h *Handler) GetDatabase() common.Database {
 	return h.db
+}
+
+func (h *Handler) SetVariablesCallback(callback func(r *http.Request) map[string]interface{}) {
+	h.variablesCallback = callback
+}
+
+func (h *Handler) GetVariablesCallback() func(r *http.Request) map[string]interface{} {
+	return h.variablesCallback
 }
 
 // Hooks returns the hook registry for this handler
@@ -77,9 +93,7 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 		inputvars := make([]string, 0)
 		metainfo := make(map[string]interface{})
 		variables := make(map[string]interface{})
-		if options.GetVariablesCallback != nil {
-			variables = options.GetVariablesCallback(w, r)
-		}
+
 		complexAPI := false
 
 		// Get user context from security package
@@ -416,9 +430,7 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 		inputvars := make([]string, 0)
 		metainfo := make(map[string]interface{})
 		variables := make(map[string]interface{})
-		if options.GetVariablesCallback != nil {
-			variables = options.GetVariablesCallback(w, r)
-		}
+
 		dbobj := make(map[string]interface{})
 		complexAPI := false
 
@@ -644,8 +656,18 @@ func (h *Handler) extractInputVariables(sqlquery string, inputvars *[]string) st
 
 // mergePathParams merges URL path parameters into the SQL query
 func (h *Handler) mergePathParams(r *http.Request, sqlquery string, variables map[string]interface{}) string {
-	// Note: Path parameters would typically come from a router like gorilla/mux
-	// For now, this is a placeholder for path parameter extraction
+
+	if h.GetVariablesCallback() != nil {
+		pathVars := h.GetVariablesCallback()(r)
+		for k, v := range pathVars {
+			kword := fmt.Sprintf("[%s]", k)
+			if strings.Contains(sqlquery, kword) {
+				sqlquery = strings.ReplaceAll(sqlquery, kword, fmt.Sprintf("%v", v))
+			}
+			variables[k] = v
+
+		}
+	}
 	return sqlquery
 }
 

@@ -111,7 +111,7 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 	var dataJSON sql.NullString
 
 	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_login($1::jsonb)`
-	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
+	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
 	}
@@ -145,7 +145,7 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 	var dataJSON sql.NullString
 
 	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_logout($1::jsonb)`
-	err = a.db.QueryRowContext(ctx, query, reqJSON).Scan(&success, &errorMsg, &dataJSON)
+	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
 	}
@@ -297,7 +297,7 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 	var updatedUserJSON sql.NullString
 
 	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session_update($1, $2::jsonb)`
-	_ = a.db.QueryRowContext(ctx, query, sessionToken, userJSON).Scan(&success, &errorMsg, &updatedUserJSON)
+	_ = a.db.QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON)
 }
 
 // RefreshToken implements Refreshable interface

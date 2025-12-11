@@ -1,0 +1,82 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Create Go Release (Tag Versioning)
+
+on:
+  workflow_dispatch:
+    inputs:
+      semver:
+        description: "New Version"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  tag_and_commit:
+    name: "Tag and Commit  ${{ github.event.inputs.semver }}"
+    runs-on: linux
+    permissions:
+      contents: write # 'write' access to repository contents
+      pull-requests: write # 'write' access to pull requests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "Hein"
+          git config --global user.email "hein.puth@gmail.com"
+
+      - name: Fetch latest tag
+        id: latest_tag
+        run: |
+          git fetch --tags
+          latest_tag=$(git describe --tags `git rev-list --tags --max-count=1`)
+          echo "::set-output name=tag::$latest_tag"
+
+      - name: Determine new tag version
+        id: new_tag
+        run: |
+          current_tag=${{ steps.latest_tag.outputs.tag }}
+          version=$(echo $current_tag | cut -c 2-)  # remove the leading 'v'
+          IFS='.' read -r -a version_parts <<< "$version"
+          major=${version_parts[0]}
+          minor=${version_parts[1]}
+          patch=${version_parts[2]}
+          case "${{ github.event.inputs.semver }}" in
+            "patch")
+              ((patch++))
+              ;;
+            "minor")
+              ((minor++))
+              patch=0
+              ;;
+            "release")
+              ((major++))
+              minor=0
+              patch=0
+              ;;
+            *)
+              echo "Invalid semver input"
+              exit 1
+              ;;
+          esac
+          new_tag="v$major.$minor.$patch"
+          echo "::set-output name=tag::$new_tag"
+
+      - name: Create tag
+        run: |
+          git tag -a ${{ steps.new_tag.outputs.tag }} -m "Tagging ${{ steps.new_tag.outputs.tag }} for release"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.BITECH_GITHUB_TOKEN }}
+          force: true
+          tags: true

@@ -532,7 +532,7 @@ func TestSqlQuery(t *testing.T) {
 			req := createTestRequest("GET", "/test", tt.queryParams, tt.headers, nil)
 			w := httptest.NewRecorder()
 
-			handlerFunc := handler.SqlQuery(tt.sqlQuery, tt.blankParams)
+			handlerFunc := handler.SqlQuery(tt.sqlQuery, SqlQueryOptions{BlankParams: tt.blankParams})
 			handlerFunc(w, req)
 
 			if w.Code != tt.expectedStatus {
@@ -655,7 +655,7 @@ func TestSqlQueryList(t *testing.T) {
 			req := createTestRequest("GET", "/test", tt.queryParams, tt.headers, nil)
 			w := httptest.NewRecorder()
 
-			handlerFunc := handler.SqlQueryList(tt.sqlQuery, tt.noCount, tt.blankParams, tt.allowFilter)
+			handlerFunc := handler.SqlQueryList(tt.sqlQuery, SqlQueryOptions{NoCount: tt.noCount, BlankParams: tt.blankParams, AllowFilter: tt.allowFilter})
 			handlerFunc(w, req)
 
 			if w.Code != tt.expectedStatus {

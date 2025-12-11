@@ -576,7 +576,7 @@ func TestHookIntegrationWithHandler(t *testing.T) {
 	req := createTestRequest("GET", "/test", nil, nil, nil)
 	w := httptest.NewRecorder()
 
-	handlerFunc := handler.SqlQuery("SELECT * FROM users WHERE id = 1", false)
+	handlerFunc := handler.SqlQuery("SELECT * FROM users WHERE id = 1", SqlQueryOptions{})
 	handlerFunc(w, req)
 
 	if !hookCalled {

@@ -29,10 +29,11 @@ type LoginRequest struct {
 
 // LoginResponse contains the result of a login attempt
 type LoginResponse struct {
-	Token        string       `json:"token"`
-	RefreshToken string       `json:"refresh_token"`
-	User         *UserContext `json:"user"`
-	ExpiresIn    int64        `json:"expires_in"` // Token expiration in seconds
+	Token        string         `json:"token"`
+	RefreshToken string         `json:"refresh_token"`
+	User         *UserContext   `json:"user"`
+	ExpiresIn    int64          `json:"expires_in"` // Token expiration in seconds
+	Meta         map[string]any `json:"meta"`       // Additional metadata to be set on user context
 }
 
 // LogoutRequest contains information for logout

@@ -300,6 +300,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		Options:   options,
 		ID:        id,
 		Writer:    w,
+		Tx:        h.db,
 	}
 
 	if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
@@ -866,6 +867,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		Options:   options,
 		Data:      data,
 		Writer:    w,
+		Tx:        h.db,
 	}
 
 	if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
@@ -955,6 +957,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				Data:      modelValue,
 				Writer:    w,
 				Query:     query,
+				Tx:        tx,
 			}
 			if err := h.hooks.Execute(BeforeScan, itemHookCtx); err != nil {
 				return fmt.Errorf("BeforeScan hook failed for item %d: %w", i, err)
@@ -1047,6 +1050,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		Schema:    schema,
 		Entity:    entity,
 		TableName: tableName,
+		Tx:        h.db,
 		Model:     model,
 		Options:   options,
 		ID:        id,
@@ -1122,6 +1126,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it
 		hookCtx.Query = query
+		hookCtx.Tx = tx
 		if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
 			return fmt.Errorf("BeforeScan hook failed: %w", err)
 		}
@@ -1217,6 +1222,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 						Model:     model,
 						ID:        itemID,
 						Writer:    w,
+						Tx:        tx,
 					}
 
 					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
@@ -1285,6 +1291,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 						Model:     model,
 						ID:        itemIDStr,
 						Writer:    w,
+						Tx:        tx,
 					}
 
 					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
@@ -1337,6 +1344,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 							Model:     model,
 							ID:        itemIDStr,
 							Writer:    w,
+							Tx:        tx,
 						}
 
 						if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
@@ -1390,6 +1398,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Model:     model,
 		ID:        id,
 		Writer:    w,
+		Tx:        h.db,
 	}
 
 	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {

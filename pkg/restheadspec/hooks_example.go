@@ -150,6 +150,50 @@ func ExampleRelatedDataHook(ctx *HookContext) error {
 	return nil
 }
 
+// ExampleTxHook demonstrates using the Tx field to execute additional SQL queries
+// The Tx field provides access to the database/transaction for custom queries
+func ExampleTxHook(ctx *HookContext) error {
+	// Example: Execute additional SQL operations alongside the main query
+	// This is useful for maintaining data consistency, updating related records, etc.
+
+	if ctx.Entity == "orders" && ctx.Data != nil {
+		// Example: Update inventory when an order is created
+		// Extract product ID and quantity from the order data
+		// dataMap, ok := ctx.Data.(map[string]interface{})
+		// if !ok {
+		// 	return fmt.Errorf("invalid data format")
+		// }
+		// productID := dataMap["product_id"]
+		// quantity := dataMap["quantity"]
+
+		// Use ctx.Tx to execute additional SQL queries
+		// The Tx field contains the same database/transaction as the main operation
+		// If inside a transaction, your queries will be part of the same transaction
+		// query := ctx.Tx.NewUpdate().
+		// 	Table("inventory").
+		// 	Set("quantity = quantity - ?", quantity).
+		// 	Where("product_id = ?", productID)
+		//
+		// if _, err := query.Exec(ctx.Context); err != nil {
+		// 	logger.Error("Failed to update inventory: %v", err)
+		// 	return fmt.Errorf("failed to update inventory: %w", err)
+		// }
+
+		// You can also execute raw SQL using ctx.Tx
+		// var result []map[string]interface{}
+		// err := ctx.Tx.Query(ctx.Context, &result,
+		// 	"INSERT INTO order_history (order_id, status) VALUES (?, ?)",
+		// 	orderID, "pending")
+		// if err != nil {
+		// 	return fmt.Errorf("failed to insert order history: %w", err)
+		// }
+
+		logger.Debug("Executed additional SQL for order entity")
+	}
+
+	return nil
+}
+
 // SetupExampleHooks demonstrates how to register hooks on a handler
 func SetupExampleHooks(handler *Handler) {
 	hooks := handler.Hooks()

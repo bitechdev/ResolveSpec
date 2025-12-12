@@ -55,6 +55,10 @@ type HookContext struct {
 
 	// Response writer - allows hooks to modify response
 	Writer common.ResponseWriter
+
+	// Tx provides access to the database/transaction for executing additional SQL
+	// This allows hooks to run custom queries in addition to the main Query chain
+	Tx common.Database
 }
 
 // HookFunc is the signature for hook functions

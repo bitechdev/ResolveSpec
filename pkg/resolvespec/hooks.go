@@ -56,6 +56,10 @@ type HookContext struct {
 	Abort        bool   // If set to true, the operation will be aborted
 	AbortMessage string // Message to return if aborted
 	AbortCode    int    // HTTP status code if aborted
+
+	// Tx provides access to the database/transaction for executing additional SQL
+	// This allows hooks to run custom queries in addition to the main Query chain
+	Tx common.Database
 }
 
 // HookFunc is the signature for hook functions

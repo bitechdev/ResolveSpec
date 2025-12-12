@@ -137,6 +137,10 @@ func (p *PgSQLAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 	return fn(adapter)
 }
 
+func (p *PgSQLAdapter) GetUnderlyingDB() interface{} {
+	return p.db
+}
+
 // preloadConfig represents a relationship to be preloaded
 type preloadConfig struct {
 	relation   string
@@ -895,6 +899,10 @@ func (p *PgSQLTxAdapter) RollbackTx(ctx context.Context) error {
 
 func (p *PgSQLTxAdapter) RunInTransaction(ctx context.Context, fn func(common.Database) error) error {
 	return fn(p)
+}
+
+func (p *PgSQLTxAdapter) GetUnderlyingDB() interface{} {
+	return p.tx
 }
 
 // applyJoinPreloads adds JOINs for relationships that should use JOIN strategy

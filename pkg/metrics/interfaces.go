@@ -30,6 +30,15 @@ type Provider interface {
 	// UpdateCacheSize updates the cache size metric
 	UpdateCacheSize(provider string, size int64)
 
+	// RecordEventPublished records an event publication
+	RecordEventPublished(source, eventType string)
+
+	// RecordEventProcessed records an event processing with its status
+	RecordEventProcessed(source, eventType, status string, duration time.Duration)
+
+	// UpdateEventQueueSize updates the event queue size metric
+	UpdateEventQueueSize(size int64)
+
 	// Handler returns an HTTP handler for exposing metrics (e.g., /metrics endpoint)
 	Handler() http.Handler
 }
@@ -59,9 +68,13 @@ func (n *NoOpProvider) IncRequestsInFlight()                                    
 func (n *NoOpProvider) DecRequestsInFlight()                                                  {}
 func (n *NoOpProvider) RecordDBQuery(operation, table string, duration time.Duration, err error) {
 }
-func (n *NoOpProvider) RecordCacheHit(provider string)              {}
-func (n *NoOpProvider) RecordCacheMiss(provider string)             {}
-func (n *NoOpProvider) UpdateCacheSize(provider string, size int64) {}
+func (n *NoOpProvider) RecordCacheHit(provider string)                {}
+func (n *NoOpProvider) RecordCacheMiss(provider string)               {}
+func (n *NoOpProvider) UpdateCacheSize(provider string, size int64)   {}
+func (n *NoOpProvider) RecordEventPublished(source, eventType string) {}
+func (n *NoOpProvider) RecordEventProcessed(source, eventType, status string, duration time.Duration) {
+}
+func (n *NoOpProvider) UpdateEventQueueSize(size int64) {}
 func (n *NoOpProvider) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

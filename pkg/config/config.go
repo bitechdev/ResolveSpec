@@ -12,6 +12,7 @@ type Config struct {
 	Middleware    MiddlewareConfig    `mapstructure:"middleware"`
 	CORS          CORSConfig          `mapstructure:"cors"`
 	Database      DatabaseConfig      `mapstructure:"database"`
+	EventBroker   EventBrokerConfig   `mapstructure:"event_broker"`
 }
 
 // ServerConfig holds server-related configuration
@@ -90,4 +91,53 @@ type ErrorTrackingConfig struct {
 	Debug            bool    `mapstructure:"debug"`              // Enable debug mode
 	SampleRate       float64 `mapstructure:"sample_rate"`        // Error sample rate (0.0-1.0)
 	TracesSampleRate float64 `mapstructure:"traces_sample_rate"` // Traces sample rate (0.0-1.0)
+}
+
+// EventBrokerConfig contains configuration for the event broker
+type EventBrokerConfig struct {
+	Enabled     bool                         `mapstructure:"enabled"`
+	Provider    string                       `mapstructure:"provider"` // memory, redis, nats, database
+	Mode        string                       `mapstructure:"mode"`     // sync, async
+	WorkerCount int                          `mapstructure:"worker_count"`
+	BufferSize  int                          `mapstructure:"buffer_size"`
+	InstanceID  string                       `mapstructure:"instance_id"`
+	Redis       EventBrokerRedisConfig       `mapstructure:"redis"`
+	NATS        EventBrokerNATSConfig        `mapstructure:"nats"`
+	Database    EventBrokerDatabaseConfig    `mapstructure:"database"`
+	RetryPolicy EventBrokerRetryPolicyConfig `mapstructure:"retry_policy"`
+}
+
+// EventBrokerRedisConfig contains Redis-specific configuration
+type EventBrokerRedisConfig struct {
+	StreamName    string `mapstructure:"stream_name"`
+	ConsumerGroup string `mapstructure:"consumer_group"`
+	MaxLen        int64  `mapstructure:"max_len"`
+	Host          string `mapstructure:"host"`
+	Port          int    `mapstructure:"port"`
+	Password      string `mapstructure:"password"`
+	DB            int    `mapstructure:"db"`
+}
+
+// EventBrokerNATSConfig contains NATS-specific configuration
+type EventBrokerNATSConfig struct {
+	URL        string        `mapstructure:"url"`
+	StreamName string        `mapstructure:"stream_name"`
+	Subjects   []string      `mapstructure:"subjects"`
+	Storage    string        `mapstructure:"storage"` // file, memory
+	MaxAge     time.Duration `mapstructure:"max_age"`
+}
+
+// EventBrokerDatabaseConfig contains database provider configuration
+type EventBrokerDatabaseConfig struct {
+	TableName    string        `mapstructure:"table_name"`
+	Channel      string        `mapstructure:"channel"` // PostgreSQL NOTIFY channel name
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+}
+
+// EventBrokerRetryPolicyConfig contains retry policy configuration
+type EventBrokerRetryPolicyConfig struct {
+	MaxRetries    int           `mapstructure:"max_retries"`
+	InitialDelay  time.Duration `mapstructure:"initial_delay"`
+	MaxDelay      time.Duration `mapstructure:"max_delay"`
+	BackoffFactor float64       `mapstructure:"backoff_factor"`
 }

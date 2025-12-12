@@ -196,6 +196,10 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 	})
 }
 
+func (b *BunAdapter) GetUnderlyingDB() interface{} {
+	return b.db
+}
+
 // BunSelectQuery implements SelectQuery for Bun
 type BunSelectQuery struct {
 	query            *bun.SelectQuery
@@ -1207,4 +1211,8 @@ func (b *BunTxAdapter) RollbackTx(ctx context.Context) error {
 
 func (b *BunTxAdapter) RunInTransaction(ctx context.Context, fn func(common.Database) error) error {
 	return fn(b) // Already in transaction
+}
+
+func (b *BunTxAdapter) GetUnderlyingDB() interface{} {
+	return b.tx
 }

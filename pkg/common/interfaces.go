@@ -24,6 +24,12 @@ type Database interface {
 	CommitTx(ctx context.Context) error
 	RollbackTx(ctx context.Context) error
 	RunInTransaction(ctx context.Context, fn func(Database) error) error
+
+	// GetUnderlyingDB returns the underlying database connection
+	// For GORM, this returns *gorm.DB
+	// For Bun, this returns *bun.DB
+	// This is useful for provider-specific features like PostgreSQL NOTIFY/LISTEN
+	GetUnderlyingDB() interface{}
 }
 
 // SelectQuery interface for building SELECT queries (compatible with both GORM and Bun)

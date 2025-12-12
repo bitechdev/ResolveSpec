@@ -102,6 +102,10 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 	})
 }
 
+func (g *GormAdapter) GetUnderlyingDB() interface{} {
+	return g.db
+}
+
 // GormSelectQuery implements SelectQuery for GORM
 type GormSelectQuery struct {
 	db             *gorm.DB

@@ -70,6 +70,10 @@ func (m *MockDatabase) RunInTransaction(ctx context.Context, fn func(common.Data
 	return fn(m)
 }
 
+func (m *MockDatabase) GetUnderlyingDB() interface{} {
+	return m
+}
+
 // MockResult implements common.Result interface for testing
 type MockResult struct {
 	rows int64

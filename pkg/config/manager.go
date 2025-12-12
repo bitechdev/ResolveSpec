@@ -165,4 +165,39 @@ func setDefaults(v *viper.Viper) {
 
 	// Database defaults
 	v.SetDefault("database.url", "")
+
+	// Event Broker defaults
+	v.SetDefault("event_broker.enabled", false)
+	v.SetDefault("event_broker.provider", "memory")
+	v.SetDefault("event_broker.mode", "async")
+	v.SetDefault("event_broker.worker_count", 10)
+	v.SetDefault("event_broker.buffer_size", 1000)
+	v.SetDefault("event_broker.instance_id", "")
+
+	// Event Broker - Redis defaults
+	v.SetDefault("event_broker.redis.stream_name", "resolvespec:events")
+	v.SetDefault("event_broker.redis.consumer_group", "resolvespec-workers")
+	v.SetDefault("event_broker.redis.max_len", 10000)
+	v.SetDefault("event_broker.redis.host", "localhost")
+	v.SetDefault("event_broker.redis.port", 6379)
+	v.SetDefault("event_broker.redis.password", "")
+	v.SetDefault("event_broker.redis.db", 0)
+
+	// Event Broker - NATS defaults
+	v.SetDefault("event_broker.nats.url", "nats://localhost:4222")
+	v.SetDefault("event_broker.nats.stream_name", "RESOLVESPEC_EVENTS")
+	v.SetDefault("event_broker.nats.subjects", []string{"events.>"})
+	v.SetDefault("event_broker.nats.storage", "file")
+	v.SetDefault("event_broker.nats.max_age", "24h")
+
+	// Event Broker - Database defaults
+	v.SetDefault("event_broker.database.table_name", "events")
+	v.SetDefault("event_broker.database.channel", "resolvespec_events")
+	v.SetDefault("event_broker.database.poll_interval", "1s")
+
+	// Event Broker - Retry Policy defaults
+	v.SetDefault("event_broker.retry_policy.max_retries", 3)
+	v.SetDefault("event_broker.retry_policy.initial_delay", "1s")
+	v.SetDefault("event_broker.retry_policy.max_delay", "30s")
+	v.SetDefault("event_broker.retry_policy.backoff_factor", 2.0)
 }

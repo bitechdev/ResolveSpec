@@ -1220,8 +1220,14 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Ensure ID is in the data map for the update
 		dataMap[pkName] = targetID
 
-		// Create update query
-		query := tx.NewUpdate().Table(tableName).SetMap(dataMap)
+		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
+		modelInstance := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		if err := reflection.MapToStruct(dataMap, modelInstance); err != nil {
+			return fmt.Errorf("failed to populate model from data: %w", err)
+		}
+
+		// Create update query using Model() to preserve custom types and driver.Valuer interfaces
+		query := tx.NewUpdate().Model(modelInstance).Table(tableName)
 		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it

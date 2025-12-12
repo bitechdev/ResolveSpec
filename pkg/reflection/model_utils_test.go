@@ -1687,3 +1687,201 @@ func TestGetRelationModel_WithTags(t *testing.T) {
 		})
 	}
 }
+
+func TestMapToStruct(t *testing.T) {
+	// Test model with various field types
+	type TestModel struct {
+		ID       int64   `bun:"id,pk" json:"id"`
+		Name     string  `bun:"name" json:"name"`
+		Age      int     `bun:"age" json:"age"`
+		Active   bool    `bun:"active" json:"active"`
+		Score    float64 `bun:"score" json:"score"`
+		Data     []byte  `bun:"data" json:"data"`
+		MetaJSON []byte  `bun:"meta_json" json:"meta_json"`
+	}
+
+	tests := []struct {
+		name     string
+		dataMap  map[string]interface{}
+		expected TestModel
+		wantErr  bool
+	}{
+		{
+			name: "Basic types conversion",
+			dataMap: map[string]interface{}{
+				"id":     int64(123),
+				"name":   "Test User",
+				"age":    30,
+				"active": true,
+				"score":  95.5,
+			},
+			expected: TestModel{
+				ID:     123,
+				Name:   "Test User",
+				Age:    30,
+				Active: true,
+				Score:  95.5,
+			},
+			wantErr: false,
+		},
+		{
+			name: "Byte slice (SqlJSONB-like) from []byte",
+			dataMap: map[string]interface{}{
+				"id":   int64(456),
+				"name": "JSON Test",
+				"data": []byte(`{"key":"value"}`),
+			},
+			expected: TestModel{
+				ID:   456,
+				Name: "JSON Test",
+				Data: []byte(`{"key":"value"}`),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Byte slice from string",
+			dataMap: map[string]interface{}{
+				"id":   int64(789),
+				"data": "string data",
+			},
+			expected: TestModel{
+				ID:   789,
+				Data: []byte("string data"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Byte slice from map (JSON marshal)",
+			dataMap: map[string]interface{}{
+				"id": int64(999),
+				"meta_json": map[string]interface{}{
+					"field1": "value1",
+					"field2": 42,
+				},
+			},
+			expected: TestModel{
+				ID:       999,
+				MetaJSON: []byte(`{"field1":"value1","field2":42}`),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Byte slice from slice (JSON marshal)",
+			dataMap: map[string]interface{}{
+				"id":        int64(111),
+				"meta_json": []interface{}{"item1", "item2", 3},
+			},
+			expected: TestModel{
+				ID:       111,
+				MetaJSON: []byte(`["item1","item2",3]`),
+			},
+			wantErr: false,
+		},
+		{
+			name: "Field matching by bun tag",
+			dataMap: map[string]interface{}{
+				"id":   int64(222),
+				"name": "Tagged Field",
+			},
+			expected: TestModel{
+				ID:   222,
+				Name: "Tagged Field",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Nil values",
+			dataMap: map[string]interface{}{
+				"id":   int64(333),
+				"data": nil,
+			},
+			expected: TestModel{
+				ID:   333,
+				Data: nil,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result TestModel
+			err := MapToStruct(tt.dataMap, &result)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MapToStruct() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// Compare fields individually for better error messages
+			if result.ID != tt.expected.ID {
+				t.Errorf("ID = %v, want %v", result.ID, tt.expected.ID)
+			}
+			if result.Name != tt.expected.Name {
+				t.Errorf("Name = %v, want %v", result.Name, tt.expected.Name)
+			}
+			if result.Age != tt.expected.Age {
+				t.Errorf("Age = %v, want %v", result.Age, tt.expected.Age)
+			}
+			if result.Active != tt.expected.Active {
+				t.Errorf("Active = %v, want %v", result.Active, tt.expected.Active)
+			}
+			if result.Score != tt.expected.Score {
+				t.Errorf("Score = %v, want %v", result.Score, tt.expected.Score)
+			}
+
+			// For byte slices, compare as strings for JSON data
+			if tt.expected.Data != nil {
+				if string(result.Data) != string(tt.expected.Data) {
+					t.Errorf("Data = %s, want %s", string(result.Data), string(tt.expected.Data))
+				}
+			}
+			if tt.expected.MetaJSON != nil {
+				if string(result.MetaJSON) != string(tt.expected.MetaJSON) {
+					t.Errorf("MetaJSON = %s, want %s", string(result.MetaJSON), string(tt.expected.MetaJSON))
+				}
+			}
+		})
+	}
+}
+
+func TestMapToStruct_Errors(t *testing.T) {
+	type TestModel struct {
+		ID int `bun:"id" json:"id"`
+	}
+
+	tests := []struct {
+		name    string
+		dataMap map[string]interface{}
+		target  interface{}
+		wantErr bool
+	}{
+		{
+			name:    "Nil dataMap",
+			dataMap: nil,
+			target:  &TestModel{},
+			wantErr: true,
+		},
+		{
+			name:    "Nil target",
+			dataMap: map[string]interface{}{"id": 1},
+			target:  nil,
+			wantErr: true,
+		},
+		{
+			name:    "Non-pointer target",
+			dataMap: map[string]interface{}{"id": 1},
+			target:  TestModel{},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := MapToStruct(tt.dataMap, tt.target)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MapToStruct() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package reflection
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -895,6 +896,319 @@ func GetRelationModel(model interface{}, fieldName string) interface{} {
 	}
 
 	return currentModel
+}
+
+// MapToStruct populates a struct from a map while preserving custom types
+// It uses reflection to set struct fields based on map keys, matching by:
+// 1. Bun tag column name
+// 2. Gorm tag column name
+// 3. JSON tag name
+// 4. Field name (case-insensitive)
+// This preserves custom types that implement driver.Valuer like SqlJSONB
+func MapToStruct(dataMap map[string]interface{}, target interface{}) error {
+	if dataMap == nil || target == nil {
+		return fmt.Errorf("dataMap and target cannot be nil")
+	}
+
+	targetValue := reflect.ValueOf(target)
+	if targetValue.Kind() != reflect.Ptr {
+		return fmt.Errorf("target must be a pointer to a struct")
+	}
+
+	targetValue = targetValue.Elem()
+	if targetValue.Kind() != reflect.Struct {
+		return fmt.Errorf("target must be a pointer to a struct")
+	}
+
+	targetType := targetValue.Type()
+
+	// Create a map of column names to field indices for faster lookup
+	columnToField := make(map[string]int)
+	for i := 0; i < targetType.NumField(); i++ {
+		field := targetType.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Build list of possible column names for this field
+		var columnNames []string
+
+		// 1. Bun tag
+		if bunTag := field.Tag.Get("bun"); bunTag != "" && bunTag != "-" {
+			if colName := ExtractColumnFromBunTag(bunTag); colName != "" {
+				columnNames = append(columnNames, colName)
+			}
+		}
+
+		// 2. Gorm tag
+		if gormTag := field.Tag.Get("gorm"); gormTag != "" && gormTag != "-" {
+			if colName := ExtractColumnFromGormTag(gormTag); colName != "" {
+				columnNames = append(columnNames, colName)
+			}
+		}
+
+		// 3. JSON tag
+		if jsonTag := field.Tag.Get("json"); jsonTag != "" && jsonTag != "-" {
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] != "" {
+				columnNames = append(columnNames, parts[0])
+			}
+		}
+
+		// 4. Field name variations
+		columnNames = append(columnNames, field.Name)
+		columnNames = append(columnNames, strings.ToLower(field.Name))
+		columnNames = append(columnNames, ToSnakeCase(field.Name))
+
+		// Map all column name variations to this field index
+		for _, colName := range columnNames {
+			columnToField[strings.ToLower(colName)] = i
+		}
+	}
+
+	// Iterate through the map and set struct fields
+	for key, value := range dataMap {
+		// Find the field index for this key
+		fieldIndex, found := columnToField[strings.ToLower(key)]
+		if !found {
+			// Skip keys that don't map to any field
+			continue
+		}
+
+		field := targetValue.Field(fieldIndex)
+		if !field.CanSet() {
+			continue
+		}
+
+		// Set the value, preserving custom types
+		if err := setFieldValue(field, value); err != nil {
+			return fmt.Errorf("failed to set field %s: %w", targetType.Field(fieldIndex).Name, err)
+		}
+	}
+
+	return nil
+}
+
+// setFieldValue sets a reflect.Value from an interface{} value, handling type conversions
+func setFieldValue(field reflect.Value, value interface{}) error {
+	if value == nil {
+		// Set zero value for nil
+		field.Set(reflect.Zero(field.Type()))
+		return nil
+	}
+
+	valueReflect := reflect.ValueOf(value)
+
+	// If types match exactly, just set it
+	if valueReflect.Type().AssignableTo(field.Type()) {
+		field.Set(valueReflect)
+		return nil
+	}
+
+	// Handle pointer fields
+	if field.Kind() == reflect.Ptr {
+		if valueReflect.Kind() != reflect.Ptr {
+			// Create a new pointer and set its value
+			newPtr := reflect.New(field.Type().Elem())
+			if err := setFieldValue(newPtr.Elem(), value); err != nil {
+				return err
+			}
+			field.Set(newPtr)
+			return nil
+		}
+	}
+
+	// Handle conversions for basic types
+	switch field.Kind() {
+	case reflect.String:
+		if str, ok := value.(string); ok {
+			field.SetString(str)
+			return nil
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if num, ok := convertToInt64(value); ok {
+			if field.OverflowInt(num) {
+				return fmt.Errorf("integer overflow")
+			}
+			field.SetInt(num)
+			return nil
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if num, ok := convertToUint64(value); ok {
+			if field.OverflowUint(num) {
+				return fmt.Errorf("unsigned integer overflow")
+			}
+			field.SetUint(num)
+			return nil
+		}
+	case reflect.Float32, reflect.Float64:
+		if num, ok := convertToFloat64(value); ok {
+			if field.OverflowFloat(num) {
+				return fmt.Errorf("float overflow")
+			}
+			field.SetFloat(num)
+			return nil
+		}
+	case reflect.Bool:
+		if b, ok := value.(bool); ok {
+			field.SetBool(b)
+			return nil
+		}
+	case reflect.Slice:
+		// Handle []byte specially (for types like SqlJSONB)
+		if field.Type().Elem().Kind() == reflect.Uint8 {
+			switch v := value.(type) {
+			case []byte:
+				field.SetBytes(v)
+				return nil
+			case string:
+				field.SetBytes([]byte(v))
+				return nil
+			case map[string]interface{}, []interface{}:
+				// Marshal complex types to JSON for SqlJSONB fields
+				jsonBytes, err := json.Marshal(v)
+				if err != nil {
+					return fmt.Errorf("failed to marshal value to JSON: %w", err)
+				}
+				field.SetBytes(jsonBytes)
+				return nil
+			}
+		}
+	}
+
+	// Handle struct types (like SqlTimeStamp, SqlDate, SqlTime which wrap SqlNull[time.Time])
+	if field.Kind() == reflect.Struct {
+		// Try to find a "Val" field (for SqlNull types) and set it
+		valField := field.FieldByName("Val")
+		if valField.IsValid() && valField.CanSet() {
+			// Also set Valid field to true
+			validField := field.FieldByName("Valid")
+			if validField.IsValid() && validField.CanSet() && validField.Kind() == reflect.Bool {
+				// Set the Val field
+				if err := setFieldValue(valField, value); err != nil {
+					return err
+				}
+				// Set Valid to true
+				validField.SetBool(true)
+				return nil
+			}
+		}
+	}
+
+	// If we can convert the type, do it
+	if valueReflect.Type().ConvertibleTo(field.Type()) {
+		field.Set(valueReflect.Convert(field.Type()))
+		return nil
+	}
+
+	return fmt.Errorf("cannot convert %v to %v", valueReflect.Type(), field.Type())
+}
+
+// convertToInt64 attempts to convert various types to int64
+func convertToInt64(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case string:
+		if num, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return num, true
+		}
+	}
+	return 0, false
+}
+
+// convertToUint64 attempts to convert various types to uint64
+func convertToUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case int:
+		return uint64(v), true
+	case int8:
+		return uint64(v), true
+	case int16:
+		return uint64(v), true
+	case int32:
+		return uint64(v), true
+	case int64:
+		return uint64(v), true
+	case uint:
+		return uint64(v), true
+	case uint8:
+		return uint64(v), true
+	case uint16:
+		return uint64(v), true
+	case uint32:
+		return uint64(v), true
+	case uint64:
+		return v, true
+	case float32:
+		return uint64(v), true
+	case float64:
+		return uint64(v), true
+	case string:
+		if num, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return num, true
+		}
+	}
+	return 0, false
+}
+
+// convertToFloat64 attempts to convert various types to float64
+func convertToFloat64(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case float32:
+		return float64(v), true
+	case float64:
+		return v, true
+	case string:
+		if num, err := strconv.ParseFloat(v, 64); err == nil {
+			return num, true
+		}
+	}
+	return 0, false
 }
 
 // getRelationModelSingleLevel gets the model type for a single level field (non-recursive)

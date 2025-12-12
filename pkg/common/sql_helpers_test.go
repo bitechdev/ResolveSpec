@@ -33,16 +33,16 @@ func TestSanitizeWhereClause(t *testing.T) {
 			expected:  "",
 		},
 		{
-			name:      "valid condition with parentheses - no prefix added",
+			name:      "valid condition with parentheses - prefix added to prevent ambiguity",
 			where:     "(status = 'active')",
 			tableName: "users",
-			expected:  "status = 'active'",
+			expected:  "users.status = 'active'",
 		},
 		{
-			name:      "mixed trivial and valid conditions - no prefix added",
+			name:      "mixed trivial and valid conditions - prefix added",
 			where:     "true AND status = 'active' AND 1=1",
 			tableName: "users",
-			expected:  "status = 'active'",
+			expected:  "users.status = 'active'",
 		},
 		{
 			name:      "condition with correct table prefix - unchanged",
@@ -63,10 +63,10 @@ func TestSanitizeWhereClause(t *testing.T) {
 			expected:  "users.status = 'active' AND users.age > 18",
 		},
 		{
-			name:      "multiple valid conditions without prefix - no prefix added",
+			name:      "multiple valid conditions without prefix - prefixes added",
 			where:     "status = 'active' AND age > 18",
 			tableName: "users",
-			expected:  "status = 'active' AND age > 18",
+			expected:  "users.status = 'active' AND users.age > 18",
 		},
 		{
 			name:      "no table name provided",
@@ -90,13 +90,13 @@ func TestSanitizeWhereClause(t *testing.T) {
 			name:      "mixed case AND operators",
 			where:     "status = 'active' AND age > 18 and name = 'John'",
 			tableName: "users",
-			expected:  "status = 'active' AND age > 18 AND name = 'John'",
+			expected:  "users.status = 'active' AND users.age > 18 AND users.name = 'John'",
 		},
 		{
 			name:      "subquery with ORDER BY and LIMIT - allowed",
 			where:     "id IN (SELECT id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
 			tableName: "users",
-			expected:  "id IN (SELECT id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
+			expected:  "users.id IN (SELECT users.id FROM users WHERE status = 'active' ORDER BY created_at DESC LIMIT 10)",
 		},
 		{
 			name:      "dangerous DELETE keyword - blocked",

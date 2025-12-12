@@ -746,9 +746,29 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 
 			// Apply ComputedQL fields if any
 			if len(preload.ComputedQL) > 0 {
+				// Get the base table name from the related model
+				baseTableName := getTableNameFromModel(relatedModel)
+				// Convert the preload relation path to the Bun alias format
+				preloadAlias := relationPathToBunAlias(preload.Relation)
+
+				logger.Debug("Applying computed columns to preload %s (alias: %s, base table: %s)",
+					preload.Relation, preloadAlias, baseTableName)
+
 				for colName, colExpr := range preload.ComputedQL {
+					// Replace table references in the expression with the preload alias
+					// This fixes the ambiguous column reference issue when there are multiple
+					// levels of recursive/nested preloads
+					adjustedExpr := colExpr
+					if baseTableName != "" && preloadAlias != "" {
+						adjustedExpr = replaceTableReferencesInSQL(colExpr, baseTableName, preloadAlias)
+						if adjustedExpr != colExpr {
+							logger.Debug("Adjusted computed column expression for %s: '%s' -> '%s'",
+								colName, colExpr, adjustedExpr)
+						}
+					}
+
 					logger.Debug("Applying computed column to preload %s: %s", preload.Relation, colName)
-					sq = sq.ColumnExpr(fmt.Sprintf("(%s) AS %s", colExpr, colName))
+					sq = sq.ColumnExpr(fmt.Sprintf("(%s) AS %s", adjustedExpr, colName))
 					// Remove the computed column from selected columns to avoid duplication
 					for colIndex := range preload.Columns {
 						if preload.Columns[colIndex] == colName {
@@ -839,6 +859,73 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 	}
 
 	return query
+}
+
+// relationPathToBunAlias converts a relation path like "MAL.MAL.DEF" to the Bun alias format "mal__mal__def"
+// Bun generates aliases for nested relations by lowercasing and replacing dots with double underscores
+func relationPathToBunAlias(relationPath string) string {
+	if relationPath == "" {
+		return ""
+	}
+	// Convert to lowercase and replace dots with double underscores
+	alias := strings.ToLower(relationPath)
+	alias = strings.ReplaceAll(alias, ".", "__")
+	return alias
+}
+
+// replaceTableReferencesInSQL replaces references to a base table name in a SQL expression
+// with the appropriate alias for the current preload level
+// For example, if baseTableName is "mastertaskitem" and targetAlias is "mal__mal",
+// it will replace "mastertaskitem.rid_mastertaskitem" with "mal__mal.rid_mastertaskitem"
+func replaceTableReferencesInSQL(sqlExpr, baseTableName, targetAlias string) string {
+	if sqlExpr == "" || baseTableName == "" || targetAlias == "" {
+		return sqlExpr
+	}
+
+	// Replace both quoted and unquoted table references
+	// Handle patterns like: tablename.column, "tablename".column, tablename."column", "tablename"."column"
+
+	// Pattern 1: tablename.column (unquoted)
+	result := strings.ReplaceAll(sqlExpr, baseTableName+".", targetAlias+".")
+
+	// Pattern 2: "tablename".column or "tablename"."column" (quoted table name)
+	result = strings.ReplaceAll(result, "\""+baseTableName+"\".", "\""+targetAlias+"\".")
+
+	return result
+}
+
+// getTableNameFromModel extracts the table name from a model
+// It checks the bun tag first, then falls back to converting the struct name to snake_case
+func getTableNameFromModel(model interface{}) string {
+	if model == nil {
+		return ""
+	}
+
+	modelType := reflect.TypeOf(model)
+
+	// Unwrap pointers
+	for modelType != nil && modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return ""
+	}
+
+	// Look for bun tag on embedded BaseModel
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		if field.Anonymous {
+			bunTag := field.Tag.Get("bun")
+			if strings.HasPrefix(bunTag, "table:") {
+				return strings.TrimPrefix(bunTag, "table:")
+			}
+		}
+	}
+
+	// Fallback: convert struct name to lowercase (simple heuristic)
+	// This handles cases like "MasterTaskItem" -> "mastertaskitem"
+	return strings.ToLower(modelType.Name())
 }
 
 func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, data interface{}, options ExtendedRequestOptions) {

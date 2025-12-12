@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -206,6 +207,20 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 						logger.Debug("Skipping prefix fix for '%s.%s' - not a valid column in main table (might be preload relation)", currentPrefix, columnName)
 					}
 				}
+			}
+		} else if tableName != "" && !hasTablePrefix(condToCheck) {
+			// If tableName is provided and the condition DOESN'T have a table prefix,
+			// qualify unambiguous column references to prevent "ambiguous column" errors
+			// when there are multiple joins on the same table (e.g., recursive preloads)
+			columnName := extractUnqualifiedColumnName(condToCheck)
+			if columnName != "" && (validColumns == nil || isValidColumn(columnName, validColumns)) {
+				// Qualify the column with the table name
+				// Be careful to only replace the column name, not other occurrences of the string
+				oldRef := columnName
+				newRef := tableName + "." + columnName
+				// Use word boundary matching to avoid replacing partial matches
+				cond = qualifyColumnInCondition(cond, oldRef, newRef)
+				logger.Debug("Qualified unqualified column in condition: '%s' added table prefix '%s'", oldRef, tableName)
 			}
 		}
 
@@ -481,6 +496,86 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	}
 
 	return "", ""
+}
+
+// extractUnqualifiedColumnName extracts the column name from an unqualified condition
+// For example: "rid_parentmastertaskitem is null" returns "rid_parentmastertaskitem"
+// "status = 'active'" returns "status"
+func extractUnqualifiedColumnName(cond string) string {
+	// Common SQL operators
+	operators := []string{" = ", " != ", " <> ", " > ", " >= ", " < ", " <= ", " LIKE ", " like ", " IN ", " in ", " IS ", " is ", " NOT ", " not "}
+
+	// Find the column reference (left side of the operator)
+	minIdx := -1
+	for _, op := range operators {
+		idx := strings.Index(cond, op)
+		if idx > 0 && (minIdx == -1 || idx < minIdx) {
+			minIdx = idx
+		}
+	}
+
+	var columnRef string
+	if minIdx > 0 {
+		columnRef = strings.TrimSpace(cond[:minIdx])
+	} else {
+		// No operator found, might be a single column reference
+		parts := strings.Fields(cond)
+		if len(parts) > 0 {
+			columnRef = parts[0]
+		}
+	}
+
+	if columnRef == "" {
+		return ""
+	}
+
+	// Remove any quotes
+	columnRef = strings.Trim(columnRef, "`\"'")
+
+	// Return empty if it contains a dot (already qualified) or function call
+	if strings.Contains(columnRef, ".") || strings.Contains(columnRef, "(") {
+		return ""
+	}
+
+	return columnRef
+}
+
+// qualifyColumnInCondition replaces an unqualified column name with a qualified one in a condition
+// Uses word boundaries to avoid partial matches
+// For example: qualifyColumnInCondition("rid_item is null", "rid_item", "table.rid_item")
+// returns "table.rid_item is null"
+func qualifyColumnInCondition(cond, oldRef, newRef string) string {
+	// Use word boundary matching with Go's supported regex syntax
+	// \b matches word boundaries
+	escapedOld := regexp.QuoteMeta(oldRef)
+	pattern := `\b` + escapedOld + `\b`
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		// If regex fails, fall back to simple string replacement
+		logger.Debug("Failed to compile regex for column qualification, using simple replace: %v", err)
+		return strings.Replace(cond, oldRef, newRef, 1)
+	}
+
+	// Only replace if the match is not preceded by a dot (to avoid replacing already qualified columns)
+	result := cond
+	matches := re.FindAllStringIndex(cond, -1)
+
+	// Process matches in reverse order to maintain correct indices
+	for i := len(matches) - 1; i >= 0; i-- {
+		match := matches[i]
+		start := match[0]
+
+		// Check if preceded by a dot (already qualified)
+		if start > 0 && cond[start-1] == '.' {
+			continue
+		}
+
+		// Replace this occurrence
+		result = result[:start] + newRef + result[match[1]:]
+	}
+
+	return result
 }
 
 // findOperatorOutsideParentheses finds the first occurrence of an operator outside of parentheses

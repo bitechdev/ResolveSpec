@@ -748,8 +748,21 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 			if len(preload.ComputedQL) > 0 {
 				// Get the base table name from the related model
 				baseTableName := getTableNameFromModel(relatedModel)
-				// Convert the preload relation path to the Bun alias format
-				preloadAlias := relationPathToBunAlias(preload.Relation)
+
+				// Convert the preload relation path to the appropriate alias format
+				// This is ORM-specific. Currently we only support Bun's format.
+				// TODO: Add support for other ORMs if needed
+				preloadAlias := ""
+				if h.db.GetUnderlyingDB() != nil {
+					// Check if we're using Bun by checking the type name
+					underlyingType := fmt.Sprintf("%T", h.db.GetUnderlyingDB())
+					if strings.Contains(underlyingType, "bun.DB") {
+						// Use Bun's alias format: lowercase with double underscores
+						preloadAlias = relationPathToBunAlias(preload.Relation)
+					}
+					// For GORM: GORM doesn't use the same alias format, and this fix
+					// may not be needed since GORM handles preloads differently
+				}
 
 				logger.Debug("Applying computed columns to preload %s (alias: %s, base table: %s)",
 					preload.Relation, preloadAlias, baseTableName)

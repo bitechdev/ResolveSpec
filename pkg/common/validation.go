@@ -237,6 +237,13 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	for _, sort := range options.Sort {
 		if v.IsValidColumn(sort.Column) {
 			validSorts = append(validSorts, sort)
+		} else if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+			// Allow sort by expression/subquery, but validate for security
+			if IsSafeSortExpression(sort.Column) {
+				validSorts = append(validSorts, sort)
+			} else {
+				logger.Warn("Unsafe sort expression '%s' removed", sort.Column)
+			}
 		} else {
 			logger.Warn("Invalid column in sort '%s' removed", sort.Column)
 		}
@@ -262,11 +269,79 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 		}
 		filteredPreload.Filters = validPreloadFilters
 
+		// Filter preload sort columns
+		validPreloadSorts := make([]SortOption, 0, len(preload.Sort))
+		for _, sort := range preload.Sort {
+			if v.IsValidColumn(sort.Column) {
+				validPreloadSorts = append(validPreloadSorts, sort)
+			} else if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+				// Allow sort by expression/subquery, but validate for security
+				if IsSafeSortExpression(sort.Column) {
+					validPreloadSorts = append(validPreloadSorts, sort)
+				} else {
+					logger.Warn("Unsafe sort expression in preload '%s' removed: '%s'", preload.Relation, sort.Column)
+				}
+			} else {
+				logger.Warn("Invalid column in preload '%s' sort '%s' removed", preload.Relation, sort.Column)
+			}
+		}
+		filteredPreload.Sort = validPreloadSorts
+
 		validPreloads = append(validPreloads, filteredPreload)
 	}
 	filtered.Preload = validPreloads
 
 	return filtered
+}
+
+// IsSafeSortExpression validates that a sort expression (enclosed in brackets) is safe
+// and doesn't contain SQL injection attempts or dangerous commands
+func IsSafeSortExpression(expr string) bool {
+	if expr == "" {
+		return false
+	}
+
+	// Expression must be enclosed in brackets
+	expr = strings.TrimSpace(expr)
+	if !strings.HasPrefix(expr, "(") || !strings.HasSuffix(expr, ")") {
+		return false
+	}
+
+	// Remove outer brackets for content validation
+	expr = expr[1 : len(expr)-1]
+	expr = strings.TrimSpace(expr)
+
+	// Convert to lowercase for checking dangerous keywords
+	exprLower := strings.ToLower(expr)
+
+	// Check for dangerous SQL commands that should never be in a sort expression
+	dangerousKeywords := []string{
+		"drop ", "delete ", "insert ", "update ", "alter ", "create ",
+		"truncate ", "exec ", "execute ", "grant ", "revoke ",
+		"into ", "values ", "set ", "shutdown", "xp_",
+	}
+
+	for _, keyword := range dangerousKeywords {
+		if strings.Contains(exprLower, keyword) {
+			logger.Warn("Dangerous SQL keyword '%s' detected in sort expression: %s", keyword, expr)
+			return false
+		}
+	}
+
+	// Check for SQL comment attempts
+	if strings.Contains(expr, "--") || strings.Contains(expr, "/*") || strings.Contains(expr, "*/") {
+		logger.Warn("SQL comment detected in sort expression: %s", expr)
+		return false
+	}
+
+	// Check for semicolon (command separator)
+	if strings.Contains(expr, ";") {
+		logger.Warn("Command separator (;) detected in sort expression: %s", expr)
+		return false
+	}
+
+	// Expression appears safe
+	return true
 }
 
 // GetValidColumns returns a list of all valid column names for debugging purposes

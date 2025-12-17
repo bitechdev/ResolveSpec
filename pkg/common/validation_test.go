@@ -361,3 +361,83 @@ func TestFilterRequestOptions(t *testing.T) {
 		t.Errorf("Expected sort column 'id', got %s", filtered.Sort[0].Column)
 	}
 }
+
+func TestIsSafeSortExpression(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		shouldPass bool
+	}{
+		// Safe expressions
+		{"Valid subquery", "(SELECT MAX(price) FROM products)", true},
+		{"Valid CASE expression", "(CASE WHEN status = 'active' THEN 1 ELSE 0 END)", true},
+		{"Valid aggregate", "(COUNT(*) OVER (PARTITION BY category))", true},
+		{"Valid function", "(COALESCE(discount, 0))", true},
+
+		// Dangerous expressions - SQL injection attempts
+		{"DROP TABLE attempt", "(id); DROP TABLE users; --", false},
+		{"DELETE attempt", "(id WHERE 1=1); DELETE FROM users; --", false},
+		{"INSERT attempt", "(id); INSERT INTO admin VALUES ('hacker'); --", false},
+		{"UPDATE attempt", "(id); UPDATE users SET role='admin'; --", false},
+		{"EXEC attempt", "(id); EXEC sp_executesql 'DROP TABLE users'; --", false},
+		{"XP_ stored proc", "(id); xp_cmdshell 'dir'; --", false},
+
+		// Comment injection
+		{"SQL comment dash", "(id) -- malicious comment", false},
+		{"SQL comment block start", "(id) /* comment", false},
+		{"SQL comment block end", "(id) comment */", false},
+
+		// Semicolon attempts
+		{"Semicolon separator", "(id); SELECT * FROM passwords", false},
+
+		// Empty/invalid
+		{"Empty string", "", false},
+		{"Just brackets", "()", true}, // Empty but technically valid structure
+		{"No brackets", "id", false},  // Must have brackets for expressions
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsSafeSortExpression(tt.expression)
+			if result != tt.shouldPass {
+				t.Errorf("IsSafeSortExpression(%q) = %v, want %v", tt.expression, result, tt.shouldPass)
+			}
+		})
+	}
+}
+
+func TestFilterRequestOptions_WithSortExpressions(t *testing.T) {
+	model := TestModel{}
+	validator := NewColumnValidator(model)
+
+	options := RequestOptions{
+		Sort: []SortOption{
+			{Column: "id", Direction: "ASC"},                                    // Valid column
+			{Column: "(SELECT MAX(age) FROM users)", Direction: "DESC"},         // Safe expression
+			{Column: "name", Direction: "ASC"},                                  // Valid column
+			{Column: "(id); DROP TABLE users; --", Direction: "DESC"},          // Dangerous expression
+			{Column: "invalid_col", Direction: "ASC"},                           // Invalid column
+			{Column: "(CASE WHEN age > 18 THEN 1 ELSE 0 END)", Direction: "ASC"}, // Safe expression
+		},
+	}
+
+	filtered := validator.FilterRequestOptions(options)
+
+	// Should keep: id, safe expression, name, another safe expression
+	// Should remove: dangerous expression, invalid column
+	expectedCount := 4
+	if len(filtered.Sort) != expectedCount {
+		t.Errorf("Expected %d sort options, got %d", expectedCount, len(filtered.Sort))
+	}
+
+	// Verify the kept options
+	if filtered.Sort[0].Column != "id" {
+		t.Errorf("Expected first sort to be 'id', got '%s'", filtered.Sort[0].Column)
+	}
+	if filtered.Sort[1].Column != "(SELECT MAX(age) FROM users)" {
+		t.Errorf("Expected second sort to be safe expression, got '%s'", filtered.Sort[1].Column)
+	}
+	if filtered.Sort[2].Column != "name" {
+		t.Errorf("Expected third sort to be 'name', got '%s'", filtered.Sort[2].Column)
+	}
+}

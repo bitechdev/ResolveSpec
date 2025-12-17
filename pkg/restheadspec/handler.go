@@ -513,7 +513,15 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			direction = "DESC"
 		}
 		logger.Debug("Applying sort: %s %s", sort.Column, direction)
-		query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+
+		// Check if it's an expression (enclosed in brackets) - use directly without quoting
+		if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+			// For expressions, pass as raw SQL to prevent auto-quoting
+			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
+		} else {
+			// Regular column - let Bun handle quoting
+			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+		}
 	}
 
 	// Get total count before pagination (unless skip count is requested)
@@ -827,7 +835,14 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		// Apply sorting
 		if len(preload.Sort) > 0 {
 			for _, sort := range preload.Sort {
-				sq = sq.Order(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				// Check if it's an expression (enclosed in brackets) - use directly without quoting
+				if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+					// For expressions, pass as raw SQL to prevent auto-quoting
+					sq = sq.OrderExpr(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				} else {
+					// Regular column - let ORM handle quoting
+					sq = sq.Order(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				}
 			}
 		}
 
@@ -2188,7 +2203,14 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 			if strings.EqualFold(sort.Direction, "desc") {
 				direction = "DESC"
 			}
-			sortParts = append(sortParts, fmt.Sprintf("%s.%s %s", tableName, sort.Column, direction))
+
+			// Check if it's an expression (enclosed in brackets) - use directly without table prefix
+			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+				sortParts = append(sortParts, fmt.Sprintf("%s %s", sort.Column, direction))
+			} else {
+				// Regular column - add table prefix
+				sortParts = append(sortParts, fmt.Sprintf("%s.%s %s", tableName, sort.Column, direction))
+			}
 		}
 		sortSQL = strings.Join(sortParts, ", ")
 	} else {
@@ -2397,6 +2419,55 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 			expandValidator := common.NewColumnValidator(relInfo.relatedModel)
 			// Filter columns using the related model's validator
 			filteredExpand.Columns = expandValidator.FilterValidColumns(expand.Columns)
+
+			// Filter sort columns in the expand Sort string
+			if expand.Sort != "" {
+				sortFields := strings.Split(expand.Sort, ",")
+				validSortFields := make([]string, 0, len(sortFields))
+				for _, sortField := range sortFields {
+					sortField = strings.TrimSpace(sortField)
+					if sortField == "" {
+						continue
+					}
+
+					// Extract column name (remove direction prefixes/suffixes)
+					colName := sortField
+					direction := ""
+
+					if strings.HasPrefix(sortField, "-") {
+						direction = "-"
+						colName = strings.TrimPrefix(sortField, "-")
+					} else if strings.HasPrefix(sortField, "+") {
+						direction = "+"
+						colName = strings.TrimPrefix(sortField, "+")
+					}
+
+					if strings.HasSuffix(strings.ToLower(colName), " desc") {
+						direction = " desc"
+						colName = strings.TrimSuffix(strings.ToLower(colName), " desc")
+					} else if strings.HasSuffix(strings.ToLower(colName), " asc") {
+						direction = " asc"
+						colName = strings.TrimSuffix(strings.ToLower(colName), " asc")
+					}
+
+					colName = strings.TrimSpace(colName)
+
+					// Validate the column name
+					if expandValidator.IsValidColumn(colName) {
+						validSortFields = append(validSortFields, direction+colName)
+					} else if strings.HasPrefix(colName, "(") && strings.HasSuffix(colName, ")") {
+						// Allow sort by expression/subquery, but validate for security
+						if common.IsSafeSortExpression(colName) {
+							validSortFields = append(validSortFields, direction+colName)
+						} else {
+							logger.Warn("Unsafe sort expression in expand '%s' removed: '%s'", expand.Relation, colName)
+						}
+					} else {
+						logger.Warn("Invalid column in expand '%s' sort '%s' removed", expand.Relation, colName)
+					}
+				}
+				filteredExpand.Sort = strings.Join(validSortFields, ",")
+			}
 		} else {
 			// If we can't find the relationship, log a warning and skip column filtering
 			logger.Warn("Cannot validate columns for unknown relation: %s", expand.Relation)

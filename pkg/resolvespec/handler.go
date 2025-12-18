@@ -2,6 +2,7 @@ package resolvespec
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -957,7 +958,29 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	query := h.db.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+	// Get primary key name
+	pkName := reflection.GetPrimaryKeyName(model)
+
+	// First, fetch the record that will be deleted
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	recordToDelete := reflect.New(modelType).Interface()
+
+	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	if err := selectQuery.ScanModel(ctx); err != nil {
+		if err == sql.ErrNoRows {
+			logger.Warn("Record not found for delete: %s = %s", pkName, id)
+			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
+			return
+		}
+		logger.Error("Error fetching record for delete: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
+		return
+	}
+
+	query := h.db.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	result, err := query.Exec(ctx)
 	if err != nil {
@@ -966,14 +989,16 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
+	// Check if the record was actually deleted
 	if result.RowsAffected() == 0 {
-		logger.Warn("No record found to delete with ID: %s", id)
-		h.sendError(w, http.StatusNotFound, "not_found", "Record not found", nil)
+		logger.Warn("No rows deleted for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
 		return
 	}
 
 	logger.Info("Successfully deleted record with ID: %s", id)
-	h.sendResponse(w, nil, nil)
+	// Return the deleted record data
+	h.sendResponse(w, recordToDelete, nil)
 }
 
 func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption) common.SelectQuery {

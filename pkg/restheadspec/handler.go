@@ -1247,7 +1247,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		}
 
 		// Create update query using Model() to preserve custom types and driver.Valuer interfaces
-		query := tx.NewUpdate().Model(modelInstance).Table(tableName)
+		query := tx.NewUpdate().Model(modelInstance)
 		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it

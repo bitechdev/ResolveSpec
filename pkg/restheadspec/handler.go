@@ -2110,7 +2110,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 	w.SetHeader("Content-Type", "application/json")
 	if data == nil {
 		data = map[string]interface{}{}
-		w.WriteHeader(http.StatusPartialContent)
+		w.WriteHeader(http.StatusNoContent)
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -2166,7 +2166,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	httpStatus := http.StatusOK
 	if data == nil {
 		data = map[string]interface{}{}
-		httpStatus = http.StatusPartialContent
+		httpStatus = http.StatusNoContent
 	}
 
 	if options.SingleRecordAsObject {

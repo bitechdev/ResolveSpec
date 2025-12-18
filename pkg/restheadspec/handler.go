@@ -2,6 +2,7 @@ package restheadspec
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1514,7 +1515,34 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	// Single delete with URL ID
-	// Execute BeforeDelete hooks
+	if id == "" {
+		h.sendError(w, http.StatusBadRequest, "missing_id", "ID is required for delete", nil)
+		return
+	}
+
+	// Get primary key name
+	pkName := reflection.GetPrimaryKeyName(model)
+
+	// First, fetch the record that will be deleted
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	recordToDelete := reflect.New(modelType).Interface()
+
+	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	if err := selectQuery.ScanModel(ctx); err != nil {
+		if err == sql.ErrNoRows {
+			logger.Warn("Record not found for delete: %s = %s", pkName, id)
+			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
+			return
+		}
+		logger.Error("Error fetching record for delete: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
+		return
+	}
+
+	// Execute BeforeDelete hooks with the record data
 	hookCtx := &HookContext{
 		Context:   ctx,
 		Handler:   h,
@@ -1525,6 +1553,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		ID:        id,
 		Writer:    w,
 		Tx:        h.db,
+		Data:      recordToDelete,
 	}
 
 	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
@@ -1534,13 +1563,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	query := h.db.NewDelete().Table(tableName)
-
-	if id == "" {
-		h.sendError(w, http.StatusBadRequest, "missing_id", "ID is required for delete", nil)
-		return
-	}
-
-	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	// Execute BeforeScan hooks - pass query chain so hooks can modify it
 	hookCtx.Query = query
@@ -1562,11 +1585,15 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Execute AfterDelete hooks
-	responseData := map[string]interface{}{
-		"deleted": result.RowsAffected(),
+	// Check if the record was actually deleted
+	if result.RowsAffected() == 0 {
+		logger.Warn("No rows deleted for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
+		return
 	}
-	hookCtx.Result = responseData
+
+	// Execute AfterDelete hooks with the deleted record data
+	hookCtx.Result = recordToDelete
 	hookCtx.Error = nil
 
 	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
@@ -1575,7 +1602,8 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	h.sendResponse(w, responseData, nil)
+	// Return the deleted record data
+	h.sendResponse(w, recordToDelete, nil)
 }
 
 // mergeRecordWithRequest merges a database record with the original request data

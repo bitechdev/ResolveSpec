@@ -529,7 +529,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	var total int
 	if !options.SkipCount {
 		// Try to get from cache first (unless SkipCache is true)
-		var cachedTotal *cache.CachedTotal
+		var cachedTotalData *cachedTotal
 		var cacheKey string
 
 		if !options.SkipCache {
@@ -543,7 +543,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				}
 			}
 
-			cacheKeyHash := cache.BuildExtendedQueryCacheKey(
+			cacheKeyHash := buildExtendedQueryCacheKey(
 				tableName,
 				options.Filters,
 				options.Sort,
@@ -554,22 +554,22 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				options.CursorForward,
 				options.CursorBackward,
 			)
-			cacheKey = cache.GetQueryTotalCacheKey(cacheKeyHash)
+			cacheKey = getQueryTotalCacheKey(cacheKeyHash)
 
 			// Try to retrieve from cache
-			cachedTotal = &cache.CachedTotal{}
-			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotal)
+			cachedTotalData = &cachedTotal{}
+			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotalData)
 			if err == nil {
-				total = cachedTotal.Total
+				total = cachedTotalData.Total
 				logger.Debug("Total records (from cache): %d", total)
 			} else {
 				logger.Debug("Cache miss for query total")
-				cachedTotal = nil
+				cachedTotalData = nil
 			}
 		}
 
 		// If not in cache or cache skip, execute count query
-		if cachedTotal == nil {
+		if cachedTotalData == nil {
 			count, err := query.Count(ctx)
 			if err != nil {
 				logger.Error("Error counting records: %v", err)
@@ -579,11 +579,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			total = count
 			logger.Debug("Total records (from query): %d", total)
 
-			// Store in cache (if caching is enabled)
+			// Store in cache with schema and table tags (if caching is enabled)
 			if !options.SkipCache && cacheKey != "" {
 				cacheTTL := time.Minute * 2 // Default 2 minutes TTL
-				cacheData := &cache.CachedTotal{Total: total}
-				if err := cache.GetDefaultCache().Set(ctx, cacheKey, cacheData, cacheTTL); err != nil {
+				if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
 					logger.Warn("Failed to cache query total: %v", err)
 					// Don't fail the request if caching fails
 				} else {
@@ -1149,6 +1148,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 	}
 
 	logger.Info("Successfully created %d record(s)", len(mergedResults))
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
 	h.sendResponseWithOptions(w, responseData, nil, &options)
 }
 
@@ -1320,6 +1324,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	logger.Info("Successfully updated record with ID: %v", targetID)
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
 	h.sendResponseWithOptions(w, mergedData, nil, &options)
 }
 
@@ -1388,6 +1397,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1456,6 +1470,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1510,6 +1529,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1611,6 +1635,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	// Return the deleted record data
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
 	h.sendResponse(w, recordToDelete, nil)
 }
 

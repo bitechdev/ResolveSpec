@@ -15,6 +15,7 @@ type memoryItem struct {
 	Expiration time.Time
 	LastAccess time.Time
 	HitCount   int64
+	Tags       []string
 }
 
 // isExpired checks if the item has expired.
@@ -27,11 +28,12 @@ func (m *memoryItem) isExpired() bool {
 
 // MemoryProvider is an in-memory implementation of the Provider interface.
 type MemoryProvider struct {
-	mu      sync.RWMutex
-	items   map[string]*memoryItem
-	options *Options
-	hits    atomic.Int64
-	misses  atomic.Int64
+	mu        sync.RWMutex
+	items     map[string]*memoryItem
+	tagToKeys map[string]map[string]struct{} // tag -> set of keys
+	options   *Options
+	hits      atomic.Int64
+	misses    atomic.Int64
 }
 
 // NewMemoryProvider creates a new in-memory cache provider.
@@ -44,8 +46,9 @@ func NewMemoryProvider(opts *Options) *MemoryProvider {
 	}
 
 	return &MemoryProvider{
-		items:   make(map[string]*memoryItem),
-		options: opts,
+		items:     make(map[string]*memoryItem),
+		tagToKeys: make(map[string]map[string]struct{}),
+		options:   opts,
 	}
 }
 
@@ -114,12 +117,113 @@ func (m *MemoryProvider) Set(ctx context.Context, key string, value []byte, ttl 
 	return nil
 }
 
+// SetWithTags stores a value in the cache with the specified TTL and tags.
+func (m *MemoryProvider) SetWithTags(ctx context.Context, key string, value []byte, ttl time.Duration, tags []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if ttl == 0 {
+		ttl = m.options.DefaultTTL
+	}
+
+	var expiration time.Time
+	if ttl > 0 {
+		expiration = time.Now().Add(ttl)
+	}
+
+	// Check max size and evict if necessary
+	if m.options.MaxSize > 0 && len(m.items) >= m.options.MaxSize {
+		if _, exists := m.items[key]; !exists {
+			m.evictOne()
+		}
+	}
+
+	// Remove old tag associations if key exists
+	if oldItem, exists := m.items[key]; exists {
+		for _, tag := range oldItem.Tags {
+			if keySet, ok := m.tagToKeys[tag]; ok {
+				delete(keySet, key)
+				if len(keySet) == 0 {
+					delete(m.tagToKeys, tag)
+				}
+			}
+		}
+	}
+
+	// Store the item
+	m.items[key] = &memoryItem{
+		Value:      value,
+		Expiration: expiration,
+		LastAccess: time.Now(),
+		Tags:       tags,
+	}
+
+	// Add new tag associations
+	for _, tag := range tags {
+		if m.tagToKeys[tag] == nil {
+			m.tagToKeys[tag] = make(map[string]struct{})
+		}
+		m.tagToKeys[tag][key] = struct{}{}
+	}
+
+	return nil
+}
+
 // Delete removes a key from the cache.
 func (m *MemoryProvider) Delete(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Remove tag associations
+	if item, exists := m.items[key]; exists {
+		for _, tag := range item.Tags {
+			if keySet, ok := m.tagToKeys[tag]; ok {
+				delete(keySet, key)
+				if len(keySet) == 0 {
+					delete(m.tagToKeys, tag)
+				}
+			}
+		}
+	}
+
 	delete(m.items, key)
+	return nil
+}
+
+// DeleteByTag removes all keys associated with the given tag.
+func (m *MemoryProvider) DeleteByTag(ctx context.Context, tag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Get all keys associated with this tag
+	keySet, exists := m.tagToKeys[tag]
+	if !exists {
+		return nil // No keys with this tag
+	}
+
+	// Delete all items with this tag
+	for key := range keySet {
+		if item, ok := m.items[key]; ok {
+			// Remove this tag from the item's tag list
+			newTags := make([]string, 0, len(item.Tags))
+			for _, t := range item.Tags {
+				if t != tag {
+					newTags = append(newTags, t)
+				}
+			}
+
+			// If item has no more tags, delete it
+			// Otherwise update its tags
+			if len(newTags) == 0 {
+				delete(m.items, key)
+			} else {
+				item.Tags = newTags
+			}
+		}
+	}
+
+	// Remove the tag mapping
+	delete(m.tagToKeys, tag)
 	return nil
 }
 

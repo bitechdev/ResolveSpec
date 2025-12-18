@@ -57,9 +57,29 @@ func (c *Cache) SetBytes(ctx context.Context, key string, value []byte, ttl time
 	return c.provider.Set(ctx, key, value, ttl)
 }
 
+// SetWithTags serializes and stores a value in the cache with the specified TTL and tags.
+func (c *Cache) SetWithTags(ctx context.Context, key string, value interface{}, ttl time.Duration, tags []string) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("failed to serialize: %w", err)
+	}
+
+	return c.provider.SetWithTags(ctx, key, data, ttl, tags)
+}
+
+// SetBytesWithTags stores raw bytes in the cache with the specified TTL and tags.
+func (c *Cache) SetBytesWithTags(ctx context.Context, key string, value []byte, ttl time.Duration, tags []string) error {
+	return c.provider.SetWithTags(ctx, key, value, ttl, tags)
+}
+
 // Delete removes a key from the cache.
 func (c *Cache) Delete(ctx context.Context, key string) error {
 	return c.provider.Delete(ctx, key)
+}
+
+// DeleteByTag removes all keys associated with the given tag.
+func (c *Cache) DeleteByTag(ctx context.Context, tag string) error {
+	return c.provider.DeleteByTag(ctx, tag)
 }
 
 // DeleteByPattern removes all keys matching the pattern.

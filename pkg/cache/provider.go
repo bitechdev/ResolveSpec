@@ -15,8 +15,16 @@ type Provider interface {
 	// If ttl is 0, the item never expires.
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 
+	// SetWithTags stores a value in the cache with the specified TTL and tags.
+	// Tags can be used to invalidate groups of related keys.
+	// If ttl is 0, the item never expires.
+	SetWithTags(ctx context.Context, key string, value []byte, ttl time.Duration, tags []string) error
+
 	// Delete removes a key from the cache.
 	Delete(ctx context.Context, key string) error
+
+	// DeleteByTag removes all keys associated with the given tag.
+	DeleteByTag(ctx context.Context, tag string) error
 
 	// DeleteByPattern removes all keys matching the pattern.
 	// Pattern syntax depends on the provider implementation.

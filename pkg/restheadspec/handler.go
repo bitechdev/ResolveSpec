@@ -2167,6 +2167,11 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	if data == nil {
 		data = map[string]interface{}{}
 		httpStatus = http.StatusNoContent
+	} else {
+		dataLen := reflection.Len(data)
+		if dataLen == 0 {
+			httpStatus = http.StatusNoContent
+		}
 	}
 
 	if options.SingleRecordAsObject {

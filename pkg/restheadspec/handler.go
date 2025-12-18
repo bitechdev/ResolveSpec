@@ -662,6 +662,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		return
 	}
 
+	// Check if a specific ID was requested but no record was found
+	resultCount := reflection.Len(modelPtr)
+	if id != "" && resultCount == 0 {
+		logger.Warn("Record not found for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found", nil)
+		return
+	}
+
 	limit := 0
 	if options.Limit != nil {
 		limit = *options.Limit
@@ -676,7 +684,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	metadata := &common.Metadata{
 		Total:    int64(total),
-		Count:    int64(reflection.Len(modelPtr)),
+		Count:    int64(resultCount),
 		Filtered: int64(total),
 		Limit:    limit,
 		Offset:   offset,
@@ -2116,7 +2124,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 // Returns the single element if data is a slice/array with exactly one element, otherwise returns data unchanged
 func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 	if data == nil {
-		return nil
+		return map[string]interface{}{}
 	}
 
 	// Use reflection to check if data is a slice or array
@@ -2125,10 +2133,15 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 		dataValue = dataValue.Elem()
 	}
 
-	// Check if it's a slice or array with exactly one element
-	if (dataValue.Kind() == reflect.Slice || dataValue.Kind() == reflect.Array) && dataValue.Len() == 1 {
-		// Return the single element
-		return dataValue.Index(0).Interface()
+	// Check if it's a slice or array
+	if dataValue.Kind() == reflect.Slice || dataValue.Kind() == reflect.Array {
+		if dataValue.Len() == 1 {
+			// Return the single element
+			return dataValue.Index(0).Interface()
+		} else if dataValue.Len() == 0 {
+			// Return empty object instead of empty array
+			return map[string]interface{}{}
+		}
 	}
 
 	return data

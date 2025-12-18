@@ -4,15 +4,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitechdev/ResolveSpec/pkg/datatypes"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 func TestMapToStruct_SqlJSONB_PreservesDriverValuer(t *testing.T) {
 	// Test that SqlJSONB type preserves driver.Valuer interface
 	type TestModel struct {
 		ID   int64           `bun:"id,pk" json:"id"`
-		Meta datatypes.SqlJSONB `bun:"meta" json:"meta"`
+		Meta spectypes.SqlJSONB `bun:"meta" json:"meta"`
 	}
 
 	dataMap := map[string]interface{}{
@@ -65,7 +65,7 @@ func TestMapToStruct_SqlJSONB_FromBytes(t *testing.T) {
 	// Test that SqlJSONB can be set from []byte directly
 	type TestModel struct {
 		ID   int64           `bun:"id,pk" json:"id"`
-		Meta datatypes.SqlJSONB `bun:"meta" json:"meta"`
+		Meta spectypes.SqlJSONB `bun:"meta" json:"meta"`
 	}
 
 	jsonBytes := []byte(`{"direct":"bytes"}`)
@@ -103,11 +103,11 @@ func TestMapToStruct_AllSqlTypes(t *testing.T) {
 	type TestModel struct {
 		ID        int64               `bun:"id,pk" json:"id"`
 		Name      string              `bun:"name" json:"name"`
-		CreatedAt datatypes.SqlTimeStamp `bun:"created_at" json:"created_at"`
-		BirthDate datatypes.SqlDate      `bun:"birth_date" json:"birth_date"`
-		LoginTime datatypes.SqlTime      `bun:"login_time" json:"login_time"`
-		Meta      datatypes.SqlJSONB     `bun:"meta" json:"meta"`
-		Tags      datatypes.SqlJSONB     `bun:"tags" json:"tags"`
+		CreatedAt spectypes.SqlTimeStamp `bun:"created_at" json:"created_at"`
+		BirthDate spectypes.SqlDate      `bun:"birth_date" json:"birth_date"`
+		LoginTime spectypes.SqlTime      `bun:"login_time" json:"login_time"`
+		Meta      spectypes.SqlJSONB     `bun:"meta" json:"meta"`
+		Tags      spectypes.SqlJSONB     `bun:"tags" json:"tags"`
 	}
 
 	now := time.Now()
@@ -225,8 +225,8 @@ func TestMapToStruct_SqlNull_NilValues(t *testing.T) {
 	// Test that SqlNull types handle nil values correctly
 	type TestModel struct {
 		ID        int64               `bun:"id,pk" json:"id"`
-		UpdatedAt datatypes.SqlTimeStamp `bun:"updated_at" json:"updated_at"`
-		DeletedAt datatypes.SqlTimeStamp `bun:"deleted_at" json:"deleted_at"`
+		UpdatedAt spectypes.SqlTimeStamp `bun:"updated_at" json:"updated_at"`
+		DeletedAt spectypes.SqlTimeStamp `bun:"deleted_at" json:"deleted_at"`
 	}
 
 	now := time.Now()

@@ -1,5 +1,5 @@
-// Package datatypes provides nullable SQL types with automatic casting and conversion methods.
-package datatypes
+// Package spectypes provides nullable SQL types with automatic casting and conversion methods.
+package spectypes
 
 import (
 	"database/sql"

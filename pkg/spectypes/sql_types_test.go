@@ -1,4 +1,4 @@
-package datatypes
+package spectypes
 
 import (
 	"database/sql/driver"

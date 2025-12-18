@@ -2107,14 +2107,20 @@ func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metada
 
 // sendResponseWithOptions sends a response with optional formatting
 func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options *ExtendedRequestOptions) {
+	w.SetHeader("Content-Type", "application/json")
+	if data == nil {
+		data = map[string]interface{}{}
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	// Normalize single-record arrays to objects if requested
 	if options != nil && options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}
 
 	// Return data as-is without wrapping in common.Response
-	w.SetHeader("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+
 	if err := w.WriteJSON(data); err != nil {
 		logger.Error("Failed to write JSON response: %v", err)
 	}
@@ -2144,12 +2150,25 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 		}
 	}
 
+	if dataValue.Kind() == reflect.String {
+		str := dataValue.String()
+		if str == "" || str == "null" {
+			return map[string]interface{}{}
+		}
+
+	}
 	return data
 }
 
 // sendFormattedResponse sends response with formatting options
 func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
 	// Normalize single-record arrays to objects if requested
+	httpStatus := http.StatusOK
+	if data == nil {
+		data = map[string]interface{}{}
+		httpStatus = http.StatusPartialContent
+	}
+
 	if options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}
@@ -2168,7 +2187,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	switch options.ResponseFormat {
 	case "simple":
 		// Simple format: just return the data array
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(data); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2180,7 +2199,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 		if metadata != nil {
 			response["count"] = metadata.Total
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2191,7 +2210,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 			Data:     data,
 			Metadata: metadata,
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}

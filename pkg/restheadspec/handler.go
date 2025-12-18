@@ -1236,7 +1236,12 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		dataMap[pkName] = targetID
 
 		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
-		modelInstance := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		// Get the type of the model, handling both pointer and non-pointer types
+		modelType := reflect.TypeOf(model)
+		if modelType.Kind() == reflect.Ptr {
+			modelType = modelType.Elem()
+		}
+		modelInstance := reflect.New(modelType).Interface()
 		if err := reflection.MapToStruct(dataMap, modelInstance); err != nil {
 			return fmt.Errorf("failed to populate model from data: %w", err)
 		}

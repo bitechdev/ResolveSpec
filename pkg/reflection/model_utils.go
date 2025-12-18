@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
@@ -1080,7 +1081,55 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 
 	// Handle struct types (like SqlTimeStamp, SqlDate, SqlTime which wrap SqlNull[time.Time])
 	if field.Kind() == reflect.Struct {
-		// Try to find a "Val" field (for SqlNull types) and set it
+
+		// Handle datatypes.SqlNull[T] and wrapped types (SqlTimeStamp, SqlDate, SqlTime)
+		// Check if the type has a Scan method (sql.Scanner interface)
+		if field.CanAddr() {
+			scanMethod := field.Addr().MethodByName("Scan")
+			if scanMethod.IsValid() {
+				// Call the Scan method with the value
+				results := scanMethod.Call([]reflect.Value{reflect.ValueOf(value)})
+				if len(results) > 0 {
+					// Check if there was an error
+					if err, ok := results[0].Interface().(error); ok && err != nil {
+						return err
+					}
+					return nil
+				}
+			}
+		}
+
+		// Handle time.Time with ISO string fallback
+		if field.Type() == reflect.TypeOf(time.Time{}) {
+			switch v := value.(type) {
+			case time.Time:
+				field.Set(reflect.ValueOf(v))
+				return nil
+			case string:
+				// Try parsing as ISO 8601 / RFC3339
+				if t, err := time.Parse(time.RFC3339, v); err == nil {
+					field.Set(reflect.ValueOf(t))
+					return nil
+				}
+				// Try other common formats
+				formats := []string{
+					"2006-01-02T15:04:05.000-0700",
+					"2006-01-02T15:04:05.000",
+					"2006-01-02T15:04:05",
+					"2006-01-02 15:04:05",
+					"2006-01-02",
+				}
+				for _, format := range formats {
+					if t, err := time.Parse(format, v); err == nil {
+						field.Set(reflect.ValueOf(t))
+						return nil
+					}
+				}
+				return fmt.Errorf("cannot parse time string: %s", v)
+			}
+		}
+
+		// Fallback: Try to find a "Val" field (for SqlNull types) and set it directly
 		valField := field.FieldByName("Val")
 		if valField.IsValid() && valField.CanSet() {
 			// Also set Valid field to true
@@ -1095,6 +1144,7 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 				return nil
 			}
 		}
+
 	}
 
 	// If we can convert the type, do it

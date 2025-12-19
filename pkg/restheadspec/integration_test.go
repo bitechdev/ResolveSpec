@@ -402,7 +402,7 @@ func TestIntegration_GetMetadata(t *testing.T) {
 
 	muxRouter.ServeHTTP(w, req)
 
-	if !(w.Code == http.StatusOK && w.Code == http.StatusPartialContent) {
+	if !(w.Code == http.StatusOK || w.Code == http.StatusPartialContent) {
 		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
@@ -493,7 +493,7 @@ func TestIntegration_QueryParamsOverHeaders(t *testing.T) {
 
 	muxRouter.ServeHTTP(w, req)
 
-	if !(w.Code == http.StatusOK && w.Code == http.StatusPartialContent) {
+	if !(w.Code == http.StatusOK || w.Code == http.StatusPartialContent) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 

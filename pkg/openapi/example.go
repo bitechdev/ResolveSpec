@@ -183,6 +183,69 @@ func ExampleWithFuncSpec() {
 	_ = generatorFunc
 }
 
+// ExampleWithUIHandler shows how to serve OpenAPI documentation with a web UI
+func ExampleWithUIHandler(db *gorm.DB) {
+	// Create handler and configure OpenAPI generator
+	handler := restheadspec.NewHandlerWithGORM(db)
+	registry := modelregistry.NewModelRegistry()
+
+	handler.SetOpenAPIGenerator(func() (string, error) {
+		generator := NewGenerator(GeneratorConfig{
+			Title:               "My API",
+			Description:         "API documentation with interactive UI",
+			Version:             "1.0.0",
+			BaseURL:             "http://localhost:8080",
+			Registry:            registry,
+			IncludeRestheadSpec: true,
+		})
+		return generator.GenerateJSON()
+	})
+
+	// Setup routes
+	router := mux.NewRouter()
+	restheadspec.SetupMuxRoutes(router, handler, nil)
+
+	// Add UI handlers for different frameworks
+	// Swagger UI at /docs (most popular)
+	SetupUIRoute(router, "/docs", UIConfig{
+		UIType:  SwaggerUI,
+		SpecURL: "/openapi",
+		Title:   "My API - Swagger UI",
+		Theme:   "light",
+	})
+
+	// RapiDoc at /rapidoc (modern alternative)
+	SetupUIRoute(router, "/rapidoc", UIConfig{
+		UIType:  RapiDoc,
+		SpecURL: "/openapi",
+		Title:   "My API - RapiDoc",
+	})
+
+	// Redoc at /redoc (clean and responsive)
+	SetupUIRoute(router, "/redoc", UIConfig{
+		UIType:  Redoc,
+		SpecURL: "/openapi",
+		Title:   "My API - Redoc",
+	})
+
+	// Scalar at /scalar (modern and sleek)
+	SetupUIRoute(router, "/scalar", UIConfig{
+		UIType:  Scalar,
+		SpecURL: "/openapi",
+		Title:   "My API - Scalar",
+		Theme:   "dark",
+	})
+
+	// Now you can access:
+	// http://localhost:8080/docs      - Swagger UI
+	// http://localhost:8080/rapidoc   - RapiDoc
+	// http://localhost:8080/redoc     - Redoc
+	// http://localhost:8080/scalar    - Scalar
+	// http://localhost:8080/openapi   - Raw OpenAPI JSON
+
+	_ = router
+}
+
 // ExampleCustomization shows advanced customization options
 func ExampleCustomization() {
 	// Create registry and register models with descriptions using struct tags

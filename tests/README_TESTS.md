@@ -119,13 +119,13 @@ Integration tests require a PostgreSQL database and use the `// +build integrati
 - PostgreSQL 12+ installed and running
 - Create test databases manually (see below)
 
-### Setup with Docker
+### Setup with Podman
 
 1. **Start PostgreSQL**:
    ```bash
    make docker-up
    # or
-   docker-compose up -d postgres-test
+   podman compose up -d postgres-test
    ```
 
 2. **Run Tests**:
@@ -141,10 +141,10 @@ Integration tests require a PostgreSQL database and use the `// +build integrati
    ```bash
    make docker-down
    # or
-   docker-compose down
+   podman compose down
    ```
 
-### Setup without Docker
+### Setup without Podman
 
 1. **Create Databases**:
    ```sql
@@ -289,8 +289,8 @@ go test -tags=integration ./pkg/resolvespec -v
 **Problem**: "connection refused" or "database does not exist"
 
 **Solutions**:
-1. Check PostgreSQL is running: `docker-compose ps`
-2. Verify databases exist: `docker-compose exec postgres-test psql -U postgres -l`
+1. Check PostgreSQL is running: `podman compose ps`
+2. Verify databases exist: `podman compose exec postgres-test psql -U postgres -l`
 3. Check environment variable: `echo $TEST_DATABASE_URL`
 4. Recreate databases: `make clean && make docker-up`
 

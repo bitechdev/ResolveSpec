@@ -16,7 +16,7 @@ test: test-unit test-integration
 # Start PostgreSQL for integration tests
 docker-up:
 	@echo "Starting PostgreSQL container..."
-	@docker-compose up -d postgres-test
+	@podman compose up -d postgres-test
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
 	@echo "PostgreSQL is ready!"
@@ -24,12 +24,12 @@ docker-up:
 # Stop PostgreSQL container
 docker-down:
 	@echo "Stopping PostgreSQL container..."
-	@docker-compose down
+	@podman compose down
 
 # Clean up Docker volumes and test data
 clean:
 	@echo "Cleaning up..."
-	@docker-compose down -v
+	@podman compose down -v
 	@echo "Cleanup complete!"
 
 # Run integration tests with Docker (full workflow)

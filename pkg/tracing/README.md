@@ -465,7 +465,7 @@ func processRequest(ctx context.Context) {
 
 1. **Check collector is running:**
    ```bash
-   docker-compose ps
+   podman compose ps
    ```
 
 2. **Verify endpoint:**
@@ -476,7 +476,7 @@ func processRequest(ctx context.Context) {
 
 3. **Check logs:**
    ```bash
-   docker-compose logs otel-collector
+   podman compose logs otel-collector
    ```
 
 ### Disable Tracing

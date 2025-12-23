@@ -103,14 +103,14 @@ type ErrorInfo struct {
 
 // RequestMessage represents a client request
 type RequestMessage struct {
-	ID        string             `json:"id"`
-	Type      MessageType        `json:"type"`
-	Operation OperationType      `json:"operation"`
-	Schema    string             `json:"schema,omitempty"`
-	Entity    string             `json:"entity"`
-	RecordID  string                  `json:"record_id,omitempty"`
-	Data      interface{}             `json:"data,omitempty"`
-	Options   *common.RequestOptions  `json:"options,omitempty"`
+	ID        string                 `json:"id"`
+	Type      MessageType            `json:"type"`
+	Operation OperationType          `json:"operation"`
+	Schema    string                 `json:"schema,omitempty"`
+	Entity    string                 `json:"entity"`
+	RecordID  string                 `json:"record_id,omitempty"`
+	Data      interface{}            `json:"data,omitempty"`
+	Options   *common.RequestOptions `json:"options,omitempty"`
 }
 
 // ResponseMessage represents a server response
@@ -126,24 +126,24 @@ type ResponseMessage struct {
 
 // NotificationMessage represents a server-initiated notification
 type NotificationMessage struct {
-	Type           MessageType        `json:"type"`
-	Operation      OperationType      `json:"operation"`
-	SubscriptionID string             `json:"subscription_id"`
-	Schema         string             `json:"schema"`
-	Entity         string             `json:"entity"`
-	Data           interface{}        `json:"data"`
-	Timestamp      time.Time          `json:"timestamp"`
+	Type           MessageType   `json:"type"`
+	Operation      OperationType `json:"operation"`
+	SubscriptionID string        `json:"subscription_id"`
+	Schema         string        `json:"schema"`
+	Entity         string        `json:"entity"`
+	Data           interface{}   `json:"data"`
+	Timestamp      time.Time     `json:"timestamp"`
 }
 
 // SubscriptionMessage represents a subscription control message
 type SubscriptionMessage struct {
-	ID             string          `json:"id"`
-	Type           MessageType     `json:"type"`
+	ID             string                 `json:"id"`
+	Type           MessageType            `json:"type"`
 	Operation      OperationType          `json:"operation"` // subscribe or unsubscribe
 	Schema         string                 `json:"schema,omitempty"`
 	Entity         string                 `json:"entity"`
-	Options        *common.RequestOptions `json:"options,omitempty"` // Filters for subscription
-	SubscriptionID string          `json:"subscription_id,omitempty"` // For unsubscribe
+	Options        *common.RequestOptions `json:"options,omitempty"`         // Filters for subscription
+	SubscriptionID string                 `json:"subscription_id,omitempty"` // For unsubscribe
 }
 
 // NewRequestMessage creates a new request message

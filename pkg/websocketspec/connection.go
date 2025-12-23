@@ -7,8 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/gorilla/websocket"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // Connection rvepresents a WebSocket connection with its state

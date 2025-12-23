@@ -75,11 +75,12 @@
 package websocketspec
 
 import (
+	"github.com/uptrace/bun"
+	"gorm.io/gorm"
+
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
-	"github.com/uptrace/bun"
-	"gorm.io/gorm"
 )
 
 // NewHandlerWithGORM creates a new Handler with GORM adapter

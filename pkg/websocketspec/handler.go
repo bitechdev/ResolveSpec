@@ -9,11 +9,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 )
 
 // Handler handles WebSocket connections and messages
@@ -467,7 +468,7 @@ func (h *Handler) handleUnsubscribe(conn *Connection, msg *Message) {
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, map[string]interface{}{
-		"unsubscribed": true,
+		"unsubscribed":    true,
 		"subscription_id": subID,
 	})
 	conn.SendJSON(resp)

@@ -121,13 +121,11 @@ func Example_withHooks() {
 	handler.Hooks().Register(websocketspec.BeforeSubscribe, func(ctx *websocketspec.HookContext) error {
 		// Limit subscriptions per connection
 		maxSubscriptions := 10
-		currentCount := len(ctx.Connection.subscriptions)
+		// Note: In a real implementation, you would count subscriptions using the connection's methods
+		// currentCount := len(ctx.Connection.subscriptions) // subscriptions is private
 
-		if currentCount >= maxSubscriptions {
-			return fmt.Errorf("maximum subscriptions reached (%d)", maxSubscriptions)
-		}
-
-		log.Printf("Creating subscription %d/%d", currentCount+1, maxSubscriptions)
+		// For demonstration purposes, we'll just log
+		log.Printf("Creating subscription (max: %d)", maxSubscriptions)
 		return nil
 	})
 
@@ -141,7 +139,7 @@ func Example_monitoring() {
 	db, _ := gorm.Open(postgres.Open("your-connection-string"), &gorm.Config{})
 	handler := websocketspec.NewHandlerWithGORM(db)
 
-	handler.Registry.RegisterModel("public.users", &User{})
+	handler.Registry().RegisterModel("public.users", &User{})
 
 	// Add connection tracking
 	handler.Hooks().Register(websocketspec.AfterConnect, func(ctx *websocketspec.HookContext) error {

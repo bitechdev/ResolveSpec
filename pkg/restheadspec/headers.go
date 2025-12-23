@@ -529,19 +529,47 @@ func (h *Handler) parseSorting(options *ExtendedRequestOptions, value string) {
 }
 
 // parseCommaSeparated parses comma-separated values and trims whitespace
+// It respects bracket nesting and only splits on commas outside of parentheses
 func (h *Handler) parseCommaSeparated(value string) []string {
 	if value == "" {
 		return nil
 	}
 
-	parts := strings.Split(value, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
+	result := make([]string, 0)
+	var current strings.Builder
+	nestingLevel := 0
+
+	for _, char := range value {
+		switch char {
+		case '(':
+			nestingLevel++
+			current.WriteRune(char)
+		case ')':
+			nestingLevel--
+			current.WriteRune(char)
+		case ',':
+			if nestingLevel == 0 {
+				// We're outside all brackets, so split here
+				part := strings.TrimSpace(current.String())
+				if part != "" {
+					result = append(result, part)
+				}
+				current.Reset()
+			} else {
+				// Inside brackets, keep the comma
+				current.WriteRune(char)
+			}
+		default:
+			current.WriteRune(char)
 		}
 	}
+
+	// Add the last part
+	part := strings.TrimSpace(current.String())
+	if part != "" {
+		result = append(result, part)
+	}
+
 	return result
 }
 

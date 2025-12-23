@@ -2,6 +2,7 @@ package restheadspec
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -481,8 +482,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (AND condition)
 	if options.CustomSQLWhere != "" {
 		logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
-		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedWhere := common.SanitizeWhereClause(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// First add table prefixes to unqualified columns (but skip columns inside function calls)
+		prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
+		// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+		sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedWhere != "" {
 			query = query.Where(sanitizedWhere)
 		}
@@ -491,8 +494,9 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (OR condition)
 	if options.CustomSQLOr != "" {
 		logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
+		customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
 		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedOr := common.SanitizeWhereClause(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedOr != "" {
 			query = query.WhereOr(sanitizedOr)
 		}
@@ -513,14 +517,22 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			direction = "DESC"
 		}
 		logger.Debug("Applying sort: %s %s", sort.Column, direction)
-		query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+
+		// Check if it's an expression (enclosed in brackets) - use directly without quoting
+		if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+			// For expressions, pass as raw SQL to prevent auto-quoting
+			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
+		} else {
+			// Regular column - let Bun handle quoting
+			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+		}
 	}
 
 	// Get total count before pagination (unless skip count is requested)
 	var total int
 	if !options.SkipCount {
 		// Try to get from cache first (unless SkipCache is true)
-		var cachedTotal *cache.CachedTotal
+		var cachedTotalData *cachedTotal
 		var cacheKey string
 
 		if !options.SkipCache {
@@ -534,7 +546,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				}
 			}
 
-			cacheKeyHash := cache.BuildExtendedQueryCacheKey(
+			cacheKeyHash := buildExtendedQueryCacheKey(
 				tableName,
 				options.Filters,
 				options.Sort,
@@ -545,22 +557,22 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				options.CursorForward,
 				options.CursorBackward,
 			)
-			cacheKey = cache.GetQueryTotalCacheKey(cacheKeyHash)
+			cacheKey = getQueryTotalCacheKey(cacheKeyHash)
 
 			// Try to retrieve from cache
-			cachedTotal = &cache.CachedTotal{}
-			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotal)
+			cachedTotalData = &cachedTotal{}
+			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotalData)
 			if err == nil {
-				total = cachedTotal.Total
+				total = cachedTotalData.Total
 				logger.Debug("Total records (from cache): %d", total)
 			} else {
 				logger.Debug("Cache miss for query total")
-				cachedTotal = nil
+				cachedTotalData = nil
 			}
 		}
 
 		// If not in cache or cache skip, execute count query
-		if cachedTotal == nil {
+		if cachedTotalData == nil {
 			count, err := query.Count(ctx)
 			if err != nil {
 				logger.Error("Error counting records: %v", err)
@@ -570,11 +582,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			total = count
 			logger.Debug("Total records (from query): %d", total)
 
-			// Store in cache (if caching is enabled)
+			// Store in cache with schema and table tags (if caching is enabled)
 			if !options.SkipCache && cacheKey != "" {
 				cacheTTL := time.Minute * 2 // Default 2 minutes TTL
-				cacheData := &cache.CachedTotal{Total: total}
-				if err := cache.GetDefaultCache().Set(ctx, cacheKey, cacheData, cacheTTL); err != nil {
+				if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
 					logger.Warn("Failed to cache query total: %v", err)
 					// Don't fail the request if caching fails
 				} else {
@@ -653,6 +664,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		return
 	}
 
+	// Check if a specific ID was requested but no record was found
+	resultCount := reflection.Len(modelPtr)
+	if id != "" && resultCount == 0 {
+		logger.Warn("Record not found for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found", nil)
+		return
+	}
+
 	limit := 0
 	if options.Limit != nil {
 		limit = *options.Limit
@@ -667,7 +686,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	metadata := &common.Metadata{
 		Total:    int64(total),
-		Count:    int64(reflection.Len(modelPtr)),
+		Count:    int64(resultCount),
 		Filtered: int64(total),
 		Limit:    limit,
 		Offset:   offset,
@@ -827,7 +846,14 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		// Apply sorting
 		if len(preload.Sort) > 0 {
 			for _, sort := range preload.Sort {
-				sq = sq.Order(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				// Check if it's an expression (enclosed in brackets) - use directly without quoting
+				if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+					// For expressions, pass as raw SQL to prevent auto-quoting
+					sq = sq.OrderExpr(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				} else {
+					// Regular column - let ORM handle quoting
+					sq = sq.Order(fmt.Sprintf("%s %s", sort.Column, sort.Direction))
+				}
 			}
 		}
 
@@ -1125,6 +1151,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 	}
 
 	logger.Info("Successfully created %d record(s)", len(mergedResults))
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
 	h.sendResponseWithOptions(w, responseData, nil, &options)
 }
 
@@ -1220,8 +1251,19 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Ensure ID is in the data map for the update
 		dataMap[pkName] = targetID
 
-		// Create update query
-		query := tx.NewUpdate().Table(tableName).SetMap(dataMap)
+		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
+		// Get the type of the model, handling both pointer and non-pointer types
+		modelType := reflect.TypeOf(model)
+		if modelType.Kind() == reflect.Ptr {
+			modelType = modelType.Elem()
+		}
+		modelInstance := reflect.New(modelType).Interface()
+		if err := reflection.MapToStruct(dataMap, modelInstance); err != nil {
+			return fmt.Errorf("failed to populate model from data: %w", err)
+		}
+
+		// Create update query using Model() to preserve custom types and driver.Valuer interfaces
+		query := tx.NewUpdate().Model(modelInstance)
 		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it
@@ -1285,6 +1327,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	logger.Info("Successfully updated record with ID: %v", targetID)
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
 	h.sendResponseWithOptions(w, mergedData, nil, &options)
 }
 
@@ -1353,6 +1400,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1421,6 +1473,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1475,6 +1532,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -1488,7 +1550,34 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	// Single delete with URL ID
-	// Execute BeforeDelete hooks
+	if id == "" {
+		h.sendError(w, http.StatusBadRequest, "missing_id", "ID is required for delete", nil)
+		return
+	}
+
+	// Get primary key name
+	pkName := reflection.GetPrimaryKeyName(model)
+
+	// First, fetch the record that will be deleted
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	recordToDelete := reflect.New(modelType).Interface()
+
+	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	if err := selectQuery.ScanModel(ctx); err != nil {
+		if err == sql.ErrNoRows {
+			logger.Warn("Record not found for delete: %s = %s", pkName, id)
+			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
+			return
+		}
+		logger.Error("Error fetching record for delete: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
+		return
+	}
+
+	// Execute BeforeDelete hooks with the record data
 	hookCtx := &HookContext{
 		Context:   ctx,
 		Handler:   h,
@@ -1499,6 +1588,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		ID:        id,
 		Writer:    w,
 		Tx:        h.db,
+		Data:      recordToDelete,
 	}
 
 	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
@@ -1508,13 +1598,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 
 	query := h.db.NewDelete().Table(tableName)
-
-	if id == "" {
-		h.sendError(w, http.StatusBadRequest, "missing_id", "ID is required for delete", nil)
-		return
-	}
-
-	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	// Execute BeforeScan hooks - pass query chain so hooks can modify it
 	hookCtx.Query = query
@@ -1536,11 +1620,15 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Execute AfterDelete hooks
-	responseData := map[string]interface{}{
-		"deleted": result.RowsAffected(),
+	// Check if the record was actually deleted
+	if result.RowsAffected() == 0 {
+		logger.Warn("No rows deleted for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
+		return
 	}
-	hookCtx.Result = responseData
+
+	// Execute AfterDelete hooks with the deleted record data
+	hookCtx.Result = recordToDelete
 	hookCtx.Error = nil
 
 	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
@@ -1549,7 +1637,13 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	h.sendResponse(w, responseData, nil)
+	// Return the deleted record data
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
+	h.sendResponse(w, recordToDelete, nil)
 }
 
 // mergeRecordWithRequest merges a database record with the original request data
@@ -2045,14 +2139,20 @@ func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metada
 
 // sendResponseWithOptions sends a response with optional formatting
 func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options *ExtendedRequestOptions) {
+	w.SetHeader("Content-Type", "application/json")
+	if data == nil {
+		data = map[string]interface{}{}
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	// Normalize single-record arrays to objects if requested
 	if options != nil && options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}
 
 	// Return data as-is without wrapping in common.Response
-	w.SetHeader("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+
 	if err := w.WriteJSON(data); err != nil {
 		logger.Error("Failed to write JSON response: %v", err)
 	}
@@ -2062,7 +2162,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 // Returns the single element if data is a slice/array with exactly one element, otherwise returns data unchanged
 func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 	if data == nil {
-		return nil
+		return map[string]interface{}{}
 	}
 
 	// Use reflection to check if data is a slice or array
@@ -2071,18 +2171,41 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 		dataValue = dataValue.Elem()
 	}
 
-	// Check if it's a slice or array with exactly one element
-	if (dataValue.Kind() == reflect.Slice || dataValue.Kind() == reflect.Array) && dataValue.Len() == 1 {
-		// Return the single element
-		return dataValue.Index(0).Interface()
+	// Check if it's a slice or array
+	if dataValue.Kind() == reflect.Slice || dataValue.Kind() == reflect.Array {
+		if dataValue.Len() == 1 {
+			// Return the single element
+			return dataValue.Index(0).Interface()
+		} else if dataValue.Len() == 0 {
+			// Return empty object instead of empty array
+			return map[string]interface{}{}
+		}
 	}
 
+	if dataValue.Kind() == reflect.String {
+		str := dataValue.String()
+		if str == "" || str == "null" {
+			return map[string]interface{}{}
+		}
+
+	}
 	return data
 }
 
 // sendFormattedResponse sends response with formatting options
 func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
 	// Normalize single-record arrays to objects if requested
+	httpStatus := http.StatusOK
+	if data == nil {
+		data = map[string]interface{}{}
+		httpStatus = http.StatusPartialContent
+	} else {
+		dataLen := reflection.Len(data)
+		if dataLen == 0 {
+			httpStatus = http.StatusPartialContent
+		}
+	}
+
 	if options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}
@@ -2101,7 +2224,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	switch options.ResponseFormat {
 	case "simple":
 		// Simple format: just return the data array
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(data); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2113,7 +2236,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 		if metadata != nil {
 			response["count"] = metadata.Total
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2124,7 +2247,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 			Data:     data,
 			Metadata: metadata,
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2182,7 +2305,14 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 			if strings.EqualFold(sort.Direction, "desc") {
 				direction = "DESC"
 			}
-			sortParts = append(sortParts, fmt.Sprintf("%s.%s %s", tableName, sort.Column, direction))
+
+			// Check if it's an expression (enclosed in brackets) - use directly without table prefix
+			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+				sortParts = append(sortParts, fmt.Sprintf("%s %s", sort.Column, direction))
+			} else {
+				// Regular column - add table prefix
+				sortParts = append(sortParts, fmt.Sprintf("%s.%s %s", tableName, sort.Column, direction))
+			}
 		}
 		sortSQL = strings.Join(sortParts, ", ")
 	} else {
@@ -2391,6 +2521,55 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 			expandValidator := common.NewColumnValidator(relInfo.relatedModel)
 			// Filter columns using the related model's validator
 			filteredExpand.Columns = expandValidator.FilterValidColumns(expand.Columns)
+
+			// Filter sort columns in the expand Sort string
+			if expand.Sort != "" {
+				sortFields := strings.Split(expand.Sort, ",")
+				validSortFields := make([]string, 0, len(sortFields))
+				for _, sortField := range sortFields {
+					sortField = strings.TrimSpace(sortField)
+					if sortField == "" {
+						continue
+					}
+
+					// Extract column name (remove direction prefixes/suffixes)
+					colName := sortField
+					direction := ""
+
+					if strings.HasPrefix(sortField, "-") {
+						direction = "-"
+						colName = strings.TrimPrefix(sortField, "-")
+					} else if strings.HasPrefix(sortField, "+") {
+						direction = "+"
+						colName = strings.TrimPrefix(sortField, "+")
+					}
+
+					if strings.HasSuffix(strings.ToLower(colName), " desc") {
+						direction = " desc"
+						colName = strings.TrimSuffix(strings.ToLower(colName), " desc")
+					} else if strings.HasSuffix(strings.ToLower(colName), " asc") {
+						direction = " asc"
+						colName = strings.TrimSuffix(strings.ToLower(colName), " asc")
+					}
+
+					colName = strings.TrimSpace(colName)
+
+					// Validate the column name
+					if expandValidator.IsValidColumn(colName) {
+						validSortFields = append(validSortFields, direction+colName)
+					} else if strings.HasPrefix(colName, "(") && strings.HasSuffix(colName, ")") {
+						// Allow sort by expression/subquery, but validate for security
+						if common.IsSafeSortExpression(colName) {
+							validSortFields = append(validSortFields, direction+colName)
+						} else {
+							logger.Warn("Unsafe sort expression in expand '%s' removed: '%s'", expand.Relation, colName)
+						}
+					} else {
+						logger.Warn("Invalid column in expand '%s' sort '%s' removed", expand.Relation, colName)
+					}
+				}
+				filteredExpand.Sort = strings.Join(validSortFields, ",")
+			}
 		} else {
 			// If we can't find the relationship, log a warning and skip column filtering
 			logger.Warn("Cannot validate columns for unknown relation: %s", expand.Relation)

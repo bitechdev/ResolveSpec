@@ -103,9 +103,93 @@ func (r *RedisProvider) Set(ctx context.Context, key string, value []byte, ttl t
 	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
+// SetWithTags stores a value in the cache with the specified TTL and tags.
+func (r *RedisProvider) SetWithTags(ctx context.Context, key string, value []byte, ttl time.Duration, tags []string) error {
+	if ttl == 0 {
+		ttl = r.options.DefaultTTL
+	}
+
+	pipe := r.client.Pipeline()
+
+	// Set the value
+	pipe.Set(ctx, key, value, ttl)
+
+	// Add key to each tag's set
+	for _, tag := range tags {
+		tagKey := fmt.Sprintf("cache:tag:%s", tag)
+		pipe.SAdd(ctx, tagKey, key)
+		// Set expiration on tag set (longer than cache items to ensure cleanup)
+		if ttl > 0 {
+			pipe.Expire(ctx, tagKey, ttl+time.Hour)
+		}
+	}
+
+	// Store tags for this key for later cleanup
+	if len(tags) > 0 {
+		tagsKey := fmt.Sprintf("cache:tags:%s", key)
+		pipe.SAdd(ctx, tagsKey, tags)
+		if ttl > 0 {
+			pipe.Expire(ctx, tagsKey, ttl)
+		}
+	}
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 // Delete removes a key from the cache.
 func (r *RedisProvider) Delete(ctx context.Context, key string) error {
-	return r.client.Del(ctx, key).Err()
+	pipe := r.client.Pipeline()
+
+	// Get tags for this key
+	tagsKey := fmt.Sprintf("cache:tags:%s", key)
+	tags, err := r.client.SMembers(ctx, tagsKey).Result()
+	if err == nil && len(tags) > 0 {
+		// Remove key from each tag set
+		for _, tag := range tags {
+			tagKey := fmt.Sprintf("cache:tag:%s", tag)
+			pipe.SRem(ctx, tagKey, key)
+		}
+		// Delete the tags key
+		pipe.Del(ctx, tagsKey)
+	}
+
+	// Delete the actual key
+	pipe.Del(ctx, key)
+
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// DeleteByTag removes all keys associated with the given tag.
+func (r *RedisProvider) DeleteByTag(ctx context.Context, tag string) error {
+	tagKey := fmt.Sprintf("cache:tag:%s", tag)
+
+	// Get all keys associated with this tag
+	keys, err := r.client.SMembers(ctx, tagKey).Result()
+	if err != nil {
+		return err
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	pipe := r.client.Pipeline()
+
+	// Delete all keys and their tag associations
+	for _, key := range keys {
+		pipe.Del(ctx, key)
+		// Also delete the tags key for this cache key
+		tagsKey := fmt.Sprintf("cache:tags:%s", key)
+		pipe.Del(ctx, tagsKey)
+	}
+
+	// Delete the tag set itself
+	pipe.Del(ctx, tagKey)
+
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 // DeleteByPattern removes all keys matching the pattern.

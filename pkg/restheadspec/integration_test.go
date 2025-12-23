@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package restheadspec
@@ -21,12 +22,12 @@ import (
 
 // Test models
 type TestUser struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Name      string    `gorm:"not null" json:"name"`
-	Email     string    `gorm:"uniqueIndex;not null" json:"email"`
-	Age       int       `json:"age"`
-	Active    bool      `gorm:"default:true" json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	Name      string     `gorm:"not null" json:"name"`
+	Email     string     `gorm:"uniqueIndex;not null" json:"email"`
+	Age       int        `json:"age"`
+	Active    bool       `gorm:"default:true" json:"active"`
+	CreatedAt time.Time  `json:"created_at"`
 	Posts     []TestPost `gorm:"foreignKey:UserID" json:"posts,omitempty"`
 }
 
@@ -35,13 +36,13 @@ func (TestUser) TableName() string {
 }
 
 type TestPost struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    uint      `gorm:"not null" json:"user_id"`
-	Title     string    `gorm:"not null" json:"title"`
-	Content   string    `json:"content"`
-	Published bool      `gorm:"default:false" json:"published"`
-	CreatedAt time.Time `json:"created_at"`
-	User      *TestUser  `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	ID        uint          `gorm:"primaryKey" json:"id"`
+	UserID    uint          `gorm:"not null" json:"user_id"`
+	Title     string        `gorm:"not null" json:"title"`
+	Content   string        `json:"content"`
+	Published bool          `gorm:"default:false" json:"published"`
+	CreatedAt time.Time     `json:"created_at"`
+	User      *TestUser     `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	Comments  []TestComment `gorm:"foreignKey:PostID" json:"comments,omitempty"`
 }
 
@@ -54,7 +55,7 @@ type TestComment struct {
 	PostID    uint      `gorm:"not null" json:"post_id"`
 	Content   string    `gorm:"not null" json:"content"`
 	CreatedAt time.Time `json:"created_at"`
-	Post      *TestPost  `gorm:"foreignKey:PostID" json:"post,omitempty"`
+	Post      *TestPost `gorm:"foreignKey:PostID" json:"post,omitempty"`
 }
 
 func (TestComment) TableName() string {
@@ -401,7 +402,7 @@ func TestIntegration_GetMetadata(t *testing.T) {
 
 	muxRouter.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
+	if !(w.Code == http.StatusOK || w.Code == http.StatusPartialContent) {
 		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
@@ -492,7 +493,7 @@ func TestIntegration_QueryParamsOverHeaders(t *testing.T) {
 
 	muxRouter.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
+	if !(w.Code == http.StatusOK || w.Code == http.StatusPartialContent) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 

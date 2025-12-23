@@ -19,14 +19,14 @@ Integration tests validate the full functionality of both `pkg/resolvespec` and 
 
 - Go 1.19 or later
 - PostgreSQL 12 or later
-- Docker and Docker Compose (optional, for easy setup)
+- Podman and Podman Compose (optional, for easy setup)
 
-## Quick Start with Docker
+## Quick Start with Podman
 
-### 1. Start PostgreSQL with Docker Compose
+### 1. Start PostgreSQL with Podman Compose
 
 ```bash
-docker-compose up -d postgres-test
+podman compose up -d postgres-test
 ```
 
 This starts a PostgreSQL container with the following default settings:
@@ -52,7 +52,7 @@ go test -tags=integration ./pkg/restheadspec -v
 ### 3. Stop PostgreSQL
 
 ```bash
-docker-compose down
+podman compose down
 ```
 
 ## Manual PostgreSQL Setup
@@ -161,7 +161,7 @@ If you see "connection refused" errors:
 
 1. Check that PostgreSQL is running:
    ```bash
-   docker-compose ps
+   podman compose ps
    ```
 
 2. Verify connection parameters:
@@ -194,10 +194,10 @@ Each test automatically cleans up its data using `TRUNCATE`. If you need a fresh
 
 ```bash
 # Stop and remove containers (removes data)
-docker-compose down -v
+podman compose down -v
 
 # Restart
-docker-compose up -d postgres-test
+podman compose up -d postgres-test
 ```
 
 ## CI/CD Integration

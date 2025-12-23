@@ -386,6 +386,12 @@ func (g *GormSelectQuery) Order(order string) common.SelectQuery {
 	return g
 }
 
+func (g *GormSelectQuery) OrderExpr(order string, args ...interface{}) common.SelectQuery {
+	// GORM's Order can handle expressions directly
+	g.db = g.db.Order(gorm.Expr(order, args...))
+	return g
+}
+
 func (g *GormSelectQuery) Limit(n int) common.SelectQuery {
 	g.db = g.db.Limit(n)
 	return g

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -97,13 +98,152 @@ func (m *MemcacheProvider) Set(ctx context.Context, key string, value []byte, tt
 	return m.client.Set(item)
 }
 
+// SetWithTags stores a value in the cache with the specified TTL and tags.
+// Note: Tag support in Memcache is limited and less efficient than Redis.
+func (m *MemcacheProvider) SetWithTags(ctx context.Context, key string, value []byte, ttl time.Duration, tags []string) error {
+	if ttl == 0 {
+		ttl = m.options.DefaultTTL
+	}
+
+	expiration := int32(ttl.Seconds())
+
+	// Set the main value
+	item := &memcache.Item{
+		Key:        key,
+		Value:      value,
+		Expiration: expiration,
+	}
+	if err := m.client.Set(item); err != nil {
+		return err
+	}
+
+	// Store tags for this key
+	if len(tags) > 0 {
+		tagsData, err := json.Marshal(tags)
+		if err != nil {
+			return fmt.Errorf("failed to marshal tags: %w", err)
+		}
+
+		tagsItem := &memcache.Item{
+			Key:        fmt.Sprintf("cache:tags:%s", key),
+			Value:      tagsData,
+			Expiration: expiration,
+		}
+		if err := m.client.Set(tagsItem); err != nil {
+			return err
+		}
+
+		// Add key to each tag's key list
+		for _, tag := range tags {
+			tagKey := fmt.Sprintf("cache:tag:%s", tag)
+
+			// Get existing keys for this tag
+			var keys []string
+			if item, err := m.client.Get(tagKey); err == nil {
+				_ = json.Unmarshal(item.Value, &keys)
+			}
+
+			// Add current key if not already present
+			found := false
+			for _, k := range keys {
+				if k == key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				keys = append(keys, key)
+			}
+
+			// Store updated key list
+			keysData, err := json.Marshal(keys)
+			if err != nil {
+				continue
+			}
+
+			tagItem := &memcache.Item{
+				Key:        tagKey,
+				Value:      keysData,
+				Expiration: expiration + 3600, // Give tag lists longer TTL
+			}
+			_ = m.client.Set(tagItem)
+		}
+	}
+
+	return nil
+}
+
 // Delete removes a key from the cache.
 func (m *MemcacheProvider) Delete(ctx context.Context, key string) error {
+	// Get tags for this key
+	tagsKey := fmt.Sprintf("cache:tags:%s", key)
+	if item, err := m.client.Get(tagsKey); err == nil {
+		var tags []string
+		if err := json.Unmarshal(item.Value, &tags); err == nil {
+			// Remove key from each tag's key list
+			for _, tag := range tags {
+				tagKey := fmt.Sprintf("cache:tag:%s", tag)
+				if tagItem, err := m.client.Get(tagKey); err == nil {
+					var keys []string
+					if err := json.Unmarshal(tagItem.Value, &keys); err == nil {
+						// Remove current key from the list
+						newKeys := make([]string, 0, len(keys))
+						for _, k := range keys {
+							if k != key {
+								newKeys = append(newKeys, k)
+							}
+						}
+						// Update the tag's key list
+						if keysData, err := json.Marshal(newKeys); err == nil {
+							tagItem.Value = keysData
+							_ = m.client.Set(tagItem)
+						}
+					}
+				}
+			}
+		}
+		// Delete the tags key
+		_ = m.client.Delete(tagsKey)
+	}
+
+	// Delete the actual key
 	err := m.client.Delete(key)
 	if err == memcache.ErrCacheMiss {
 		return nil
 	}
 	return err
+}
+
+// DeleteByTag removes all keys associated with the given tag.
+func (m *MemcacheProvider) DeleteByTag(ctx context.Context, tag string) error {
+	tagKey := fmt.Sprintf("cache:tag:%s", tag)
+
+	// Get all keys associated with this tag
+	item, err := m.client.Get(tagKey)
+	if err == memcache.ErrCacheMiss {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var keys []string
+	if err := json.Unmarshal(item.Value, &keys); err != nil {
+		return fmt.Errorf("failed to unmarshal tag keys: %w", err)
+	}
+
+	// Delete all keys
+	for _, key := range keys {
+		_ = m.client.Delete(key)
+		// Also delete the tags key for this cache key
+		tagsKey := fmt.Sprintf("cache:tags:%s", key)
+		_ = m.client.Delete(tagsKey)
+	}
+
+	// Delete the tag key itself
+	_ = m.client.Delete(tagKey)
+
+	return nil
 }
 
 // DeleteByPattern removes all keys matching the pattern.

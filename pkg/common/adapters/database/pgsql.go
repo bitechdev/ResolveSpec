@@ -281,6 +281,13 @@ func (p *PgSQLSelectQuery) Order(order string) common.SelectQuery {
 	return p
 }
 
+func (p *PgSQLSelectQuery) OrderExpr(order string, args ...interface{}) common.SelectQuery {
+	// For PgSQL, expressions are passed directly without quoting
+	// If there are args, we would need to format them, but for now just append the expression
+	p.orderBy = append(p.orderBy, order)
+	return p
+}
+
 func (p *PgSQLSelectQuery) Limit(n int) common.SelectQuery {
 	p.limit = n
 	return p

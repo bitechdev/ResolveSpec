@@ -1,5 +1,5 @@
-// Package common provides nullable SQL types with automatic casting and conversion methods.
-package common
+// Package spectypes provides nullable SQL types with automatic casting and conversion methods.
+package spectypes
 
 import (
 	"database/sql"

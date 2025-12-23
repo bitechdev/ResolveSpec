@@ -691,6 +691,11 @@ func (b *BunSelectQuery) Order(order string) common.SelectQuery {
 	return b
 }
 
+func (b *BunSelectQuery) OrderExpr(order string, args ...interface{}) common.SelectQuery {
+	b.query = b.query.OrderExpr(order, args...)
+	return b
+}
+
 func (b *BunSelectQuery) Limit(n int) common.SelectQuery {
 	b.query = b.query.Limit(n)
 	return b

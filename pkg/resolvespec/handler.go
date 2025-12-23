@@ -2,6 +2,7 @@ package resolvespec
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -330,19 +331,17 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Use extended cache key if cursors are present
 	var cacheKeyHash string
 	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
-		cacheKeyHash = cache.BuildExtendedQueryCacheKey(
+		cacheKeyHash = buildExtendedQueryCacheKey(
 			tableName,
 			options.Filters,
 			options.Sort,
-			"",    // No custom SQL WHERE in resolvespec
-			"",    // No custom SQL OR in resolvespec
-			nil,   // No expand options in resolvespec
-			false, // distinct not used here
+			"", // No custom SQL WHERE in resolvespec
+			"", // No custom SQL OR in resolvespec
 			options.CursorForward,
 			options.CursorBackward,
 		)
 	} else {
-		cacheKeyHash = cache.BuildQueryCacheKey(
+		cacheKeyHash = buildQueryCacheKey(
 			tableName,
 			options.Filters,
 			options.Sort,
@@ -350,10 +349,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			"", // No custom SQL OR in resolvespec
 		)
 	}
-	cacheKey := cache.GetQueryTotalCacheKey(cacheKeyHash)
+	cacheKey := getQueryTotalCacheKey(cacheKeyHash)
 
 	// Try to retrieve from cache
-	var cachedTotal cache.CachedTotal
+	var cachedTotal cachedTotal
 	err := cache.GetDefaultCache().Get(ctx, cacheKey, &cachedTotal)
 	if err == nil {
 		total = cachedTotal.Total
@@ -370,10 +369,9 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		total = count
 		logger.Debug("Total records (from query): %d", total)
 
-		// Store in cache
+		// Store in cache with schema and table tags
 		cacheTTL := time.Minute * 2 // Default 2 minutes TTL
-		cacheData := cache.CachedTotal{Total: total}
-		if err := cache.GetDefaultCache().Set(ctx, cacheKey, cacheData, cacheTTL); err != nil {
+		if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
 			logger.Warn("Failed to cache query total: %v", err)
 			// Don't fail the request if caching fails
 		} else {
@@ -463,6 +461,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				return
 			}
 			logger.Info("Successfully created record with nested data, ID: %v", result.ID)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, result.Data, nil)
 			return
 		}
@@ -479,6 +482,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			return
 		}
 		logger.Info("Successfully created record, rows affected: %d", result.RowsAffected())
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, v, nil)
 
 	case []map[string]interface{}:
@@ -517,6 +525,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				return
 			}
 			logger.Info("Successfully created %d records with nested data", len(results))
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, results, nil)
 			return
 		}
@@ -540,6 +553,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			return
 		}
 		logger.Info("Successfully created %d records", len(v))
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, v, nil)
 
 	case []interface{}:
@@ -583,6 +601,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				return
 			}
 			logger.Info("Successfully created %d records with nested data", len(results))
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, results, nil)
 			return
 		}
@@ -610,6 +633,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			return
 		}
 		logger.Info("Successfully created %d records", len(v))
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, list, nil)
 
 	default:
@@ -660,6 +688,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				return
 			}
 			logger.Info("Successfully updated record with nested data, rows: %d", result.AffectedRows)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, result.Data, nil)
 			return
 		}
@@ -696,6 +729,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		logger.Info("Successfully updated %d records", result.RowsAffected())
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, data, nil)
 
 	case []map[string]interface{}:
@@ -734,6 +772,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				return
 			}
 			logger.Info("Successfully updated %d records with nested data", len(results))
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, results, nil)
 			return
 		}
@@ -757,6 +800,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 		logger.Info("Successfully updated %d records", len(updates))
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, updates, nil)
 
 	case []interface{}:
@@ -799,6 +847,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				return
 			}
 			logger.Info("Successfully updated %d records with nested data", len(results))
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, results, nil)
 			return
 		}
@@ -826,6 +879,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 		logger.Info("Successfully updated %d records", len(list))
+		// Invalidate cache for this table
+		cacheTags := buildCacheTags(schema, tableName)
+		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+		}
 		h.sendResponse(w, list, nil)
 
 	default:
@@ -872,6 +930,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", len(v))
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": len(v)}, nil)
 			return
 
@@ -913,6 +976,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -939,6 +1007,11 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
+			// Invalidate cache for this table
+			cacheTags := buildCacheTags(schema, tableName)
+			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+			}
 			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
 			return
 
@@ -957,7 +1030,29 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	query := h.db.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+	// Get primary key name
+	pkName := reflection.GetPrimaryKeyName(model)
+
+	// First, fetch the record that will be deleted
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	recordToDelete := reflect.New(modelType).Interface()
+
+	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	if err := selectQuery.ScanModel(ctx); err != nil {
+		if err == sql.ErrNoRows {
+			logger.Warn("Record not found for delete: %s = %s", pkName, id)
+			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
+			return
+		}
+		logger.Error("Error fetching record for delete: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
+		return
+	}
+
+	query := h.db.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	result, err := query.Exec(ctx)
 	if err != nil {
@@ -966,14 +1061,21 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
+	// Check if the record was actually deleted
 	if result.RowsAffected() == 0 {
-		logger.Warn("No record found to delete with ID: %s", id)
-		h.sendError(w, http.StatusNotFound, "not_found", "Record not found", nil)
+		logger.Warn("No rows deleted for ID: %s", id)
+		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
 		return
 	}
 
 	logger.Info("Successfully deleted record with ID: %s", id)
-	h.sendResponse(w, nil, nil)
+	// Return the deleted record data
+	// Invalidate cache for this table
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
+	h.sendResponse(w, recordToDelete, nil)
 }
 
 func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption) common.SelectQuery {

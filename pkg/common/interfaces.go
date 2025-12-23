@@ -46,6 +46,7 @@ type SelectQuery interface {
 	PreloadRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery
 	JoinRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery
 	Order(order string) SelectQuery
+	OrderExpr(order string, args ...interface{}) SelectQuery
 	Limit(n int) SelectQuery
 	Offset(n int) SelectQuery
 	Group(group string) SelectQuery

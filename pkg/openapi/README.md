@@ -273,24 +273,150 @@ handler.SetOpenAPIGenerator(func() (string, error) {
 })
 ```
 
-## Using with Swagger UI
+## Using the Built-in UI Handler
 
-You can serve the generated OpenAPI spec with Swagger UI:
+The package includes a built-in UI handler that serves popular OpenAPI visualization tools. No need to download or manage static files - everything is served from CDN.
+
+### Quick Start
+
+```go
+import (
+    "github.com/bitechdev/ResolveSpec/pkg/openapi"
+    "github.com/gorilla/mux"
+)
+
+func main() {
+    router := mux.NewRouter()
+
+    // Setup your API routes and OpenAPI generator...
+    // (see examples above)
+
+    // Add the UI handler - defaults to Swagger UI
+    openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+        UIType:  openapi.SwaggerUI,
+        SpecURL: "/openapi",
+        Title:   "My API Documentation",
+    })
+
+    // Now visit http://localhost:8080/docs
+    http.ListenAndServe(":8080", router)
+}
+```
+
+### Supported UI Frameworks
+
+The handler supports four popular OpenAPI UI frameworks:
+
+#### 1. Swagger UI (Default)
+The most widely used OpenAPI UI with excellent compatibility and features.
+
+```go
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.SwaggerUI,
+    Theme:  "dark", // optional: "light" or "dark"
+})
+```
+
+#### 2. RapiDoc
+Modern, customizable, and feature-rich OpenAPI UI.
+
+```go
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.RapiDoc,
+    Theme:  "dark",
+})
+```
+
+#### 3. Redoc
+Clean, responsive documentation with great UX.
+
+```go
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.Redoc,
+})
+```
+
+#### 4. Scalar
+Modern and sleek OpenAPI documentation.
+
+```go
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.Scalar,
+    Theme:  "dark",
+})
+```
+
+### Configuration Options
+
+```go
+type UIConfig struct {
+    UIType     UIType // SwaggerUI, RapiDoc, Redoc, or Scalar
+    SpecURL    string // URL to OpenAPI spec (default: "/openapi")
+    Title      string // Page title (default: "API Documentation")
+    FaviconURL string // Custom favicon URL (optional)
+    CustomCSS  string // Custom CSS to inject (optional)
+    Theme      string // "light" or "dark" (support varies by UI)
+}
+```
+
+### Custom Styling Example
+
+```go
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.SwaggerUI,
+    Title:  "Acme Corp API",
+    CustomCSS: `
+        .swagger-ui .topbar {
+            background-color: #1976d2;
+        }
+        .swagger-ui .info .title {
+            color: #1976d2;
+        }
+    `,
+})
+```
+
+### Using Multiple UIs
+
+You can serve different UIs at different paths:
+
+```go
+// Swagger UI at /docs
+openapi.SetupUIRoute(router, "/docs", openapi.UIConfig{
+    UIType: openapi.SwaggerUI,
+})
+
+// Redoc at /redoc
+openapi.SetupUIRoute(router, "/redoc", openapi.UIConfig{
+    UIType: openapi.Redoc,
+})
+
+// RapiDoc at /api-docs
+openapi.SetupUIRoute(router, "/api-docs", openapi.UIConfig{
+    UIType: openapi.RapiDoc,
+})
+```
+
+### Manual Handler Usage
+
+If you need more control, use the handler directly:
+
+```go
+handler := openapi.UIHandler(openapi.UIConfig{
+    UIType:  openapi.SwaggerUI,
+    SpecURL: "/api/openapi.json",
+})
+
+router.Handle("/documentation", handler)
+```
+
+## Using with External Swagger UI
+
+Alternatively, you can use an external Swagger UI instance:
 
 1. Get the spec from `/openapi`
 2. Load it in Swagger UI at `https://petstore.swagger.io/`
 3. Or self-host Swagger UI and point it to your `/openapi` endpoint
-
-Example with self-hosted Swagger UI:
-
-```go
-// Serve Swagger UI static files
-router.PathPrefix("/swagger/").Handler(
-    http.StripPrefix("/swagger/", http.FileServer(http.Dir("./swagger-ui"))),
-)
-
-// Configure Swagger UI to use /openapi
-```
 
 ## Testing
 

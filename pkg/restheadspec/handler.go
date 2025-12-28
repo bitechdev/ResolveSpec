@@ -482,8 +482,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (AND condition)
 	if options.CustomSQLWhere != "" {
 		logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
-		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedWhere := common.SanitizeWhereClause(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// First add table prefixes to unqualified columns (but skip columns inside function calls)
+		prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
+		// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+		sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedWhere != "" {
 			query = query.Where(sanitizedWhere)
 		}
@@ -492,8 +494,9 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// Apply custom SQL WHERE clause (OR condition)
 	if options.CustomSQLOr != "" {
 		logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
+		customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
 		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedOr := common.SanitizeWhereClause(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 		if sanitizedOr != "" {
 			query = query.WhereOr(sanitizedOr)
 		}

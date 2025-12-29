@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,4 +124,205 @@ func TestManagerErrorCases(t *testing.T) {
 	config3 := Config{Name: "NilHandler", Host: "localhost", Port: getFreePort(t), Handler: nil}
 	_, err = sm.Add(config3)
 	require.Error(t, err, "should not be able to add a server with a nil handler")
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	logger.Init(true)
+	sm := NewManager()
+
+	requestsHandled := 0
+	var requestsMu sync.Mutex
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestsMu.Lock()
+		requestsHandled++
+		requestsMu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	testPort := getFreePort(t)
+	instance, err := sm.Add(Config{
+		Name:         "TestServer",
+		Host:         "localhost",
+		Port:         testPort,
+		Handler:      handler,
+		DrainTimeout: 2 * time.Second,
+	})
+	require.NoError(t, err)
+
+	err = sm.StartAll()
+	require.NoError(t, err)
+
+	// Give server time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Send some concurrent requests
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := &http.Client{Timeout: 5 * time.Second}
+			url := fmt.Sprintf("http://localhost:%d", testPort)
+			resp, err := client.Get(url)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+	}
+
+	// Wait a bit for requests to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Check in-flight requests
+	inFlight := instance.InFlightRequests()
+	assert.Greater(t, inFlight, int64(0), "Should have in-flight requests")
+
+	// Stop the server
+	err = sm.StopAll()
+	require.NoError(t, err)
+
+	// Wait for all requests to complete
+	wg.Wait()
+
+	// Verify all requests were handled
+	requestsMu.Lock()
+	handled := requestsHandled
+	requestsMu.Unlock()
+	assert.GreaterOrEqual(t, handled, 1, "At least some requests should have been handled")
+
+	// Verify no in-flight requests
+	assert.Equal(t, int64(0), instance.InFlightRequests(), "Should have no in-flight requests after shutdown")
+}
+
+func TestHealthAndReadinessEndpoints(t *testing.T) {
+	logger.Init(true)
+	sm := NewManager()
+
+	mux := http.NewServeMux()
+	testPort := getFreePort(t)
+
+	instance, err := sm.Add(Config{
+		Name:    "TestServer",
+		Host:    "localhost",
+		Port:    testPort,
+		Handler: mux,
+	})
+	require.NoError(t, err)
+
+	// Add health and readiness endpoints
+	mux.HandleFunc("/health", instance.HealthCheckHandler())
+	mux.HandleFunc("/ready", instance.ReadinessHandler())
+
+	err = sm.StartAll()
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	baseURL := fmt.Sprintf("http://localhost:%d", testPort)
+
+	// Test health endpoint
+	resp, err := client.Get(baseURL + "/health")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	assert.Contains(t, string(body), "healthy")
+
+	// Test readiness endpoint
+	resp, err = client.Get(baseURL + "/ready")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	assert.Contains(t, string(body), "ready")
+	assert.Contains(t, string(body), "in_flight_requests")
+
+	// Stop the server
+	sm.StopAll()
+}
+
+func TestRequestRejectionDuringShutdown(t *testing.T) {
+	logger.Init(true)
+	sm := NewManager()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	testPort := getFreePort(t)
+	_, err := sm.Add(Config{
+		Name:         "TestServer",
+		Host:         "localhost",
+		Port:         testPort,
+		Handler:      handler,
+		DrainTimeout: 1 * time.Second,
+	})
+	require.NoError(t, err)
+
+	err = sm.StartAll()
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Start shutdown in background
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		sm.StopAll()
+	}()
+
+	// Give shutdown time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Try to make a request after shutdown started
+	client := &http.Client{Timeout: 2 * time.Second}
+	url := fmt.Sprintf("http://localhost:%d", testPort)
+	resp, err := client.Get(url)
+
+	// The request should either fail (connection refused) or get 503
+	if err == nil {
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "Should get 503 during shutdown")
+		resp.Body.Close()
+	}
+}
+
+func TestShutdownCallbacks(t *testing.T) {
+	logger.Init(true)
+	sm := NewManager()
+
+	callbackExecuted := false
+	var callbackMu sync.Mutex
+
+	sm.RegisterShutdownCallback(func(ctx context.Context) error {
+		callbackMu.Lock()
+		callbackExecuted = true
+		callbackMu.Unlock()
+		return nil
+	})
+
+	testPort := getFreePort(t)
+	_, err := sm.Add(Config{
+		Name:    "TestServer",
+		Host:    "localhost",
+		Port:    testPort,
+		Handler: http.NewServeMux(),
+	})
+	require.NoError(t, err)
+
+	err = sm.StartAll()
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	err = sm.StopAll()
+	require.NoError(t, err)
+
+	callbackMu.Lock()
+	executed := callbackExecuted
+	callbackMu.Unlock()
+
+	assert.True(t, executed, "Shutdown callback should have been executed")
 }

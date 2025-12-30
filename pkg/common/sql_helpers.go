@@ -265,6 +265,41 @@ func stripOuterParentheses(s string) string {
 	}
 }
 
+// stripOneOuterParentheses removes only one level of matching outer parentheses from a string
+// Unlike stripOuterParentheses, this only strips once, preserving nested parentheses
+func stripOneOuterParentheses(s string) string {
+	s = strings.TrimSpace(s)
+
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return s
+	}
+
+	// Check if these parentheses match (i.e., they're the outermost pair)
+	depth := 0
+	matched := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i == len(s)-1 {
+				matched = true
+			} else if depth == 0 {
+				// Found a closing paren before the end, so outer parens don't match
+				return s
+			}
+		}
+	}
+
+	if !matched {
+		return s
+	}
+
+	// Strip only the outer parentheses
+	return strings.TrimSpace(s[1 : len(s)-1])
+}
+
 // splitByAND splits a WHERE clause by AND operators (case-insensitive)
 // This is parenthesis-aware and won't split on AND operators inside subqueries
 func splitByAND(where string) []string {
@@ -683,13 +718,41 @@ func AddTablePrefixToColumns(where string, tableName string) string {
 //   - No valid column reference is found
 //   - The column doesn't exist in the table (when validColumns is provided)
 func addPrefixToSingleCondition(cond string, tableName string, validColumns map[string]bool) string {
-	// Strip outer grouping parentheses to get to the actual condition
-	strippedCond := stripOuterParentheses(cond)
+	// Strip one level of outer grouping parentheses to get to the actual condition
+	strippedCond := stripOneOuterParentheses(cond)
 
 	// Skip SQL literals and trivial conditions (true, false, null, 1=1, etc.)
 	if IsSQLExpression(strippedCond) || IsTrivialCondition(strippedCond) {
 		logger.Debug("Skipping SQL literal/trivial condition: '%s'", strippedCond)
 		return cond
+	}
+
+	// After stripping outer parentheses, check if there are multiple AND-separated conditions
+	// at the top level. If so, split and process each separately to avoid incorrectly
+	// treating "true AND status" as a single column name.
+	subConditions := splitByAND(strippedCond)
+	if len(subConditions) > 1 {
+		// Multiple conditions found - process each separately
+		logger.Debug("Found %d sub-conditions after stripping parentheses, processing separately", len(subConditions))
+		processedConditions := make([]string, 0, len(subConditions))
+		for _, subCond := range subConditions {
+			// Recursively process each sub-condition
+			processed := addPrefixToSingleCondition(subCond, tableName, validColumns)
+			processedConditions = append(processedConditions, processed)
+		}
+		result := strings.Join(processedConditions, " AND ")
+		// Preserve original outer parentheses if they existed
+		if cond != strippedCond {
+			result = "(" + result + ")"
+		}
+		return result
+	}
+
+	// If we stripped parentheses and still have more parentheses, recursively process
+	if cond != strippedCond && strings.HasPrefix(strippedCond, "(") && strings.HasSuffix(strippedCond, ")") {
+		// Recursively handle nested parentheses
+		processed := addPrefixToSingleCondition(strippedCond, tableName, validColumns)
+		return "(" + processed + ")"
 	}
 
 	// Extract the left side of the comparison (before the operator)

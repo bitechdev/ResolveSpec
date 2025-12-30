@@ -332,9 +332,10 @@ func TestShutdownCallbacks(t *testing.T) {
 func TestSelfSignedSSLCertificateReuse(t *testing.T) {
 	logger.Init(true)
 	
-	// Get cert directory to verify file creation
-	certDir, err := getCertDirectory()
+	// Get expected cert directory location
+	cacheDir, err := os.UserCacheDir()
 	require.NoError(t, err)
+	certDir := filepath.Join(cacheDir, "resolvespec", "certs")
 	
 	host := "localhost"
 	certFile := filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", host))

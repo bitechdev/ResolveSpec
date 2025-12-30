@@ -84,12 +84,15 @@ func extractContext(args ...interface{}) (context.Context, []interface{}) {
 	found := false
 
 	for _, arg := range args {
-		if c, ok := arg.(context.Context); ok && !found {
-			ctx = c
-			found = true
-		} else {
-			newArgs = append(newArgs, arg)
+		if c, ok := arg.(context.Context); ok {
+			if !found {
+				ctx = c
+				found = true
+			}
+			// Ignore any additional context.Context arguments after the first one.
+			continue
 		}
+		newArgs = append(newArgs, arg)
 	}
 	return ctx, newArgs
 }

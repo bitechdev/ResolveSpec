@@ -14,24 +14,24 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 	handler := &Handler{}
 
 	tests := []struct {
-		name     string
-		input    interface{}
-		expected interface{}
+		name              string
+		input             interface{}
+		shouldBeEmptyArr  bool
 	}{
 		{
-			name:     "nil should return empty array",
-			input:    nil,
-			expected: []interface{}{},
+			name:             "nil should return empty array",
+			input:            nil,
+			shouldBeEmptyArr: true,
 		},
 		{
-			name:     "empty slice should return empty array",
-			input:    []*EmptyTestModel{},
-			expected: []interface{}{},
+			name:             "empty slice should return empty array",
+			input:            []*EmptyTestModel{},
+			shouldBeEmptyArr: true,
 		},
 		{
-			name:     "single element should return the element",
-			input:    []*EmptyTestModel{{ID: 1, Name: "test"}},
-			expected: &EmptyTestModel{ID: 1, Name: "test"},
+			name:             "single element should return the element",
+			input:            []*EmptyTestModel{{ID: 1, Name: "test"}},
+			shouldBeEmptyArr: false,
 		},
 		{
 			name: "multiple elements should return the slice",
@@ -39,10 +39,7 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 				{ID: 1, Name: "test1"},
 				{ID: 2, Name: "test2"},
 			},
-			expected: []*EmptyTestModel{
-				{ID: 1, Name: "test1"},
-				{ID: 2, Name: "test2"},
-			},
+			shouldBeEmptyArr: false,
 		},
 	}
 
@@ -50,8 +47,8 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := handler.normalizeResultArray(tt.input)
 
-			// For nil and empty cases, check it returns an empty array
-			if tt.input == nil || (tt.name == "empty slice should return empty array") {
+			// For cases that should return empty array
+			if tt.shouldBeEmptyArr {
 				emptyArr, ok := result.([]interface{})
 				if !ok {
 					t.Errorf("Expected empty array []interface{}{}, got %T: %v", result, result)

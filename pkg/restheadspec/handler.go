@@ -861,7 +861,10 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		if len(preload.Where) > 0 {
 			// Build RequestOptions with all preloads to allow references to sibling relations
 			preloadOpts := &common.RequestOptions{Preload: allPreloads}
-			sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
+			// First add table prefixes to unqualified columns
+			prefixedWhere := common.AddTablePrefixToColumns(preload.Where, reflection.ExtractTableNameOnly(preload.Relation))
+			// Then sanitize and allow preload table prefixes
+			sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
 			if len(sanitizedWhere) > 0 {
 				sq = sq.Where(sanitizedWhere)
 			}

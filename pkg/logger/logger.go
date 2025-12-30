@@ -78,8 +78,8 @@ func CloseErrorTracking() error {
 // extractContext attempts to find a context.Context in the given arguments.
 // It returns the found context (or context.Background() if not found) and
 // the remaining arguments without the context.
-func extractContext(args ...interface{}) (context.Context, []interface{}) {
-	ctx := context.Background()
+func extractContext(args ...interface{}) (ctx context.Context, filteredArgs []interface{}) {
+	ctx = context.Background()
 	var newArgs []interface{}
 	found := false
 

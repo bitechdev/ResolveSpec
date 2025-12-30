@@ -935,7 +935,16 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	// Add WHERE clause if SQL conditions specified
 	whereConditions := make([]string, 0)
 	if len(xfile.SqlAnd) > 0 {
-		whereConditions = append(whereConditions, xfile.SqlAnd...)
+		// Process each SQL condition: add table prefixes and sanitize
+		for _, sqlCond := range xfile.SqlAnd {
+			// First add table prefixes to unqualified columns
+			prefixedCond := common.AddTablePrefixToColumns(sqlCond, xfile.TableName)
+			// Then sanitize the condition
+			sanitizedCond := common.SanitizeWhereClause(prefixedCond, xfile.TableName)
+			if sanitizedCond != "" {
+				whereConditions = append(whereConditions, sanitizedCond)
+			}
+		}
 	}
 	if len(whereConditions) > 0 {
 		preloadOpt.Where = strings.Join(whereConditions, " AND ")

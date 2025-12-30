@@ -13,9 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/klauspost/compress/gzhttp"
+
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/middleware"
-	"github.com/klauspost/compress/gzhttp"
 )
 
 // gracefulServer wraps http.Server with graceful shutdown capabilities (internal type)
@@ -320,9 +321,9 @@ func (sm *serverManager) RestartAll() error {
 
 	// Retry starting all servers with exponential backoff instead of a fixed sleep.
 	const (
-		maxAttempts      = 5
-		initialBackoff   = 100 * time.Millisecond
-		maxBackoff       = 2 * time.Second
+		maxAttempts    = 5
+		initialBackoff = 100 * time.Millisecond
+		maxBackoff     = 2 * time.Second
 	)
 
 	var lastErr error
@@ -428,7 +429,7 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	var handler http.Handler = cfg.Handler
+	var handler = cfg.Handler
 
 	// Wrap with GZIP handler if enabled
 	if cfg.GZIP {

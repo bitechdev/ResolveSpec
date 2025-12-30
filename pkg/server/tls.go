@@ -102,14 +102,14 @@ func getCertDirectory() (string, error) {
 		// Fallback to current directory if cache dir is not available
 		cacheDir = "."
 	}
-	
+
 	certDir := filepath.Join(cacheDir, "resolvespec", "certs")
-	
+
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(certDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create certificate directory: %w", err)
 	}
-	
+
 	return certDir, nil
 }
 
@@ -120,31 +120,31 @@ func isCertificateValid(certFile string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	// Parse certificate
 	block, _ := pem.Decode(certData)
 	if block == nil {
 		return false
 	}
-	
+
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return false
 	}
-	
+
 	// Check if certificate is expired or will expire in the next 30 days
 	now := time.Now()
 	expiryThreshold := now.Add(30 * 24 * time.Hour)
-	
+
 	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
 		return false
 	}
-	
+
 	// Renew if expiring soon
 	if expiryThreshold.After(cert.NotAfter) {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -156,24 +156,24 @@ func saveCertToFiles(certPEM, keyPEM []byte, host string) (certFile, keyFile str
 	if err != nil {
 		return "", "", err
 	}
-	
+
 	// Sanitize hostname for safe file naming
 	safeHost := sanitizeHostname(host)
-	
+
 	// Use consistent file names based on host
 	certFile = filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", safeHost))
 	keyFile = filepath.Join(certDir, fmt.Sprintf("%s-key.pem", safeHost))
-	
+
 	// Write certificate
 	if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
 		return "", "", fmt.Errorf("failed to write certificate: %w", err)
 	}
-	
+
 	// Write key
 	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		return "", "", fmt.Errorf("failed to write private key: %w", err)
 	}
-	
+
 	return certFile, keyFile, nil
 }
 
@@ -196,10 +196,10 @@ func setupAutoTLS(domains []string, email, cacheDir string) (*tls.Config, error)
 
 	// Create autocert manager
 	m := &autocert.Manager{
-		Prompt:      autocert.AcceptTOS,
-		Cache:       autocert.DirCache(cacheDir),
-		HostPolicy:  autocert.HostWhitelist(domains...),
-		Email:       email,
+		Prompt:     autocert.AcceptTOS,
+		Cache:      autocert.DirCache(cacheDir),
+		HostPolicy: autocert.HostWhitelist(domains...),
+		Email:      email,
 	}
 
 	// Create TLS config
@@ -211,7 +211,7 @@ func setupAutoTLS(domains []string, email, cacheDir string) (*tls.Config, error)
 
 // configureTLS configures TLS for the server based on the provided configuration.
 // Returns the TLS config and certificate/key file paths (if applicable).
-func configureTLS(cfg Config) (*tls.Config, string, string, error) {
+func configureTLS(cfg Config) (tlsConfig *tls.Config, certFile string, keyFile string, err error) {
 	// Option 1: Certificate files provided
 	if cfg.SSLCert != "" && cfg.SSLKey != "" {
 		// Validate that files exist

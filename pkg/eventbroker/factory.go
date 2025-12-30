@@ -24,16 +24,34 @@ func NewProviderFromConfig(cfg config.EventBrokerConfig) (Provider, error) {
 		}), nil
 
 	case "redis":
-		// Redis provider will be implemented in Phase 8
-		return nil, fmt.Errorf("redis provider not yet implemented")
+		return NewRedisProvider(RedisProviderConfig{
+			Host:          cfg.Redis.Host,
+			Port:          cfg.Redis.Port,
+			Password:      cfg.Redis.Password,
+			DB:            cfg.Redis.DB,
+			StreamName:    cfg.Redis.StreamName,
+			ConsumerGroup: cfg.Redis.ConsumerGroup,
+			ConsumerName:  getInstanceID(cfg.InstanceID),
+			InstanceID:    getInstanceID(cfg.InstanceID),
+			MaxLen:        cfg.Redis.MaxLen,
+		})
 
 	case "nats":
-		// NATS provider will be implemented in Phase 9
-		return nil, fmt.Errorf("nats provider not yet implemented")
+		// NATS provider initialization
+		// Note: Requires github.com/nats-io/nats.go dependency
+		return NewNATSProvider(NATSProviderConfig{
+			URL:           cfg.NATS.URL,
+			StreamName:    cfg.NATS.StreamName,
+			SubjectPrefix: "events",
+			InstanceID:    getInstanceID(cfg.InstanceID),
+			MaxAge:        cfg.NATS.MaxAge,
+			Storage:       cfg.NATS.Storage, // "file" or "memory"
+		})
 
 	case "database":
-		// Database provider will be implemented in Phase 7
-		return nil, fmt.Errorf("database provider not yet implemented")
+		// Database provider requires a database connection
+		// This should be provided externally
+		return nil, fmt.Errorf("database provider requires a database connection to be configured separately")
 
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)

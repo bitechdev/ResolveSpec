@@ -1,8 +1,8 @@
 package main
 
 import (
+	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
@@ -67,9 +67,36 @@ func main() {
 	// Setup routes using new SetupMuxRoutes function (without authentication)
 	resolvespec.SetupMuxRoutes(r, handler, nil)
 
-	// Create graceful server with configuration
-	srv := server.NewGracefulServer(server.Config{
-		Addr:            cfg.Server.Addr,
+	// Create server manager
+	mgr := server.NewManager()
+
+	// Parse host and port from addr
+	host := ""
+	port := 8080
+	if cfg.Server.Addr != "" {
+		// Parse addr (format: ":8080" or "localhost:8080")
+		if cfg.Server.Addr[0] == ':' {
+			// Just port
+			_, err := fmt.Sscanf(cfg.Server.Addr, ":%d", &port)
+			if err != nil {
+				logger.Error("Invalid server address: %s", cfg.Server.Addr)
+				os.Exit(1)
+			}
+		} else {
+			// Host and port
+			_, err := fmt.Sscanf(cfg.Server.Addr, "%[^:]:%d", &host, &port)
+			if err != nil {
+				logger.Error("Invalid server address: %s", cfg.Server.Addr)
+				os.Exit(1)
+			}
+		}
+	}
+
+	// Add server instance
+	_, err = mgr.Add(server.Config{
+		Name:            "api",
+		Host:            host,
+		Port:            port,
 		Handler:         r,
 		ShutdownTimeout: cfg.Server.ShutdownTimeout,
 		DrainTimeout:    cfg.Server.DrainTimeout,
@@ -77,11 +104,15 @@ func main() {
 		WriteTimeout:    cfg.Server.WriteTimeout,
 		IdleTimeout:     cfg.Server.IdleTimeout,
 	})
+	if err != nil {
+		logger.Error("Failed to add server: %v", err)
+		os.Exit(1)
+	}
 
 	// Start server with graceful shutdown
 	logger.Info("Starting server on %s", cfg.Server.Addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("Server failed to start: %v", err)
+	if err := mgr.ServeWithGracefulShutdown(); err != nil {
+		logger.Error("Server failed: %v", err)
 		os.Exit(1)
 	}
 }

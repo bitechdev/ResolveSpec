@@ -13,6 +13,51 @@ test-integration:
 # Run all tests (unit + integration)
 test: test-unit test-integration
 
+release-version: ## Create and push a release with specific version (use: make release-version VERSION=v1.2.3)
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Error: VERSION is required. Usage: make release-version VERSION=v1.2.3"; \
+		exit 1; \
+	fi
+	@version="$(VERSION)"; \
+	if ! echo "$$version" | grep -q "^v"; then \
+		version="v$$version"; \
+	fi; \
+	echo "Creating release: $$version"; \
+	latest_tag=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
+	if [ -z "$$latest_tag" ]; then \
+		commit_logs=$$(git log --pretty=format:"- %s" --no-merges); \
+	else \
+		commit_logs=$$(git log "$${latest_tag}..HEAD" --pretty=format:"- %s" --no-merges); \
+	fi; \
+	if [ -z "$$commit_logs" ]; then \
+		tag_message="Release $$version"; \
+	else \
+		tag_message="Release $$version\n\n$$commit_logs"; \
+	fi; \
+	git tag -a "$$version" -m "$$tag_message"; \
+	git push origin "$$version"; \
+	echo "Tag $$version created and pushed to remote repository."
+
+
+lint: ## Run linter
+	@echo "Running linter..."
+	@if command -v golangci-lint > /dev/null; then \
+		golangci-lint run --config=.golangci.json; \
+	else \
+		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		exit 1; \
+	fi
+
+lintfix: ## Run linter
+	@echo "Running linter..."
+	@if command -v golangci-lint > /dev/null; then \
+		golangci-lint run --config=.golangci.json --fix; \
+	else \
+		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		exit 1; \
+	fi
+
+
 # Start PostgreSQL for integration tests
 docker-up:
 	@echo "Starting PostgreSQL container..."

@@ -172,12 +172,13 @@ event_broker:
   provider: memory
 ```
 
-### Redis Provider (Future)
+### Redis Provider
 
 Best for: Production, multi-instance deployments
 
-- **Pros**: Persistent, cross-instance pub/sub, reliable
-- **Cons**: Requires Redis
+- **Pros**: Persistent, cross-instance pub/sub, reliable, Redis Streams support
+- **Cons**: Requires Redis server
+- **Status**: ✅ Implemented
 
 ```yaml
 event_broker:
@@ -185,16 +186,20 @@ event_broker:
   redis:
     stream_name: "resolvespec:events"
     consumer_group: "resolvespec-workers"
+    max_len: 10000
     host: "localhost"
     port: 6379
+    password: ""
+    db: 0
 ```
 
-### NATS Provider (Future)
+### NATS Provider
 
 Best for: High-performance, low-latency requirements
 
-- **Pros**: Very fast, built-in clustering, durable
+- **Pros**: Very fast, built-in clustering, durable, JetStream support
 - **Cons**: Requires NATS server
+- **Status**: ✅ Implemented
 
 ```yaml
 event_broker:
@@ -202,14 +207,17 @@ event_broker:
   nats:
     url: "nats://localhost:4222"
     stream_name: "RESOLVESPEC_EVENTS"
+    storage: "file"  # or "memory"
+    max_age: "24h"
 ```
 
-### Database Provider (Future)
+### Database Provider
 
 Best for: Audit trails, event replay, SQL queries
 
 - **Pros**: No additional infrastructure, full SQL query support, PostgreSQL NOTIFY for real-time
-- **Cons**: Slower than Redis/NATS
+- **Cons**: Slower than Redis/NATS, requires database connection
+- **Status**: ✅ Implemented
 
 ```yaml
 event_broker:
@@ -217,6 +225,7 @@ event_broker:
   database:
     table_name: "events"
     channel: "resolvespec_events"
+    poll_interval: "1s"
 ```
 
 ## Processing Modes
@@ -314,14 +323,25 @@ See `example_usage.go` for comprehensive examples including:
 └─────────────────┘
 ```
 
+## Implemented Features
+
+- [x] Memory Provider (in-process, single-instance)
+- [x] Redis Streams Provider (distributed, persistent)
+- [x] NATS JetStream Provider (distributed, high-performance)
+- [x] Database Provider with PostgreSQL NOTIFY (SQL-queryable, audit-friendly)
+- [x] Sync and Async processing modes
+- [x] Pattern-based subscriptions
+- [x] Hook integration for automatic CRUD events
+- [x] Retry policy with exponential backoff
+- [x] Graceful shutdown
+
 ## Future Enhancements
 
-- [ ] Database Provider with PostgreSQL NOTIFY
-- [ ] Redis Streams Provider
-- [ ] NATS JetStream Provider
-- [ ] Event replay functionality
-- [ ] Dead letter queue
-- [ ] Event filtering at provider level
-- [ ] Batch publishing
-- [ ] Event compression
-- [ ] Schema versioning
+- [ ] Event replay functionality from specific timestamp
+- [ ] Dead letter queue for failed events
+- [ ] Event filtering at provider level for performance
+- [ ] Batch publishing support
+- [ ] Event compression for large payloads
+- [ ] Schema versioning and migration
+- [ ] Event streaming to external systems (Kafka, RabbitMQ)
+- [ ] Event aggregation and analytics

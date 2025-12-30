@@ -156,7 +156,7 @@ func NewDefaultMIMEResolver() *DefaultMIMEResolver {
 	resolver.RegisterMIMEType(".stl", "model/stl")
 
 	// Other common web assets
-	resolver.RegisterMIMEType(".map", "application/json")        // Source maps
+	resolver.RegisterMIMEType(".map", "application/json") // Source maps
 	resolver.RegisterMIMEType(".swf", "application/x-shockwave-flash")
 	resolver.RegisterMIMEType(".apk", "application/vnd.android.package-archive")
 	resolver.RegisterMIMEType(".dmg", "application/x-apple-diskimage")

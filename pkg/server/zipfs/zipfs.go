@@ -37,7 +37,7 @@ type ZipFile struct {
 
 func (f *ZipFile) Stat() (fs.FileInfo, error) {
 	if f.File != nil {
-		return f.File.FileInfo(), nil
+		return f.FileInfo(), nil
 	}
 	return nil, fmt.Errorf("No file")
 }
@@ -52,7 +52,7 @@ func (f *ZipFile) Close() error {
 func (f *ZipFile) Read(b []byte) (int, error) {
 	if f.rc == nil {
 		var err error
-		f.rc, err = f.File.Open()
+		f.rc, err = f.Open()
 		if err != nil {
 			return 0, err
 		}
@@ -83,7 +83,7 @@ func (f *ZipFile) Seek(offset int64, whence int) (int64, error) {
 		}
 		f.offset += offset
 	case io.SeekEnd:
-		size := int64(f.File.UncompressedSize64)
+		size := int64(f.UncompressedSize64)
 		if size+offset < 0 {
 			return 0, &fs.PathError{Op: "seek", Path: f.Name, Err: fmt.Errorf("negative position")}
 		}

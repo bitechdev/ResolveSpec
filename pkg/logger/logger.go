@@ -148,35 +148,41 @@ func Debug(template string, args ...interface{}) {
 }
 
 // CatchPanic - Handle panic
-func CatchPanicCallback(location string, cb func(err any), args ...interface{}) {
-	ctx, _ := extractContext(args...)
-	if err := recover(); err != nil {
-		callstack := debug.Stack()
+// Returns a function that should be deferred to catch panics
+// Example usage: defer CatchPanicCallback("MyFunction", callback)()
+func CatchPanicCallback(location string, cb func(err any), args ...interface{}) func() {
+	return func() {
+		ctx, _ := extractContext(args...)
+		if err := recover(); err != nil {
+			callstack := debug.Stack()
 
-		if Logger != nil {
-			Error("Panic in %s : %v", location, err, ctx) // Pass context implicitly
-		} else {
-			fmt.Printf("%s:PANIC->%+v", location, err)
-			debug.PrintStack()
-		}
+			if Logger != nil {
+				Error("Panic in %s : %v", location, err, ctx) // Pass context implicitly
+			} else {
+				fmt.Printf("%s:PANIC->%+v", location, err)
+				debug.PrintStack()
+			}
 
-		// Send to error tracker
-		if errorTracker != nil {
-			errorTracker.CapturePanic(ctx, err, callstack, map[string]interface{}{
-				"location":   location,
-				"process_id": os.Getpid(),
-			})
-		}
+			// Send to error tracker
+			if errorTracker != nil {
+				errorTracker.CapturePanic(ctx, err, callstack, map[string]interface{}{
+					"location":   location,
+					"process_id": os.Getpid(),
+				})
+			}
 
-		if cb != nil {
-			cb(err)
+			if cb != nil {
+				cb(err)
+			}
 		}
 	}
 }
 
 // CatchPanic - Handle panic
-func CatchPanic(location string, args ...interface{}) {
-	CatchPanicCallback(location, nil, args...)
+// Returns a function that should be deferred to catch panics
+// Example usage: defer CatchPanic("MyFunction")()
+func CatchPanic(location string, args ...interface{}) func() {
+	return CatchPanicCallback(location, nil, args...)
 }
 
 // HandlePanic logs a panic and returns it as an error

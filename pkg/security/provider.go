@@ -296,7 +296,7 @@ func setColSecValue(fieldsrc reflect.Value, colsec ColumnSecurity, fieldTypeName
 }
 
 func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType reflect.Type, pUserID int, pSchema, pTablename string) (reflect.Value, error) {
-	defer logger.CatchPanic("ApplyColumnSecurity")
+	defer logger.CatchPanic("ApplyColumnSecurity")()
 
 	if m.ColumnSecurity == nil {
 		return records, fmt.Errorf("security not initialized")
@@ -437,7 +437,7 @@ func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserID int, pSchema
 }
 
 func (m *SecurityList) GetRowSecurityTemplate(pUserID int, pSchema, pTablename string) (RowSecurity, error) {
-	defer logger.CatchPanic("GetRowSecurityTemplate")
+	defer logger.CatchPanic("GetRowSecurityTemplate")()
 
 	if m.RowSecurity == nil {
 		return RowSecurity{}, fmt.Errorf("security not initialized")

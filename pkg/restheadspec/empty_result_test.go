@@ -14,9 +14,9 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 	handler := &Handler{}
 
 	tests := []struct {
-		name              string
-		input             interface{}
-		shouldBeEmptyArr  bool
+		name             string
+		input            interface{}
+		shouldBeEmptyArr bool
 	}{
 		{
 			name:             "nil should return empty array",
@@ -57,7 +57,7 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 				if len(emptyArr) != 0 {
 					t.Errorf("Expected empty array with length 0, got length %d", len(emptyArr))
 				}
-				
+
 				// Verify it serializes to [] and not null
 				jsonBytes, err := json.Marshal(result)
 				if err != nil {

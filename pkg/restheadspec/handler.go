@@ -2143,22 +2143,22 @@ func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metada
 // sendResponseWithOptions sends a response with optional formatting
 func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options *ExtendedRequestOptions) {
 	w.SetHeader("Content-Type", "application/json")
-	
+
 	// Handle nil data - convert to empty array
 	if data == nil {
 		data = []interface{}{}
 	}
-	
+
 	// Calculate data length after nil conversion
 	dataLen := reflection.Len(data)
-	
+
 	// Add X-No-Data-Found header when no records were found
 	if dataLen == 0 {
 		w.SetHeader("X-No-Data-Found", "true")
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
-	
+
 	// Normalize single-record arrays to objects if requested
 	if options != nil && options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
@@ -2209,12 +2209,12 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
 	// Normalize single-record arrays to objects if requested
 	httpStatus := http.StatusOK
-	
+
 	// Handle nil data - convert to empty array
 	if data == nil {
 		data = []interface{}{}
 	}
-	
+
 	// Calculate data length after nil conversion
 	// Note: This is done BEFORE normalization because X-No-Data-Found indicates
 	// whether data was found in the database, not the final response format

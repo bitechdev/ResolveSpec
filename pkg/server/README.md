@@ -1,233 +1,314 @@
 # Server Package
 
-Graceful HTTP server with request draining and shutdown coordination.
+Production-ready HTTP server manager with graceful shutdown, request draining, and comprehensive TLS/HTTPS support.
+
+## Features
+
+✅ **Multiple Server Management** - Run multiple HTTP/HTTPS servers concurrently
+✅ **Graceful Shutdown** - Handles SIGINT/SIGTERM with request draining
+✅ **Automatic Request Rejection** - New requests get 503 during shutdown
+✅ **Health & Readiness Endpoints** - Kubernetes-ready health checks
+✅ **Shutdown Callbacks** - Register cleanup functions (DB, cache, metrics)
+✅ **Comprehensive TLS Support**:
+  - Certificate files (production)
+  - Self-signed certificates (development/testing)
+  - Let's Encrypt / AutoTLS (automatic certificate management)
+✅ **GZIP Compression** - Optional response compression
+✅ **Panic Recovery** - Automatic panic recovery middleware
+✅ **Configurable Timeouts** - Read, write, idle, drain, and shutdown timeouts
 
 ## Quick Start
+
+### Single Server
 
 ```go
 import "github.com/bitechdev/ResolveSpec/pkg/server"
 
-// Create server
-srv := server.NewGracefulServer(server.Config{
-    Addr:    ":8080",
-    Handler: router,
+// Create server manager
+mgr := server.NewManager()
+
+// Add server
+_, err := mgr.Add(server.Config{
+    Name:    "api-server",
+    Host:    "localhost",
+    Port:    8080,
+    Handler: myRouter,
+    GZIP:    true,
 })
 
-// Start server (blocks until shutdown signal)
-if err := srv.ListenAndServe(); err != nil {
+// Start and wait for shutdown signal
+if err := mgr.ServeWithGracefulShutdown(); err != nil {
     log.Fatal(err)
 }
 ```
 
-## Features
+### Multiple Servers
 
-✅ Graceful shutdown on SIGINT/SIGTERM
-✅ Request draining (waits for in-flight requests)
-✅ Automatic request rejection during shutdown
-✅ Health and readiness endpoints
-✅ Shutdown callbacks for cleanup
-✅ Configurable timeouts
+```go
+mgr := server.NewManager()
+
+// Public API
+mgr.Add(server.Config{
+    Name:    "public-api",
+    Port:    8080,
+    Handler: publicRouter,
+})
+
+// Admin API
+mgr.Add(server.Config{
+    Name:    "admin-api",
+    Port:    8081,
+    Handler: adminRouter,
+})
+
+// Start all and wait
+mgr.ServeWithGracefulShutdown()
+```
+
+## HTTPS/TLS Configuration
+
+### Option 1: Certificate Files (Production)
+
+```go
+mgr.Add(server.Config{
+    Name:    "https-server",
+    Host:    "0.0.0.0",
+    Port:    443,
+    Handler: handler,
+    SSLCert: "/etc/ssl/certs/server.crt",
+    SSLKey:  "/etc/ssl/private/server.key",
+})
+```
+
+### Option 2: Self-Signed Certificate (Development)
+
+```go
+mgr.Add(server.Config{
+    Name:          "dev-server",
+    Host:          "localhost",
+    Port:          8443,
+    Handler:       handler,
+    SelfSignedSSL: true,  // Auto-generates certificate
+})
+```
+
+### Option 3: Let's Encrypt / AutoTLS (Production)
+
+```go
+mgr.Add(server.Config{
+    Name:            "prod-server",
+    Host:            "0.0.0.0",
+    Port:            443,
+    Handler:         handler,
+    AutoTLS:         true,
+    AutoTLSDomains:  []string{"example.com", "www.example.com"},
+    AutoTLSEmail:    "admin@example.com",
+    AutoTLSCacheDir: "./certs-cache",  // Certificate cache directory
+})
+```
 
 ## Configuration
 
 ```go
-config := server.Config{
-    // Server address
-    Addr: ":8080",
+server.Config{
+    // Basic configuration
+    Name:        "my-server",        // Server name (required)
+    Host:        "0.0.0.0",          // Bind address
+    Port:        8080,               // Port (required)
+    Handler:     myRouter,           // HTTP handler (required)
+    Description: "My API server",    // Optional description
 
-    // HTTP handler
-    Handler: myRouter,
+    // Features
+    GZIP: true,                      // Enable GZIP compression
 
-    // Maximum time for graceful shutdown (default: 30s)
-    ShutdownTimeout: 30 * time.Second,
+    // TLS/HTTPS (choose one option)
+    SSLCert:         "/path/to/cert.pem",  // Certificate file
+    SSLKey:          "/path/to/key.pem",   // Key file
+    SelfSignedSSL:   false,                // Auto-generate self-signed cert
+    AutoTLS:         false,                // Let's Encrypt
+    AutoTLSDomains:  []string{},           // Domains for AutoTLS
+    AutoTLSEmail:    "",                   // Email for Let's Encrypt
+    AutoTLSCacheDir: "./certs-cache",      // Cert cache directory
 
-    // Time to wait for in-flight requests (default: 25s)
-    DrainTimeout: 25 * time.Second,
-
-    // Request read timeout (default: 10s)
-    ReadTimeout: 10 * time.Second,
-
-    // Response write timeout (default: 10s)
-    WriteTimeout: 10 * time.Second,
-
-    // Idle connection timeout (default: 120s)
-    IdleTimeout: 120 * time.Second,
+    // Timeouts
+    ShutdownTimeout: 30 * time.Second,     // Max shutdown time
+    DrainTimeout:    25 * time.Second,     // Request drain timeout
+    ReadTimeout:     15 * time.Second,     // Request read timeout
+    WriteTimeout:    15 * time.Second,     // Response write timeout
+    IdleTimeout:     60 * time.Second,     // Idle connection timeout
 }
-
-srv := server.NewGracefulServer(config)
 ```
 
-## Shutdown Behavior
+## Graceful Shutdown
 
-**Signal received (SIGINT/SIGTERM):**
+### Automatic (Recommended)
 
-1. **Mark as shutting down** - New requests get 503
-2. **Drain requests** - Wait up to `DrainTimeout` for in-flight requests
-3. **Shutdown server** - Close listeners and connections
-4. **Execute callbacks** - Run registered cleanup functions
+```go
+mgr := server.NewManager()
 
+// Add servers...
+
+// This blocks until SIGINT/SIGTERM
+mgr.ServeWithGracefulShutdown()
 ```
-Time   Event
-─────────────────────────────────────────
-0s     Signal received: SIGTERM
-       ├─ Mark as shutting down
-       ├─ Reject new requests (503)
-       └─ Start draining...
 
-1s     In-flight: 50 requests
-2s     In-flight: 32 requests
-3s     In-flight: 12 requests
-4s     In-flight: 3 requests
-5s     In-flight: 0 requests ✓
-       └─ All requests drained
+### Manual Control
 
-5s     Execute shutdown callbacks
-6s     Shutdown complete
+```go
+mgr := server.NewManager()
+
+// Add and start servers
+mgr.StartAll()
+
+// Later... stop gracefully
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+if err := mgr.StopAllWithContext(ctx); err != nil {
+    log.Printf("Shutdown error: %v", err)
+}
+```
+
+### Shutdown Callbacks
+
+Register cleanup functions to run during shutdown:
+
+```go
+// Close database
+mgr.RegisterShutdownCallback(func(ctx context.Context) error {
+    log.Println("Closing database...")
+    return db.Close()
+})
+
+// Flush metrics
+mgr.RegisterShutdownCallback(func(ctx context.Context) error {
+    log.Println("Flushing metrics...")
+    return metrics.Flush(ctx)
+})
+
+// Close cache
+mgr.RegisterShutdownCallback(func(ctx context.Context) error {
+    log.Println("Closing cache...")
+    return cache.Close()
+})
 ```
 
 ## Health Checks
 
-### Health Endpoint
-
-Returns 200 when healthy, 503 when shutting down:
+### Adding Health Endpoints
 
 ```go
-router.HandleFunc("/health", srv.HealthCheckHandler())
+instance, _ := mgr.Add(server.Config{
+    Name:    "api-server",
+    Port:    8080,
+    Handler: router,
+})
+
+// Add health endpoints to your router
+router.HandleFunc("/health", instance.HealthCheckHandler())
+router.HandleFunc("/ready", instance.ReadinessHandler())
 ```
 
-**Response (healthy):**
+### Health Endpoint
+
+Returns server health status:
+
+**Healthy (200 OK):**
 ```json
 {"status":"healthy"}
 ```
 
-**Response (shutting down):**
+**Shutting Down (503 Service Unavailable):**
 ```json
 {"status":"shutting_down"}
 ```
 
 ### Readiness Endpoint
 
-Includes in-flight request count:
+Returns readiness with in-flight request count:
 
-```go
-router.HandleFunc("/ready", srv.ReadinessHandler())
-```
-
-**Response:**
+**Ready (200 OK):**
 ```json
 {"ready":true,"in_flight_requests":12}
 ```
 
-**During shutdown:**
+**Not Ready (503 Service Unavailable):**
 ```json
 {"ready":false,"reason":"shutting_down"}
 ```
 
-## Shutdown Callbacks
+## Shutdown Behavior
 
-Register cleanup functions to run during shutdown:
+When a shutdown signal (SIGINT/SIGTERM) is received:
 
-```go
-// Close database
-server.RegisterShutdownCallback(func(ctx context.Context) error {
-    logger.Info("Closing database connection...")
-    return db.Close()
-})
+1. **Mark as shutting down** → New requests get 503
+2. **Execute callbacks** → Run cleanup functions
+3. **Drain requests** → Wait up to `DrainTimeout` for in-flight requests
+4. **Shutdown servers** → Close listeners and connections
 
-// Flush metrics
-server.RegisterShutdownCallback(func(ctx context.Context) error {
-    logger.Info("Flushing metrics...")
-    return metricsProvider.Flush(ctx)
-})
+```
+Time   Event
+─────────────────────────────────────────
+0s     Signal received: SIGTERM
+       ├─ Mark servers as shutting down
+       ├─ Reject new requests (503)
+       └─ Execute shutdown callbacks
 
-// Close cache
-server.RegisterShutdownCallback(func(ctx context.Context) error {
-    logger.Info("Closing cache...")
-    return cache.Close()
-})
+1s     Callbacks complete
+       └─ Start draining requests...
+
+2s     In-flight: 50 requests
+3s     In-flight: 32 requests
+4s     In-flight: 12 requests
+5s     In-flight: 3 requests
+6s     In-flight: 0 requests ✓
+       └─ All requests drained
+
+6s     Shutdown servers
+7s     All servers stopped ✓
 ```
 
-## Complete Example
+## Server Management
+
+### Get Server Instance
 
 ```go
-package main
-
-import (
-    "context"
-    "log"
-    "net/http"
-    "time"
-
-    "github.com/bitechdev/ResolveSpec/pkg/middleware"
-    "github.com/bitechdev/ResolveSpec/pkg/metrics"
-    "github.com/bitechdev/ResolveSpec/pkg/server"
-    "github.com/gorilla/mux"
-)
-
-func main() {
-    // Initialize metrics
-    metricsProvider := metrics.NewPrometheusProvider()
-    metrics.SetProvider(metricsProvider)
-
-    // Create router
-    router := mux.NewRouter()
-
-    // Apply middleware
-    rateLimiter := middleware.NewRateLimiter(100, 20)
-    sizeLimiter := middleware.NewRequestSizeLimiter(middleware.Size10MB)
-    sanitizer := middleware.DefaultSanitizer()
-
-    router.Use(rateLimiter.Middleware)
-    router.Use(sizeLimiter.Middleware)
-    router.Use(sanitizer.Middleware)
-    router.Use(metricsProvider.Middleware)
-
-    // API routes
-    router.HandleFunc("/api/data", dataHandler)
-
-    // Create graceful server
-    srv := server.NewGracefulServer(server.Config{
-        Addr:            ":8080",
-        Handler:         router,
-        ShutdownTimeout: 30 * time.Second,
-        DrainTimeout:    25 * time.Second,
-    })
-
-    // Health checks
-    router.HandleFunc("/health", srv.HealthCheckHandler())
-    router.HandleFunc("/ready", srv.ReadinessHandler())
-
-    // Metrics endpoint
-    router.Handle("/metrics", metricsProvider.Handler())
-
-    // Register shutdown callbacks
-    server.RegisterShutdownCallback(func(ctx context.Context) error {
-        log.Println("Cleanup: Flushing metrics...")
-        return nil
-    })
-
-    server.RegisterShutdownCallback(func(ctx context.Context) error {
-        log.Println("Cleanup: Closing database...")
-        // return db.Close()
-        return nil
-    })
-
-    // Start server (blocks until shutdown)
-    log.Printf("Starting server on :8080")
-    if err := srv.ListenAndServe(); err != nil {
-        log.Fatal(err)
-    }
-
-    // Wait for shutdown to complete
-    srv.Wait()
-    log.Println("Server stopped")
+instance, err := mgr.Get("api-server")
+if err != nil {
+    log.Fatal(err)
 }
 
-func dataHandler(w http.ResponseWriter, r *http.Request) {
-    // Your handler logic
-    time.Sleep(100 * time.Millisecond) // Simulate work
-    w.WriteHeader(http.StatusOK)
-    w.Write([]byte(`{"message":"success"}`))
+// Check status
+fmt.Printf("Address: %s\n", instance.Addr())
+fmt.Printf("Name: %s\n", instance.Name())
+fmt.Printf("In-flight: %d\n", instance.InFlightRequests())
+fmt.Printf("Shutting down: %v\n", instance.IsShuttingDown())
+```
+
+### List All Servers
+
+```go
+instances := mgr.List()
+for _, instance := range instances {
+    fmt.Printf("Server: %s at %s\n", instance.Name(), instance.Addr())
+}
+```
+
+### Remove Server
+
+```go
+// Stop and remove a server
+if err := mgr.Remove("api-server"); err != nil {
+    log.Printf("Error removing server: %v", err)
+}
+```
+
+### Restart All Servers
+
+```go
+// Gracefully restart all servers
+if err := mgr.RestartAll(); err != nil {
+    log.Printf("Error restarting: %v", err)
 }
 ```
 
@@ -250,23 +331,21 @@ spec:
         ports:
         - containerPort: 8080
 
-        # Liveness probe - is app running?
+        # Liveness probe
         livenessProbe:
           httpGet:
             path: /health
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 10
-          timeoutSeconds: 5
 
-        # Readiness probe - can app handle traffic?
+        # Readiness probe
         readinessProbe:
           httpGet:
             path: /ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
-          timeoutSeconds: 3
 
         # Graceful shutdown
         lifecycle:
@@ -274,26 +353,12 @@ spec:
             exec:
               command: ["/bin/sh", "-c", "sleep 5"]
 
-        # Environment
         env:
         - name: SHUTDOWN_TIMEOUT
           value: "30"
-```
 
-### Service
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: myapp
-spec:
-  selector:
-    app: myapp
-  ports:
-  - port: 80
-    targetPort: 8080
-  type: LoadBalancer
+      # Allow time for graceful shutdown
+      terminationGracePeriodSeconds: 35
 ```
 
 ## Docker Compose
@@ -312,8 +377,70 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
-    stop_grace_period: 35s  # Slightly longer than shutdown timeout
+    stop_grace_period: 35s
+```
+
+## Complete Example
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/bitechdev/ResolveSpec/pkg/server"
+)
+
+func main() {
+    // Create server manager
+    mgr := server.NewManager()
+
+    // Register shutdown callbacks
+    mgr.RegisterShutdownCallback(func(ctx context.Context) error {
+        log.Println("Cleanup: Closing database...")
+        // return db.Close()
+        return nil
+    })
+
+    // Create router
+    router := http.NewServeMux()
+    router.HandleFunc("/api/data", dataHandler)
+
+    // Add server
+    instance, err := mgr.Add(server.Config{
+        Name:            "api-server",
+        Host:            "0.0.0.0",
+        Port:            8080,
+        Handler:         router,
+        GZIP:            true,
+        ShutdownTimeout: 30 * time.Second,
+        DrainTimeout:    25 * time.Second,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Add health endpoints
+    router.HandleFunc("/health", instance.HealthCheckHandler())
+    router.HandleFunc("/ready", instance.ReadinessHandler())
+
+    // Start and wait for shutdown
+    log.Println("Starting server on :8080")
+    if err := mgr.ServeWithGracefulShutdown(); err != nil {
+        log.Printf("Server stopped: %v", err)
+    }
+
+    log.Println("Server shutdown complete")
+}
+
+func dataHandler(w http.ResponseWriter, r *http.Request) {
+    time.Sleep(100 * time.Millisecond) // Simulate work
+    w.WriteHeader(http.StatusOK)
+    w.Write([]byte(`{"message":"success"}`))
+}
 ```
 
 ## Testing Graceful Shutdown
@@ -330,7 +457,7 @@ SERVER_PID=$!
 # Wait for server to start
 sleep 2
 
-# Send some requests
+# Send requests
 for i in {1..10}; do
     curl http://localhost:8080/api/data &
 done
@@ -341,100 +468,12 @@ sleep 1
 # Send shutdown signal
 kill -TERM $SERVER_PID
 
-# Try to send more requests (should get 503)
+# Try more requests (should get 503)
 curl -v http://localhost:8080/api/data
 
 # Wait for server to stop
 wait $SERVER_PID
 echo "Server stopped gracefully"
-```
-
-### Expected Output
-
-```
-Starting server on :8080
-Received signal: terminated, initiating graceful shutdown
-Starting graceful shutdown...
-Waiting for 8 in-flight requests to complete...
-Waiting for 4 in-flight requests to complete...
-Waiting for 1 in-flight requests to complete...
-All requests drained in 2.3s
-Cleanup: Flushing metrics...
-Cleanup: Closing database...
-Shutting down HTTP server...
-Graceful shutdown complete
-Server stopped
-```
-
-## Monitoring In-Flight Requests
-
-```go
-// Get current in-flight count
-count := srv.InFlightRequests()
-fmt.Printf("In-flight requests: %d\n", count)
-
-// Check if shutting down
-if srv.IsShuttingDown() {
-    fmt.Println("Server is shutting down")
-}
-```
-
-## Advanced Usage
-
-### Custom Shutdown Logic
-
-```go
-// Implement custom shutdown
-go func() {
-    sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-    <-sigChan
-    log.Println("Shutdown signal received")
-
-    // Custom pre-shutdown logic
-    log.Println("Running custom cleanup...")
-
-    // Shutdown with callbacks
-    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-    defer cancel()
-
-    if err := srv.ShutdownWithCallbacks(ctx); err != nil {
-        log.Printf("Shutdown error: %v", err)
-    }
-}()
-
-// Start server
-srv.server.ListenAndServe()
-```
-
-### Multiple Servers
-
-```go
-// HTTP server
-httpSrv := server.NewGracefulServer(server.Config{
-    Addr:    ":8080",
-    Handler: httpRouter,
-})
-
-// HTTPS server
-httpsSrv := server.NewGracefulServer(server.Config{
-    Addr:    ":8443",
-    Handler: httpsRouter,
-})
-
-// Start both
-go httpSrv.ListenAndServe()
-go httpsSrv.ListenAndServe()
-
-// Shutdown both on signal
-sigChan := make(chan os.Signal, 1)
-signal.Notify(sigChan, os.Interrupt)
-<-sigChan
-
-ctx := context.Background()
-httpSrv.Shutdown(ctx)
-httpsSrv.Shutdown(ctx)
 ```
 
 ## Best Practices
@@ -443,7 +482,7 @@ httpsSrv.Shutdown(ctx)
    - `DrainTimeout` < `ShutdownTimeout`
    - `ShutdownTimeout` < Kubernetes `terminationGracePeriodSeconds`
 
-2. **Register cleanup callbacks** for:
+2. **Use shutdown callbacks** for:
    - Database connections
    - Message queues
    - Metrics flushing
@@ -458,7 +497,12 @@ httpsSrv.Shutdown(ctx)
    - Set `preStop` hook in Kubernetes (5-10s delay)
    - Allows load balancer to deregister before shutdown
 
-5. **Monitoring**
+5. **HTTPS in production**
+   - Use AutoTLS for public-facing services
+   - Use certificate files for enterprise PKI
+   - Use self-signed only for development/testing
+
+6. **Monitoring**
    - Track in-flight requests in metrics
    - Alert on slow drains
    - Monitor shutdown duration
@@ -470,24 +514,63 @@ httpsSrv.Shutdown(ctx)
 ```go
 // Increase drain timeout
 config.DrainTimeout = 60 * time.Second
+config.ShutdownTimeout = 65 * time.Second
 ```
 
-### Requests Still Timing Out
+### Requests Timing Out
 
 ```go
 // Increase write timeout
 config.WriteTimeout = 30 * time.Second
 ```
 
-### Force Shutdown Not Working
-
-The server will force shutdown after `ShutdownTimeout` even if requests are still in-flight. Adjust timeouts as needed.
-
-### Debugging Shutdown
+### Certificate Issues
 
 ```go
-// Enable debug logging
+// Verify certificate files exist and are readable
+if _, err := os.Stat(config.SSLCert); err != nil {
+    log.Fatalf("Certificate not found: %v", err)
+}
+
+// For AutoTLS, ensure:
+// - Port 443 is accessible
+// - Domains resolve to server IP
+// - Cache directory is writable
+```
+
+### Debug Logging
+
+```go
 import "github.com/bitechdev/ResolveSpec/pkg/logger"
 
+// Enable debug logging
 logger.SetLevel("debug")
 ```
+
+## API Reference
+
+### Manager Methods
+
+- `NewManager()` - Create new server manager
+- `Add(cfg Config)` - Register server instance
+- `Get(name string)` - Get server by name
+- `Remove(name string)` - Stop and remove server
+- `StartAll()` - Start all registered servers
+- `StopAll()` - Stop all servers gracefully
+- `StopAllWithContext(ctx)` - Stop with timeout
+- `RestartAll()` - Restart all servers
+- `List()` - Get all server instances
+- `ServeWithGracefulShutdown()` - Start and block until shutdown
+- `RegisterShutdownCallback(cb)` - Register cleanup function
+
+### Instance Methods
+
+- `Start()` - Start the server
+- `Stop(ctx)` - Stop gracefully
+- `Addr()` - Get server address
+- `Name()` - Get server name
+- `HealthCheckHandler()` - Get health handler
+- `ReadinessHandler()` - Get readiness handler
+- `InFlightRequests()` - Get in-flight count
+- `IsShuttingDown()` - Check shutdown status
+- `Wait()` - Block until shutdown complete

@@ -39,6 +39,9 @@ type Provider interface {
 	// UpdateEventQueueSize updates the event queue size metric
 	UpdateEventQueueSize(size int64)
 
+	// RecordPanic records a panic event
+	RecordPanic(methodName string)
+
 	// Handler returns an HTTP handler for exposing metrics (e.g., /metrics endpoint)
 	Handler() http.Handler
 }
@@ -75,6 +78,7 @@ func (n *NoOpProvider) RecordEventPublished(source, eventType string) {}
 func (n *NoOpProvider) RecordEventProcessed(source, eventType, status string, duration time.Duration) {
 }
 func (n *NoOpProvider) UpdateEventQueueSize(size int64) {}
+func (n *NoOpProvider) RecordPanic(methodName string)   {}
 func (n *NoOpProvider) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

@@ -658,3 +658,76 @@ func TestSanitizeWhereClauseWithModel(t *testing.T) {
 		})
 	}
 }
+
+func TestAddTablePrefixToColumns_ComplexConditions(t *testing.T) {
+tests := []struct {
+name      string
+where     string
+tableName string
+expected  string
+}{
+{
+name:      "Parentheses with true AND condition - should not prefix true",
+where:     "(true AND status = 'active')",
+tableName: "mastertask",
+expected:  "(true AND mastertask.status = 'active')",
+},
+{
+name:      "Parentheses with multiple conditions including true",
+where:     "(true AND status = 'active' AND id > 5)",
+tableName: "mastertask",
+expected:  "(true AND mastertask.status = 'active' AND mastertask.id > 5)",
+},
+{
+name:      "Nested parentheses with true",
+where:     "((true AND status = 'active'))",
+tableName: "mastertask",
+expected:  "((true AND mastertask.status = 'active'))",
+},
+{
+name:      "Mixed: false AND valid conditions",
+where:     "(false AND name = 'test')",
+tableName: "mastertask",
+expected:  "(false AND mastertask.name = 'test')",
+},
+{
+name:      "Mixed: null AND valid conditions",
+where:     "(null AND status = 'active')",
+tableName: "mastertask",
+expected:  "(null AND mastertask.status = 'active')",
+},
+{
+name:      "Multiple true conditions in parentheses",
+where:     "(true AND true AND status = 'active')",
+tableName: "mastertask",
+expected:  "(true AND true AND mastertask.status = 'active')",
+},
+{
+name:      "Simple true without parens - should not prefix",
+where:     "true",
+tableName: "mastertask",
+expected:  "true",
+},
+{
+name:      "Simple condition without parens - should prefix",
+where:     "status = 'active'",
+tableName: "mastertask",
+expected:  "mastertask.status = 'active'",
+},
+{
+name:      "Unregistered table with true - should not prefix true",
+where:     "(true AND status = 'active')",
+tableName: "unregistered_table",
+expected:  "(true AND unregistered_table.status = 'active')",
+},
+}
+
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+result := AddTablePrefixToColumns(tt.where, tt.tableName)
+if result != tt.expected {
+t.Errorf("AddTablePrefixToColumns(%q, %q) = %q; want %q", tt.where, tt.tableName, result, tt.expected)
+}
+})
+}
+}

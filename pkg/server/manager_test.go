@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -325,4 +327,73 @@ func TestShutdownCallbacks(t *testing.T) {
 	callbackMu.Unlock()
 
 	assert.True(t, executed, "Shutdown callback should have been executed")
+}
+
+func TestSelfSignedSSLCertificateReuse(t *testing.T) {
+	logger.Init(true)
+	
+	// Get expected cert directory location
+	cacheDir, err := os.UserCacheDir()
+	require.NoError(t, err)
+	certDir := filepath.Join(cacheDir, "resolvespec", "certs")
+	
+	host := "localhost"
+	certFile := filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", host))
+	keyFile := filepath.Join(certDir, fmt.Sprintf("%s-key.pem", host))
+	
+	// Clean up any existing cert files from previous tests
+	os.Remove(certFile)
+	os.Remove(keyFile)
+	
+	// First server creation - should generate new certificates
+	sm1 := NewManager()
+	testPort1 := getFreePort(t)
+	_, err = sm1.Add(Config{
+		Name:           "SSLTestServer1",
+		Host:           host,
+		Port:           testPort1,
+		Handler:        http.NewServeMux(),
+		SelfSignedSSL:  true,
+		ShutdownTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	
+	// Verify certificates were created
+	_, err = os.Stat(certFile)
+	require.NoError(t, err, "certificate file should exist after first creation")
+	_, err = os.Stat(keyFile)
+	require.NoError(t, err, "key file should exist after first creation")
+	
+	// Get modification time of cert file
+	info1, err := os.Stat(certFile)
+	require.NoError(t, err)
+	modTime1 := info1.ModTime()
+	
+	// Wait a bit to ensure different modification times
+	time.Sleep(100 * time.Millisecond)
+	
+	// Second server creation - should reuse existing certificates
+	sm2 := NewManager()
+	testPort2 := getFreePort(t)
+	_, err = sm2.Add(Config{
+		Name:           "SSLTestServer2",
+		Host:           host,
+		Port:           testPort2,
+		Handler:        http.NewServeMux(),
+		SelfSignedSSL:  true,
+		ShutdownTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	
+	// Get modification time of cert file after second creation
+	info2, err := os.Stat(certFile)
+	require.NoError(t, err)
+	modTime2 := info2.ModTime()
+	
+	// Verify the certificate was reused (same modification time)
+	assert.Equal(t, modTime1, modTime2, "certificate should be reused, not regenerated")
+	
+	// Clean up
+	sm1.StopAll()
+	sm2.StopAll()
 }

@@ -13,10 +13,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
+
+// certGenerationMutex protects concurrent certificate generation for the same host
+var certGenerationMutex sync.Mutex
 
 // generateSelfSignedCert generates a self-signed certificate for the given host.
 // Returns the certificate and private key in PEM format.
@@ -75,30 +79,101 @@ func generateSelfSignedCert(host string) (certPEM, keyPEM []byte, err error) {
 	return certPEM, keyPEM, nil
 }
 
-// saveCertToTempFiles saves certificate and key PEM data to temporary files.
-// Returns the file paths for the certificate and key.
-func saveCertToTempFiles(certPEM, keyPEM []byte) (certFile, keyFile string, err error) {
-	// Create temporary directory
-	tmpDir, err := os.MkdirTemp("", "resolvespec-certs-*")
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create temp directory: %w", err)
+// sanitizeHostname converts a hostname to a safe filename by replacing invalid characters.
+func sanitizeHostname(host string) string {
+	// Replace any character that's not alphanumeric, dot, or dash with underscore
+	safe := ""
+	for _, r := range host {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			safe += string(r)
+		} else {
+			safe += "_"
+		}
 	}
+	return safe
+}
 
-	certFile = filepath.Join(tmpDir, "cert.pem")
-	keyFile = filepath.Join(tmpDir, "key.pem")
+// getCertDirectory returns the directory path for storing self-signed certificates.
+// Creates the directory if it doesn't exist.
+func getCertDirectory() (string, error) {
+	// Use a consistent directory in the user's cache directory
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		// Fallback to current directory if cache dir is not available
+		cacheDir = "."
+	}
+	
+	certDir := filepath.Join(cacheDir, "resolvespec", "certs")
+	
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create certificate directory: %w", err)
+	}
+	
+	return certDir, nil
+}
 
+// isCertificateValid checks if a certificate file exists and is not expired.
+func isCertificateValid(certFile string) bool {
+	// Check if file exists
+	certData, err := os.ReadFile(certFile)
+	if err != nil {
+		return false
+	}
+	
+	// Parse certificate
+	block, _ := pem.Decode(certData)
+	if block == nil {
+		return false
+	}
+	
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	
+	// Check if certificate is expired or will expire in the next 30 days
+	now := time.Now()
+	expiryThreshold := now.Add(30 * 24 * time.Hour)
+	
+	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+		return false
+	}
+	
+	// Renew if expiring soon
+	if expiryThreshold.After(cert.NotAfter) {
+		return false
+	}
+	
+	return true
+}
+
+// saveCertToFiles saves certificate and key PEM data to persistent files.
+// Returns the file paths for the certificate and key.
+func saveCertToFiles(certPEM, keyPEM []byte, host string) (certFile, keyFile string, err error) {
+	// Get certificate directory
+	certDir, err := getCertDirectory()
+	if err != nil {
+		return "", "", err
+	}
+	
+	// Sanitize hostname for safe file naming
+	safeHost := sanitizeHostname(host)
+	
+	// Use consistent file names based on host
+	certFile = filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", safeHost))
+	keyFile = filepath.Join(certDir, fmt.Sprintf("%s-key.pem", safeHost))
+	
 	// Write certificate
 	if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
-		os.RemoveAll(tmpDir)
 		return "", "", fmt.Errorf("failed to write certificate: %w", err)
 	}
-
+	
 	// Write key
 	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
-		os.RemoveAll(tmpDir)
 		return "", "", fmt.Errorf("failed to write private key: %w", err)
 	}
-
+	
 	return certFile, keyFile, nil
 }
 
@@ -170,12 +245,41 @@ func configureTLS(cfg Config) (*tls.Config, string, string, error) {
 			host = "localhost"
 		}
 
+		// Sanitize hostname for safe file naming
+		safeHost := sanitizeHostname(host)
+
+		// Lock to prevent concurrent certificate generation for the same host
+		certGenerationMutex.Lock()
+		defer certGenerationMutex.Unlock()
+
+		// Get certificate directory
+		certDir, err := getCertDirectory()
+		if err != nil {
+			return nil, "", "", fmt.Errorf("failed to get certificate directory: %w", err)
+		}
+
+		// Check for existing valid certificates
+		certFile := filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", safeHost))
+		keyFile := filepath.Join(certDir, fmt.Sprintf("%s-key.pem", safeHost))
+
+		// If valid certificates exist, reuse them
+		if isCertificateValid(certFile) {
+			// Verify key file also exists
+			if _, err := os.Stat(keyFile); err == nil {
+				tlsConfig := &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+				return tlsConfig, certFile, keyFile, nil
+			}
+		}
+
+		// Generate new certificates
 		certPEM, keyPEM, err := generateSelfSignedCert(host)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("failed to generate self-signed certificate: %w", err)
 		}
 
-		certFile, keyFile, err := saveCertToTempFiles(certPEM, keyPEM)
+		certFile, keyFile, err = saveCertToFiles(certPEM, keyPEM, host)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("failed to save self-signed certificate: %w", err)
 		}

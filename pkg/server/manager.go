@@ -397,8 +397,8 @@ func (sm *serverManager) ServeWithGracefulShutdown() error {
 type serverInstance struct {
 	cfg            Config
 	gracefulServer *gracefulServer
-	certFile       string // Path to certificate file (may be temporary for self-signed)
-	keyFile        string // Path to key file (may be temporary for self-signed)
+	certFile       string // Path to certificate file (may be persistent for self-signed)
+	keyFile        string // Path to key file (may be persistent for self-signed)
 	mu             sync.RWMutex
 	running        bool
 	serverErr      chan error

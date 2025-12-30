@@ -2216,6 +2216,8 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	}
 	
 	// Calculate data length after nil conversion
+	// Note: This is done BEFORE normalization because X-No-Data-Found indicates
+	// whether data was found in the database, not the final response format
 	dataLen := reflection.Len(data)
 
 	// Add X-No-Data-Found header when no records were found
@@ -2223,6 +2225,9 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 		w.SetHeader("X-No-Data-Found", "true")
 	}
 
+	// Apply normalization after header is set
+	// normalizeResultArray may convert single-element arrays to objects,
+	// but the X-No-Data-Found header reflects the original query result
 	if options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}

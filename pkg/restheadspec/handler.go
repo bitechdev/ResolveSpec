@@ -2143,12 +2143,23 @@ func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metada
 // sendResponseWithOptions sends a response with optional formatting
 func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options *ExtendedRequestOptions) {
 	w.SetHeader("Content-Type", "application/json")
+	
+	// Calculate data length
+	dataLen := 0
 	if data == nil {
-		data = map[string]interface{}{}
-		w.WriteHeader(http.StatusPartialContent)
+		// When data is nil, return empty array instead of null
+		data = []interface{}{}
 	} else {
-		w.WriteHeader(http.StatusOK)
+		dataLen = reflection.Len(data)
 	}
+	
+	// Add X-No-Data-Found header when no records were found
+	if dataLen == 0 {
+		w.SetHeader("X-No-Data-Found", "true")
+	}
+	
+	w.WriteHeader(http.StatusOK)
+	
 	// Normalize single-record arrays to objects if requested
 	if options != nil && options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
@@ -2165,7 +2176,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 // Returns the single element if data is a slice/array with exactly one element, otherwise returns data unchanged
 func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 	if data == nil {
-		return map[string]interface{}{}
+		return []interface{}{}
 	}
 
 	// Use reflection to check if data is a slice or array
@@ -2180,15 +2191,15 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 			// Return the single element
 			return dataValue.Index(0).Interface()
 		} else if dataValue.Len() == 0 {
-			// Return empty object instead of empty array
-			return map[string]interface{}{}
+			// Keep empty array as empty array, don't convert to empty object
+			return []interface{}{}
 		}
 	}
 
 	if dataValue.Kind() == reflect.String {
 		str := dataValue.String()
 		if str == "" || str == "null" {
-			return map[string]interface{}{}
+			return []interface{}{}
 		}
 
 	}
@@ -2199,14 +2210,17 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
 	// Normalize single-record arrays to objects if requested
 	httpStatus := http.StatusOK
+	dataLen := 0
 	if data == nil {
-		data = map[string]interface{}{}
-		httpStatus = http.StatusPartialContent
+		// When data is nil, return empty array instead of null
+		data = []interface{}{}
 	} else {
-		dataLen := reflection.Len(data)
-		if dataLen == 0 {
-			httpStatus = http.StatusPartialContent
-		}
+		dataLen = reflection.Len(data)
+	}
+
+	// Add X-No-Data-Found header when no records were found
+	if dataLen == 0 {
+		w.SetHeader("X-No-Data-Found", "true")
 	}
 
 	if options.SingleRecordAsObject {

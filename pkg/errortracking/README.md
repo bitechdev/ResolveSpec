@@ -90,12 +90,12 @@ Panics are automatically captured when using the logger's panic handlers:
 
 ```go
 // Using CatchPanic
-defer logger.CatchPanic("MyFunction")
+defer logger.CatchPanic("MyFunction")()
 
 // Using CatchPanicCallback
 defer logger.CatchPanicCallback("MyFunction", func(err any) {
     // Custom cleanup
-})
+})()
 
 // Using HandlePanic
 defer func() {

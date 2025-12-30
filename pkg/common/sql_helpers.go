@@ -234,44 +234,26 @@ func stripOuterParentheses(s string) string {
 	s = strings.TrimSpace(s)
 
 	for {
-		if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		stripped, wasStripped := stripOneMatchingOuterParen(s)
+		if !wasStripped {
 			return s
 		}
-
-		// Check if these parentheses match (i.e., they're the outermost pair)
-		depth := 0
-		matched := false
-		for i := 0; i < len(s); i++ {
-			switch s[i] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-				if depth == 0 && i == len(s)-1 {
-					matched = true
-				} else if depth == 0 {
-					// Found a closing paren before the end, so outer parens don't match
-					return s
-				}
-			}
-		}
-
-		if !matched {
-			return s
-		}
-
-		// Strip the outer parentheses and continue
-		s = strings.TrimSpace(s[1 : len(s)-1])
+		s = stripped
 	}
 }
 
 // stripOneOuterParentheses removes only one level of matching outer parentheses from a string
 // Unlike stripOuterParentheses, this only strips once, preserving nested parentheses
 func stripOneOuterParentheses(s string) string {
-	s = strings.TrimSpace(s)
+	stripped, _ := stripOneMatchingOuterParen(strings.TrimSpace(s))
+	return stripped
+}
 
+// stripOneMatchingOuterParen is a helper that strips one matching pair of outer parentheses
+// Returns the stripped string and a boolean indicating if stripping occurred
+func stripOneMatchingOuterParen(s string) (string, bool) {
 	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
-		return s
+		return s, false
 	}
 
 	// Check if these parentheses match (i.e., they're the outermost pair)
@@ -287,17 +269,17 @@ func stripOneOuterParentheses(s string) string {
 				matched = true
 			} else if depth == 0 {
 				// Found a closing paren before the end, so outer parens don't match
-				return s
+				return s, false
 			}
 		}
 	}
 
 	if !matched {
-		return s
+		return s, false
 	}
 
-	// Strip only the outer parentheses
-	return strings.TrimSpace(s[1 : len(s)-1])
+	// Strip the outer parentheses
+	return strings.TrimSpace(s[1 : len(s)-1]), true
 }
 
 // splitByAND splits a WHERE clause by AND operators (case-insensitive)

@@ -20,6 +20,7 @@ type PrometheusProvider struct {
 	cacheHits        *prometheus.CounterVec
 	cacheMisses      *prometheus.CounterVec
 	cacheSize        *prometheus.GaugeVec
+	panicsTotal      *prometheus.CounterVec
 }
 
 // NewPrometheusProvider creates a new Prometheus metrics provider
@@ -83,6 +84,13 @@ func NewPrometheusProvider() *PrometheusProvider {
 			},
 			[]string{"provider"},
 		),
+		panicsTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "panics_total",
+				Help: "Total number of panics",
+			},
+			[]string{"method"},
+		),
 	}
 }
 
@@ -143,6 +151,11 @@ func (p *PrometheusProvider) RecordCacheMiss(provider string) {
 // UpdateCacheSize implements Provider interface
 func (p *PrometheusProvider) UpdateCacheSize(provider string, size int64) {
 	p.cacheSize.WithLabelValues(provider).Set(float64(size))
+}
+
+// RecordPanic implements the Provider interface
+func (p *PrometheusProvider) RecordPanic(methodName string) {
+	p.panicsTotal.WithLabelValues(methodName).Inc()
 }
 
 // Handler implements Provider interface

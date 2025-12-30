@@ -138,7 +138,10 @@ func TestSanitizeWhereClause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := SanitizeWhereClause(tt.where, tt.tableName)
+			// First add table prefixes to unqualified columns
+			prefixedWhere := AddTablePrefixToColumns(tt.where, tt.tableName)
+			// Then sanitize the where clause
+			result := SanitizeWhereClause(prefixedWhere, tt.tableName)
 			if result != tt.expected {
 				t.Errorf("SanitizeWhereClause(%q, %q) = %q; want %q", tt.where, tt.tableName, result, tt.expected)
 			}
@@ -348,6 +351,7 @@ func TestSanitizeWhereClauseWithPreloads(t *testing.T) {
 		tableName string
 		options   *RequestOptions
 		expected  string
+		addPrefix bool
 	}{
 		{
 			name:      "preload relation prefix is preserved",
@@ -416,15 +420,30 @@ func TestSanitizeWhereClauseWithPreloads(t *testing.T) {
 			options:   &RequestOptions{Preload: []PreloadOption{}},
 			expected:  "users.status = 'active'",
 		},
+
+		{
+			name:      "complex where clause with subquery and preload",
+			where:     `("mastertaskitem"."rid_mastertask" IN (6, 173, 157, 172, 174, 171, 170, 169, 167, 168, 166, 145, 161, 164, 146, 160, 147, 159, 148, 150, 152, 175, 151, 8, 153, 149, 155, 154, 165)) AND (rid_parentmastertaskitem is null)`,
+			tableName: "mastertaskitem",
+			options:   nil,
+			expected:  `("mastertaskitem"."rid_mastertask" IN (6, 173, 157, 172, 174, 171, 170, 169, 167, 168, 166, 145, 161, 164, 146, 160, 147, 159, 148, 150, 152, 175, 151, 8, 153, 149, 155, 154, 165)) AND (mastertaskitem.rid_parentmastertaskitem is null)`,
+			addPrefix: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var result string
+			prefixedWhere := tt.where
+			if tt.addPrefix {
+				// First add table prefixes to unqualified columns
+				prefixedWhere = AddTablePrefixToColumns(tt.where, tt.tableName)
+			}
+			// Then sanitize the where clause
 			if tt.options != nil {
-				result = SanitizeWhereClause(tt.where, tt.tableName, tt.options)
+				result = SanitizeWhereClause(prefixedWhere, tt.tableName, tt.options)
 			} else {
-				result = SanitizeWhereClause(tt.where, tt.tableName)
+				result = SanitizeWhereClause(prefixedWhere, tt.tableName)
 			}
 			if result != tt.expected {
 				t.Errorf("SanitizeWhereClause(%q, %q, options) = %q; want %q", tt.where, tt.tableName, result, tt.expected)

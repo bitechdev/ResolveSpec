@@ -116,17 +116,21 @@ func (cm *ConnectionManager) Run() {
 		case conn := <-cm.register:
 			cm.mu.Lock()
 			cm.connections[conn.ID] = conn
+			count := len(cm.connections)
 			cm.mu.Unlock()
-			logger.Info("[WebSocketSpec] Connection registered: %s (total: %d)", conn.ID, cm.Count())
+			logger.Info("[WebSocketSpec] Connection registered: %s (total: %d)", conn.ID, count)
 
 		case conn := <-cm.unregister:
 			cm.mu.Lock()
 			if _, ok := cm.connections[conn.ID]; ok {
 				delete(cm.connections, conn.ID)
 				close(conn.send)
-				logger.Info("[WebSocketSpec] Connection unregistered: %s (total: %d)", conn.ID, cm.Count())
+				count := len(cm.connections)
+				cm.mu.Unlock()
+				logger.Info("[WebSocketSpec] Connection unregistered: %s (total: %d)", conn.ID, count)
+			} else {
+				cm.mu.Unlock()
 			}
-			cm.mu.Unlock()
 
 		case msg := <-cm.broadcast:
 			cm.mu.RLock()
@@ -296,13 +300,19 @@ func (c *Connection) SendJSON(v interface{}) error {
 // Close closes the connection
 func (c *Connection) Close() {
 	c.closedOnce.Do(func() {
-		c.cancel()
-		c.ws.Close()
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.ws != nil {
+			c.ws.Close()
+		}
 
 		// Clean up subscriptions
 		c.mu.Lock()
 		for subID := range c.subscriptions {
-			c.handler.subscriptionManager.Unsubscribe(subID)
+			if c.handler != nil && c.handler.subscriptionManager != nil {
+				c.handler.subscriptionManager.Unsubscribe(subID)
+			}
 		}
 		c.subscriptions = make(map[string]*Subscription)
 		c.mu.Unlock()

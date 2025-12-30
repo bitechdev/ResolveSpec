@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -325,4 +326,43 @@ func TestShutdownCallbacks(t *testing.T) {
 	callbackMu.Unlock()
 
 	assert.True(t, executed, "Shutdown callback should have been executed")
+}
+
+func TestSelfSignedSSLCleanup(t *testing.T) {
+	logger.Init(true)
+	sm := NewManager()
+
+	testPort := getFreePort(t)
+	instance, err := sm.Add(Config{
+		Name:           "SSLTestServer",
+		Host:           "localhost",
+		Port:           testPort,
+		Handler:        http.NewServeMux(),
+		SelfSignedSSL:  true,
+		ShutdownTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Get the serverInstance to access the tempCertDir
+	si, ok := instance.(*serverInstance)
+	require.True(t, ok, "instance should be of type *serverInstance")
+	require.NotEmpty(t, si.tempCertDir, "temporary certificate directory should be set")
+
+	// Verify the temp directory exists
+	_, err = os.Stat(si.tempCertDir)
+	require.NoError(t, err, "temporary certificate directory should exist")
+
+	// Start the server
+	err = sm.StartAll()
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop the server
+	err = sm.StopAll()
+	require.NoError(t, err)
+
+	// Verify the temp directory has been cleaned up
+	_, err = os.Stat(si.tempCertDir)
+	assert.True(t, os.IsNotExist(err), "temporary certificate directory should be cleaned up after shutdown")
 }

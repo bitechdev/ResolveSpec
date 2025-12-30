@@ -220,8 +220,8 @@ func (sm *serverManager) Remove(name string) error {
 	// Stop the server if it's running. Prefer the server's configured shutdownTimeout
 	// when available, and fall back to a sensible default.
 	timeout := 10 * time.Second
-	if gs, ok := instance.(*gracefulServer); ok && gs.shutdownTimeout > 0 {
-		timeout = gs.shutdownTimeout
+	if si, ok := instance.(*serverInstance); ok && si.gracefulServer != nil && si.gracefulServer.shutdownTimeout > 0 {
+		timeout = si.gracefulServer.shutdownTimeout
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

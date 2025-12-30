@@ -369,9 +369,8 @@ func (sm *serverManager) ServeWithGracefulShutdown() error {
 type serverInstance struct {
 	cfg            Config
 	gracefulServer *gracefulServer
-	certFile       string // Path to certificate file (may be temporary for self-signed)
-	keyFile        string // Path to key file (may be temporary for self-signed)
-	tempCertDir    string // Path to temporary certificate directory (for cleanup)
+	certFile       string // Path to certificate file (may be persistent for self-signed)
+	keyFile        string // Path to key file (may be persistent for self-signed)
 	mu             sync.RWMutex
 	running        bool
 	serverErr      chan error
@@ -416,7 +415,7 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	handler = middleware.PanicRecovery(handler)
 
 	// Configure TLS if any TLS option is enabled
-	tlsConfig, certFile, keyFile, tempCertDir, err := configureTLS(cfg)
+	tlsConfig, certFile, keyFile, err := configureTLS(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure TLS: %w", err)
 	}
@@ -441,7 +440,6 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		gracefulServer: gracefulSrv,
 		certFile:       certFile,
 		keyFile:        keyFile,
-		tempCertDir:    tempCertDir,
 		serverErr:      make(chan error, 1),
 	}, nil
 }
@@ -535,20 +533,6 @@ func (s *serverInstance) Stop(ctx context.Context) error {
 	if err == nil {
 		s.running = false
 	}
-
-	// Clean up temporary certificate directory if it exists
-	if s.tempCertDir != "" {
-		if cleanupErr := os.RemoveAll(s.tempCertDir); cleanupErr != nil {
-			logger.Error("Failed to clean up temporary certificate directory '%s': %v", s.tempCertDir, cleanupErr)
-			// Don't override the shutdown error with cleanup error
-			if err == nil {
-				err = fmt.Errorf("failed to clean up temporary certificates: %w", cleanupErr)
-			}
-		} else {
-			logger.Info("Cleaned up temporary certificate directory for server '%s'", s.cfg.Name)
-		}
-	}
-
 	return err
 }
 

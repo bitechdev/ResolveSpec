@@ -75,31 +75,85 @@ func generateSelfSignedCert(host string) (certPEM, keyPEM []byte, err error) {
 	return certPEM, keyPEM, nil
 }
 
-// saveCertToTempFiles saves certificate and key PEM data to temporary files.
-// Returns the file paths for the certificate and key, and the temporary directory path.
-func saveCertToTempFiles(certPEM, keyPEM []byte) (certFile, keyFile, tmpDir string, err error) {
-	// Create temporary directory
-	tmpDir, err = os.MkdirTemp("", "resolvespec-certs-*")
+// getCertDirectory returns the directory path for storing self-signed certificates.
+// Creates the directory if it doesn't exist.
+func getCertDirectory() (string, error) {
+	// Use a consistent directory in the user's cache directory
+	cacheDir, err := os.UserCacheDir()
 	if err != nil {
-		return "", "", "", fmt.Errorf("failed to create temp directory: %w", err)
+		// Fallback to current directory if cache dir is not available
+		cacheDir = "."
 	}
+	
+	certDir := filepath.Join(cacheDir, "resolvespec", "certs")
+	
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create certificate directory: %w", err)
+	}
+	
+	return certDir, nil
+}
 
-	certFile = filepath.Join(tmpDir, "cert.pem")
-	keyFile = filepath.Join(tmpDir, "key.pem")
+// isCertificateValid checks if a certificate file exists and is not expired.
+func isCertificateValid(certFile string) bool {
+	// Check if file exists
+	certData, err := os.ReadFile(certFile)
+	if err != nil {
+		return false
+	}
+	
+	// Parse certificate
+	block, _ := pem.Decode(certData)
+	if block == nil {
+		return false
+	}
+	
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	
+	// Check if certificate is expired or will expire in the next 30 days
+	now := time.Now()
+	expiryThreshold := now.Add(30 * 24 * time.Hour)
+	
+	if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+		return false
+	}
+	
+	// Renew if expiring soon
+	if expiryThreshold.After(cert.NotAfter) {
+		return false
+	}
+	
+	return true
+}
 
+// saveCertToFiles saves certificate and key PEM data to persistent files.
+// Returns the file paths for the certificate and key.
+func saveCertToFiles(certPEM, keyPEM []byte, host string) (certFile, keyFile string, err error) {
+	// Get certificate directory
+	certDir, err := getCertDirectory()
+	if err != nil {
+		return "", "", err
+	}
+	
+	// Use consistent file names based on host
+	certFile = filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", host))
+	keyFile = filepath.Join(certDir, fmt.Sprintf("%s-key.pem", host))
+	
 	// Write certificate
 	if err := os.WriteFile(certFile, certPEM, 0600); err != nil {
-		os.RemoveAll(tmpDir)
-		return "", "", "", fmt.Errorf("failed to write certificate: %w", err)
+		return "", "", fmt.Errorf("failed to write certificate: %w", err)
 	}
-
+	
 	// Write key
 	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
-		os.RemoveAll(tmpDir)
-		return "", "", "", fmt.Errorf("failed to write private key: %w", err)
+		return "", "", fmt.Errorf("failed to write private key: %w", err)
 	}
-
-	return certFile, keyFile, tmpDir, nil
+	
+	return certFile, keyFile, nil
 }
 
 // setupAutoTLS configures automatic TLS certificate management using Let's Encrypt.
@@ -135,32 +189,32 @@ func setupAutoTLS(domains []string, email, cacheDir string) (*tls.Config, error)
 }
 
 // configureTLS configures TLS for the server based on the provided configuration.
-// Returns the TLS config, certificate/key file paths (if applicable), and temp directory path (if applicable).
-func configureTLS(cfg Config) (*tls.Config, string, string, string, error) {
+// Returns the TLS config and certificate/key file paths (if applicable).
+func configureTLS(cfg Config) (*tls.Config, string, string, error) {
 	// Option 1: Certificate files provided
 	if cfg.SSLCert != "" && cfg.SSLKey != "" {
 		// Validate that files exist
 		if _, err := os.Stat(cfg.SSLCert); os.IsNotExist(err) {
-			return nil, "", "", "", fmt.Errorf("SSL certificate file not found: %s", cfg.SSLCert)
+			return nil, "", "", fmt.Errorf("SSL certificate file not found: %s", cfg.SSLCert)
 		}
 		if _, err := os.Stat(cfg.SSLKey); os.IsNotExist(err) {
-			return nil, "", "", "", fmt.Errorf("SSL key file not found: %s", cfg.SSLKey)
+			return nil, "", "", fmt.Errorf("SSL key file not found: %s", cfg.SSLKey)
 		}
 
 		// Return basic TLS config - cert/key will be loaded by ListenAndServeTLS
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
-		return tlsConfig, cfg.SSLCert, cfg.SSLKey, "", nil
+		return tlsConfig, cfg.SSLCert, cfg.SSLKey, nil
 	}
 
 	// Option 2: Auto TLS (Let's Encrypt)
 	if cfg.AutoTLS {
 		tlsConfig, err := setupAutoTLS(cfg.AutoTLSDomains, cfg.AutoTLSEmail, cfg.AutoTLSCacheDir)
 		if err != nil {
-			return nil, "", "", "", fmt.Errorf("failed to setup AutoTLS: %w", err)
+			return nil, "", "", fmt.Errorf("failed to setup AutoTLS: %w", err)
 		}
-		return tlsConfig, "", "", "", nil
+		return tlsConfig, "", "", nil
 	}
 
 	// Option 3: Self-signed certificate
@@ -170,21 +224,43 @@ func configureTLS(cfg Config) (*tls.Config, string, string, string, error) {
 			host = "localhost"
 		}
 
-		certPEM, keyPEM, err := generateSelfSignedCert(host)
+		// Get certificate directory
+		certDir, err := getCertDirectory()
 		if err != nil {
-			return nil, "", "", "", fmt.Errorf("failed to generate self-signed certificate: %w", err)
+			return nil, "", "", fmt.Errorf("failed to get certificate directory: %w", err)
 		}
 
-		certFile, keyFile, tmpDir, err := saveCertToTempFiles(certPEM, keyPEM)
+		// Check for existing valid certificates
+		certFile := filepath.Join(certDir, fmt.Sprintf("%s-cert.pem", host))
+		keyFile := filepath.Join(certDir, fmt.Sprintf("%s-key.pem", host))
+
+		// If valid certificates exist, reuse them
+		if isCertificateValid(certFile) {
+			// Verify key file also exists
+			if _, err := os.Stat(keyFile); err == nil {
+				tlsConfig := &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				}
+				return tlsConfig, certFile, keyFile, nil
+			}
+		}
+
+		// Generate new certificates
+		certPEM, keyPEM, err := generateSelfSignedCert(host)
 		if err != nil {
-			return nil, "", "", "", fmt.Errorf("failed to save self-signed certificate: %w", err)
+			return nil, "", "", fmt.Errorf("failed to generate self-signed certificate: %w", err)
+		}
+
+		certFile, keyFile, err = saveCertToFiles(certPEM, keyPEM, host)
+		if err != nil {
+			return nil, "", "", fmt.Errorf("failed to save self-signed certificate: %w", err)
 		}
 
 		tlsConfig := &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
-		return tlsConfig, certFile, keyFile, tmpDir, nil
+		return tlsConfig, certFile, keyFile, nil
 	}
 
-	return nil, "", "", "", nil
+	return nil, "", "", nil
 }

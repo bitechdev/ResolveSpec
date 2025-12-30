@@ -149,10 +149,10 @@ func Debug(template string, args ...interface{}) {
 
 // CatchPanic - Handle panic
 // Returns a function that should be deferred to catch panics
-// Example usage: defer CatchPanicCallback("MyFunction", callback)()
+// Example usage: defer CatchPanicCallback("MyFunction", func(err any) { /* cleanup */ })()
 func CatchPanicCallback(location string, cb func(err any), args ...interface{}) func() {
+	ctx, _ := extractContext(args...)
 	return func() {
-		ctx, _ := extractContext(args...)
 		if err := recover(); err != nil {
 			callstack := debug.Stack()
 

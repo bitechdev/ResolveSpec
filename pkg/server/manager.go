@@ -312,14 +312,36 @@ func (sm *serverManager) RestartAll() error {
 		return fmt.Errorf("failed to stop servers during restart: %w", err)
 	}
 
-	// Give ports time to be released
-	time.Sleep(200 * time.Millisecond)
+	// Retry starting all servers with exponential backoff instead of a fixed sleep.
+	const (
+		maxAttempts      = 5
+		initialBackoff   = 100 * time.Millisecond
+		maxBackoff       = 2 * time.Second
+	)
 
-	if err := sm.StartAll(); err != nil {
-		return fmt.Errorf("failed to start servers during restart: %w", err)
+	var lastErr error
+	backoff := initialBackoff
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := sm.StartAll(); err != nil {
+			lastErr = err
+			if attempt == maxAttempts {
+				break
+			}
+			logger.Warn("Attempt %d to start servers during restart failed: %v; retrying in %s", attempt, err, backoff)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+
+		logger.Info("All servers restarted successfully.")
+		return nil
 	}
-	logger.Info("All servers restarted successfully.")
-	return nil
+
+	return fmt.Errorf("failed to start servers during restart after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // List returns all registered server instances.

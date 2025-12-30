@@ -30,7 +30,7 @@ func newMountPoint(config MountConfig, defaults *ServiceConfig) (*mountPoint, er
 	}
 
 	if config.Provider == nil {
-		return nil, fmt.Errorf("Provider cannot be nil")
+		return nil, fmt.Errorf("provider cannot be nil")
 	}
 
 	mp := &mountPoint{

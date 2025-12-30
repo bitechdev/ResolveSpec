@@ -39,7 +39,7 @@ func (f *ZipFile) Stat() (fs.FileInfo, error) {
 	if f.File != nil {
 		return f.FileInfo(), nil
 	}
-	return nil, fmt.Errorf("No file")
+	return nil, fmt.Errorf("no file")
 }
 
 func (f *ZipFile) Close() error {

@@ -182,7 +182,7 @@ func (s *service) validateMountConfig(config MountConfig) error {
 	}
 
 	if config.Provider == nil {
-		return fmt.Errorf("Provider cannot be nil")
+		return fmt.Errorf("provider cannot be nil")
 	}
 
 	return nil

@@ -110,7 +110,7 @@ func ExampleWithGORM(db *gorm.DB) {
 	handler := NewHandlerWithGORM(db)
 
 	// Register models
-	handler.Registry().RegisterModel("public.users", &struct{}{})
+	_ = handler.Registry().RegisterModel("public.users", &struct{}{})
 
 	// Register hooks (optional)
 	handler.Hooks().RegisterBefore(OperationRead, func(ctx *HookContext) error {
@@ -131,7 +131,7 @@ func ExampleWithBun(bunDB *bun.DB) {
 	handler := NewHandlerWithBun(bunDB)
 
 	// Register models
-	handler.Registry().RegisterModel("public.users", &struct{}{})
+	_ = handler.Registry().RegisterModel("public.users", &struct{}{})
 
 	// Setup WebSocket endpoint
 	// http.HandleFunc("/ws", handler.HandleWebSocket)

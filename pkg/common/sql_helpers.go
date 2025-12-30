@@ -486,9 +486,10 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	return "", ""
 }
 
-// extractUnqualifiedColumnName extracts the column name from an unqualified condition
+// Unused: extractUnqualifiedColumnName extracts the column name from an unqualified condition
 // For example: "rid_parentmastertaskitem is null" returns "rid_parentmastertaskitem"
 // "status = 'active'" returns "status"
+// nolint:unused
 func extractUnqualifiedColumnName(cond string) string {
 	// Common SQL operators
 	operators := []string{" = ", " != ", " <> ", " > ", " >= ", " < ", " <= ", " LIKE ", " like ", " IN ", " in ", " IS ", " is ", " NOT ", " not "}

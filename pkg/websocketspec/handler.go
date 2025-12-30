@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +21,6 @@ type Handler struct {
 	db                  common.Database
 	registry            common.ModelRegistry
 	hooks               *HookRegistry
-	nestedProcessor     *common.NestedCUDProcessor
 	connManager         *ConnectionManager
 	subscriptionManager *SubscriptionManager
 	upgrader            websocket.Upgrader
@@ -48,9 +46,6 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 		},
 		ctx: ctx,
 	}
-
-	// Initialize nested processor (nil for now, can be added later if needed)
-	// handler.nestedProcessor = common.NewNestedCUDProcessor(db, registry, handler)
 
 	// Start connection manager
 	go handler.connManager.Run()
@@ -110,7 +105,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	h.connManager.Register(conn)
 
 	// Execute after connect hook
-	h.hooks.Execute(AfterConnect, hookCtx)
+	_ = h.hooks.Execute(AfterConnect, hookCtx)
 
 	// Start read/write pumps
 	go conn.WritePump()
@@ -130,7 +125,7 @@ func (h *Handler) HandleMessage(conn *Connection, msg *Message) {
 		h.handlePing(conn, msg)
 	default:
 		errResp := NewErrorResponse(msg.ID, "invalid_message_type", fmt.Sprintf("Unknown message type: %s", msg.Type))
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 	}
 }
 
@@ -147,7 +142,7 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 	if err != nil {
 		logger.Error("[WebSocketSpec] Model not found for %s.%s: %v", schema, entity, err)
 		errResp := NewErrorResponse(msg.ID, "model_not_found", fmt.Sprintf("Model not found: %s.%s", schema, entity))
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -156,7 +151,7 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 	if err != nil {
 		logger.Error("[WebSocketSpec] Model validation failed for %s.%s: %v", schema, entity, err)
 		errResp := NewErrorResponse(msg.ID, "invalid_model", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -195,7 +190,7 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 		h.handleMeta(conn, msg, hookCtx)
 	default:
 		errResp := NewErrorResponse(msg.ID, "invalid_operation", fmt.Sprintf("Unknown operation: %s", msg.Operation))
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 	}
 }
 
@@ -205,7 +200,7 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 	if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeRead hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -226,7 +221,7 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 	if err != nil {
 		logger.Error("[WebSocketSpec] Read operation failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "read_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -237,14 +232,14 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 	if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] AfterRead hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, hookCtx.Result)
 	resp.Metadata = metadata
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 }
 
 // handleCreate processes a create operation
@@ -253,7 +248,7 @@ func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeCreate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -262,7 +257,7 @@ func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err != nil {
 		logger.Error("[WebSocketSpec] Create operation failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "create_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -273,13 +268,13 @@ func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] AfterCreate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, hookCtx.Result)
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 
 	// Notify subscribers
 	h.notifySubscribers(hookCtx.Schema, hookCtx.Entity, OperationCreate, data)
@@ -291,7 +286,7 @@ func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeUpdate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -300,7 +295,7 @@ func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err != nil {
 		logger.Error("[WebSocketSpec] Update operation failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "update_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -311,13 +306,13 @@ func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] AfterUpdate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, hookCtx.Result)
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 
 	// Notify subscribers
 	h.notifySubscribers(hookCtx.Schema, hookCtx.Entity, OperationUpdate, data)
@@ -329,7 +324,7 @@ func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeDelete hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -338,7 +333,7 @@ func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookCont
 	if err != nil {
 		logger.Error("[WebSocketSpec] Delete operation failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "delete_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -346,13 +341,13 @@ func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookCont
 	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] AfterDelete hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, map[string]interface{}{"deleted": true})
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 
 	// Notify subscribers
 	h.notifySubscribers(hookCtx.Schema, hookCtx.Entity, OperationDelete, map[string]interface{}{"id": hookCtx.ID})
@@ -362,7 +357,7 @@ func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookCont
 func (h *Handler) handleMeta(conn *Connection, msg *Message, hookCtx *HookContext) {
 	metadata := h.getMetadata(hookCtx.Schema, hookCtx.Entity, hookCtx.Model)
 	resp := NewResponseMessage(msg.ID, true, metadata)
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 }
 
 // handleSubscription processes subscription messages
@@ -374,7 +369,7 @@ func (h *Handler) handleSubscription(conn *Connection, msg *Message) {
 		h.handleUnsubscribe(conn, msg)
 	default:
 		errResp := NewErrorResponse(msg.ID, "invalid_subscription_operation", fmt.Sprintf("Unknown subscription operation: %s", msg.Operation))
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 	}
 }
 
@@ -399,7 +394,7 @@ func (h *Handler) handleSubscribe(conn *Connection, msg *Message) {
 	if err := h.hooks.Execute(BeforeSubscribe, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeSubscribe hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -411,7 +406,7 @@ func (h *Handler) handleSubscribe(conn *Connection, msg *Message) {
 	hookCtx.Subscription = sub
 
 	// Execute after hook
-	h.hooks.Execute(AfterSubscribe, hookCtx)
+	_ = h.hooks.Execute(AfterSubscribe, hookCtx)
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, map[string]interface{}{
@@ -419,7 +414,7 @@ func (h *Handler) handleSubscribe(conn *Connection, msg *Message) {
 		"schema":          msg.Schema,
 		"entity":          msg.Entity,
 	})
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 
 	logger.Info("[WebSocketSpec] Subscription created: %s for %s.%s (conn: %s)", subID, msg.Schema, msg.Entity, conn.ID)
 }
@@ -429,7 +424,7 @@ func (h *Handler) handleUnsubscribe(conn *Connection, msg *Message) {
 	subID := msg.SubscriptionID
 	if subID == "" {
 		errResp := NewErrorResponse(msg.ID, "missing_subscription_id", "Subscription ID is required for unsubscribe")
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -437,7 +432,7 @@ func (h *Handler) handleUnsubscribe(conn *Connection, msg *Message) {
 	sub, exists := conn.GetSubscription(subID)
 	if !exists {
 		errResp := NewErrorResponse(msg.ID, "subscription_not_found", fmt.Sprintf("Subscription not found: %s", subID))
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -455,7 +450,7 @@ func (h *Handler) handleUnsubscribe(conn *Connection, msg *Message) {
 	if err := h.hooks.Execute(BeforeUnsubscribe, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeUnsubscribe hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
-		conn.SendJSON(errResp)
+		_ = conn.SendJSON(errResp)
 		return
 	}
 
@@ -464,14 +459,14 @@ func (h *Handler) handleUnsubscribe(conn *Connection, msg *Message) {
 	conn.RemoveSubscription(subID)
 
 	// Execute after hook
-	h.hooks.Execute(AfterUnsubscribe, hookCtx)
+	_ = h.hooks.Execute(AfterUnsubscribe, hookCtx)
 
 	// Send response
 	resp := NewResponseMessage(msg.ID, true, map[string]interface{}{
 		"unsubscribed":    true,
 		"subscription_id": subID,
 	})
-	conn.SendJSON(resp)
+	_ = conn.SendJSON(resp)
 }
 
 // handlePing responds to ping messages
@@ -481,7 +476,7 @@ func (h *Handler) handlePing(conn *Connection, msg *Message) {
 		Type:      MessageTypePong,
 		Timestamp: time.Now(),
 	}
-	conn.SendJSON(pong)
+	_ = conn.SendJSON(pong)
 }
 
 // notifySubscribers sends notifications to all subscribers of an entity
@@ -527,8 +522,8 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 
 	// Apply preloads (simplified for now)
 	if hookCtx.Options != nil {
-		for _, preload := range hookCtx.Options.Preload {
-			query = query.PreloadRelation(preload.Relation)
+		for i := range hookCtx.Options.Preload {
+			query = query.PreloadRelation(hookCtx.Options.Preload[i].Relation)
 		}
 	}
 
@@ -540,7 +535,7 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 	return hookCtx.ModelPtr, nil
 }
 
-func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]interface{}, error) {
+func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata map[string]interface{}, err error) {
 	query := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Apply options (simplified implementation)
@@ -568,8 +563,8 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]in
 		}
 
 		// Apply preloads
-		for _, preload := range hookCtx.Options.Preload {
-			query = query.PreloadRelation(preload.Relation)
+		for i := range hookCtx.Options.Preload {
+			query = query.PreloadRelation(hookCtx.Options.Preload[i].Relation)
 		}
 
 		// Apply columns
@@ -584,7 +579,7 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]in
 	}
 
 	// Get count
-	metadata := make(map[string]interface{})
+	metadata = make(map[string]interface{})
 	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {
@@ -739,9 +734,4 @@ func (h *Handler) BroadcastMessage(message interface{}, filter func(*Connection)
 // GetConnection retrieves a connection by ID
 func (h *Handler) GetConnection(id string) (*Connection, bool) {
 	return h.connManager.GetConnection(id)
-}
-
-// Helper to convert string ID to int64
-func parseID(id string) (int64, error) {
-	return strconv.ParseInt(id, 10, 64)
 }

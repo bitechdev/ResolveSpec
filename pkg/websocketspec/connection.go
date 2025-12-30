@@ -209,9 +209,9 @@ func (c *Connection) ReadPump() {
 	}()
 
 	// Configure read parameters
-	c.ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = c.ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.ws.SetPongHandler(func(string) error {
-		c.ws.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
 
@@ -240,10 +240,10 @@ func (c *Connection) WritePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
 				// Channel closed
-				c.ws.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.ws.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -251,13 +251,13 @@ func (c *Connection) WritePump() {
 			if err != nil {
 				return
 			}
-			w.Write(message)
+			_, _ = w.Write(message)
 
 			// Write any queued messages
 			n := len(c.send)
 			for i := 0; i < n; i++ {
-				w.Write([]byte{'\n'})
-				w.Write(<-c.send)
+				_, _ = w.Write([]byte{'\n'})
+				_, _ = w.Write(<-c.send)
 			}
 
 			if err := w.Close(); err != nil {
@@ -265,7 +265,7 @@ func (c *Connection) WritePump() {
 			}
 
 		case <-ticker.C:
-			c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -364,14 +364,14 @@ func (c *Connection) handleMessage(data []byte) {
 	if err != nil {
 		logger.Error("[WebSocketSpec] Failed to parse message: %v", err)
 		errResp := NewErrorResponse("", "invalid_message", "Failed to parse message")
-		c.SendJSON(errResp)
+		_ = c.SendJSON(errResp)
 		return
 	}
 
 	if !msg.IsValid() {
 		logger.Error("[WebSocketSpec] Invalid message received")
 		errResp := NewErrorResponse(msg.ID, "invalid_message", "Message validation failed")
-		c.SendJSON(errResp)
+		_ = c.SendJSON(errResp)
 		return
 	}
 

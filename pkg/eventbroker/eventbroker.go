@@ -7,7 +7,6 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/config"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
-	"github.com/bitechdev/ResolveSpec/pkg/server"
 )
 
 var (
@@ -68,9 +67,6 @@ func Initialize(cfg config.EventBrokerConfig) error {
 
 	// Set as default
 	SetDefaultBroker(broker)
-
-	// Register shutdown callback
-	RegisterShutdown(broker)
 
 	logger.Info("Event broker initialized successfully (provider: %s, mode: %s, instance: %s)",
 		cfg.Provider, cfg.Mode, opts.InstanceID)
@@ -151,10 +147,12 @@ func Stats(ctx context.Context) (*BrokerStats, error) {
 	return broker.Stats(ctx)
 }
 
-// RegisterShutdown registers the broker's shutdown with the server shutdown callbacks
-func RegisterShutdown(broker Broker) {
-	server.RegisterShutdownCallback(func(ctx context.Context) error {
+// RegisterShutdown registers the broker's shutdown with a server manager
+// Call this from your application initialization code
+// Example: serverMgr.RegisterShutdownCallback(eventbroker.MakeShutdownCallback(broker))
+func MakeShutdownCallback(broker Broker) func(context.Context) error {
+	return func(ctx context.Context) error {
 		logger.Info("Shutting down event broker...")
 		return broker.Stop(ctx)
-	})
+	}
 }

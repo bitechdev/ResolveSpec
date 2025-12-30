@@ -93,7 +93,7 @@ func (h *Handler) Start() error {
 	// Subscribe to all request topics: spec/+/request
 	requestTopic := fmt.Sprintf("%s/+/request", h.config.Topics.Prefix)
 	if err := h.broker.Subscribe(requestTopic, h.config.QoS.Request, h.handleIncomingMessage); err != nil {
-		h.broker.Stop(h.ctx)
+		_ = h.broker.Stop(h.ctx)
 		return fmt.Errorf("failed to subscribe to request topic: %w", err)
 	}
 
@@ -130,14 +130,14 @@ func (h *Handler) Shutdown() error {
 				"mqtt_client": client,
 			},
 		}
-		h.hooks.Execute(BeforeDisconnect, hookCtx)
+		_ = h.hooks.Execute(BeforeDisconnect, hookCtx)
 		h.clientManager.Unregister(client.ID)
-		h.hooks.Execute(AfterDisconnect, hookCtx)
+		_ = h.hooks.Execute(AfterDisconnect, hookCtx)
 	}
 
 	// Unsubscribe from request topic
 	requestTopic := fmt.Sprintf("%s/+/request", h.config.Topics.Prefix)
-	h.broker.Unsubscribe(requestTopic)
+	_ = h.broker.Unsubscribe(requestTopic)
 
 	// Stop broker
 	if err := h.broker.Stop(h.ctx); err != nil {
@@ -223,7 +223,7 @@ func (h *Handler) handleIncomingMessage(topic string, payload []byte) {
 			return
 		}
 
-		h.hooks.Execute(AfterConnect, hookCtx)
+		_ = h.hooks.Execute(AfterConnect, hookCtx)
 	}
 
 	// Route message by type
@@ -498,7 +498,7 @@ func (h *Handler) handleSubscribe(client *Client, msg *Message) {
 	client.AddSubscription(sub)
 
 	// Execute after hook
-	h.hooks.Execute(AfterSubscribe, hookCtx)
+	_ = h.hooks.Execute(AfterSubscribe, hookCtx)
 
 	// Send response
 	h.sendResponse(client.ID, msg.ID, map[string]interface{}{
@@ -541,7 +541,7 @@ func (h *Handler) handleUnsubscribe(client *Client, msg *Message) {
 	client.RemoveSubscription(subID)
 
 	// Execute after hook
-	h.hooks.Execute(AfterUnsubscribe, hookCtx)
+	_ = h.hooks.Execute(AfterUnsubscribe, hookCtx)
 
 	// Send response
 	h.sendResponse(client.ID, msg.ID, map[string]interface{}{
@@ -562,7 +562,7 @@ func (h *Handler) handlePing(client *Client, msg *Message) {
 
 	payload, _ := json.Marshal(pong)
 	topic := h.getResponseTopic(client.ID)
-	h.broker.Publish(topic, h.config.QoS.Response, payload)
+	_ = h.broker.Publish(topic, h.config.QoS.Response, payload)
 }
 
 // notifySubscribers sends notifications to subscribers
@@ -625,7 +625,7 @@ func (h *Handler) sendError(clientID, msgID, code, message string) {
 
 	payload, _ := json.Marshal(errResp)
 	topic := h.getResponseTopic(clientID)
-	h.broker.Publish(topic, h.config.QoS.Response, payload)
+	_ = h.broker.Publish(topic, h.config.QoS.Response, payload)
 }
 
 // Topic helpers
@@ -669,8 +669,8 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 
 	// Apply preloads (simplified)
 	if hookCtx.Options != nil {
-		for _, preload := range hookCtx.Options.Preload {
-			query = query.PreloadRelation(preload.Relation)
+		for i := range hookCtx.Options.Preload {
+			query = query.PreloadRelation(hookCtx.Options.Preload[i].Relation)
 		}
 	}
 
@@ -683,7 +683,7 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 }
 
 // readMultiple reads multiple records
-func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]interface{}, error) {
+func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata map[string]interface{}, err error) {
 	query := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Apply options
@@ -711,8 +711,8 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]in
 		}
 
 		// Apply preloads
-		for _, preload := range hookCtx.Options.Preload {
-			query = query.PreloadRelation(preload.Relation)
+		for i := range hookCtx.Options.Preload {
+			query = query.PreloadRelation(hookCtx.Options.Preload[i].Relation)
 		}
 
 		// Apply columns
@@ -727,7 +727,7 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (interface{}, map[string]in
 	}
 
 	// Get count
-	metadata := make(map[string]interface{})
+	metadata = make(map[string]interface{})
 	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {

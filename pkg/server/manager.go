@@ -217,8 +217,14 @@ func (sm *serverManager) Remove(name string) error {
 		return fmt.Errorf("server with name '%s' not found", name)
 	}
 
-	// Stop the server if it's running
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Stop the server if it's running. Prefer the server's configured shutdownTimeout
+	// when available, and fall back to a sensible default.
+	timeout := 10 * time.Second
+	if gs, ok := instance.(*gracefulServer); ok && gs.shutdownTimeout > 0 {
+		timeout = gs.shutdownTimeout
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := instance.Stop(ctx); err != nil {
 		logger.Warn("Failed to gracefully stop server '%s' on remove: %v", name, err)

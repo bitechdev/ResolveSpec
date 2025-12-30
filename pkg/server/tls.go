@@ -129,7 +129,7 @@ func setupAutoTLS(domains []string, email, cacheDir string) (*tls.Config, error)
 
 	// Create TLS config
 	tlsConfig := m.TLSConfig()
-	tlsConfig.MinVersion = tls.VersionTLS12
+	tlsConfig.MinVersion = tls.VersionTLS13
 
 	return tlsConfig, nil
 }

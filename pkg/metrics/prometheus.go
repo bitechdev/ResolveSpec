@@ -20,23 +20,44 @@ type PrometheusProvider struct {
 	cacheHits        *prometheus.CounterVec
 	cacheMisses      *prometheus.CounterVec
 	cacheSize        *prometheus.GaugeVec
+	eventPublished   *prometheus.CounterVec
+	eventProcessed   *prometheus.CounterVec
+	eventDuration    *prometheus.HistogramVec
+	eventQueueSize   prometheus.Gauge
 	panicsTotal      *prometheus.CounterVec
 }
 
 // NewPrometheusProvider creates a new Prometheus metrics provider
-func NewPrometheusProvider() *PrometheusProvider {
+// If cfg is nil, default configuration will be used
+func NewPrometheusProvider(cfg *Config) *PrometheusProvider {
+	// Use default config if none provided
+	if cfg == nil {
+		cfg = DefaultConfig()
+	} else {
+		// Apply defaults for any missing values
+		cfg.ApplyDefaults()
+	}
+
+	// Helper to add namespace prefix if configured
+	metricName := func(name string) string {
+		if cfg.Namespace != "" {
+			return cfg.Namespace + "_" + name
+		}
+		return name
+	}
+
 	return &PrometheusProvider{
 		requestDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "http_request_duration_seconds",
+				Name:    metricName("http_request_duration_seconds"),
 				Help:    "HTTP request duration in seconds",
-				Buckets: prometheus.DefBuckets,
+				Buckets: cfg.HTTPRequestBuckets,
 			},
 			[]string{"method", "path", "status"},
 		),
 		requestTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "http_requests_total",
+				Name: metricName("http_requests_total"),
 				Help: "Total number of HTTP requests",
 			},
 			[]string{"method", "path", "status"},
@@ -44,49 +65,77 @@ func NewPrometheusProvider() *PrometheusProvider {
 
 		requestsInFlight: promauto.NewGauge(
 			prometheus.GaugeOpts{
-				Name: "http_requests_in_flight",
+				Name: metricName("http_requests_in_flight"),
 				Help: "Current number of HTTP requests being processed",
 			},
 		),
 		dbQueryDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
-				Name:    "db_query_duration_seconds",
+				Name:    metricName("db_query_duration_seconds"),
 				Help:    "Database query duration in seconds",
-				Buckets: prometheus.DefBuckets,
+				Buckets: cfg.DBQueryBuckets,
 			},
 			[]string{"operation", "table"},
 		),
 		dbQueryTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "db_queries_total",
+				Name: metricName("db_queries_total"),
 				Help: "Total number of database queries",
 			},
 			[]string{"operation", "table", "status"},
 		),
 		cacheHits: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "cache_hits_total",
+				Name: metricName("cache_hits_total"),
 				Help: "Total number of cache hits",
 			},
 			[]string{"provider"},
 		),
 		cacheMisses: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "cache_misses_total",
+				Name: metricName("cache_misses_total"),
 				Help: "Total number of cache misses",
 			},
 			[]string{"provider"},
 		),
 		cacheSize: promauto.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "cache_size_items",
+				Name: metricName("cache_size_items"),
 				Help: "Number of items in cache",
 			},
 			[]string{"provider"},
 		),
+		eventPublished: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: metricName("events_published_total"),
+				Help: "Total number of events published",
+			},
+			[]string{"source", "event_type"},
+		),
+		eventProcessed: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: metricName("events_processed_total"),
+				Help: "Total number of events processed",
+			},
+			[]string{"source", "event_type", "status"},
+		),
+		eventDuration: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    metricName("event_processing_duration_seconds"),
+				Help:    "Event processing duration in seconds",
+				Buckets: cfg.DBQueryBuckets, // Events are typically fast like DB queries
+			},
+			[]string{"source", "event_type"},
+		),
+		eventQueueSize: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Name: metricName("event_queue_size"),
+				Help: "Current number of events in queue",
+			},
+		),
 		panicsTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "panics_total",
+				Name: metricName("panics_total"),
 				Help: "Total number of panics",
 			},
 			[]string{"method"},
@@ -151,6 +200,22 @@ func (p *PrometheusProvider) RecordCacheMiss(provider string) {
 // UpdateCacheSize implements Provider interface
 func (p *PrometheusProvider) UpdateCacheSize(provider string, size int64) {
 	p.cacheSize.WithLabelValues(provider).Set(float64(size))
+}
+
+// RecordEventPublished implements Provider interface
+func (p *PrometheusProvider) RecordEventPublished(source, eventType string) {
+	p.eventPublished.WithLabelValues(source, eventType).Inc()
+}
+
+// RecordEventProcessed implements Provider interface
+func (p *PrometheusProvider) RecordEventProcessed(source, eventType, status string, duration time.Duration) {
+	p.eventProcessed.WithLabelValues(source, eventType, status).Inc()
+	p.eventDuration.WithLabelValues(source, eventType).Observe(duration.Seconds())
+}
+
+// UpdateEventQueueSize implements Provider interface
+func (p *PrometheusProvider) UpdateEventQueueSize(size int64) {
+	p.eventQueueSize.Set(float64(size))
 }
 
 // RecordPanic implements the Provider interface

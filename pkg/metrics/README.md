@@ -7,8 +7,8 @@ A pluggable metrics collection system with Prometheus implementation.
 ```go
 import "github.com/bitechdev/ResolveSpec/pkg/metrics"
 
-// Initialize Prometheus provider
-provider := metrics.NewPrometheusProvider()
+// Initialize Prometheus provider with default config
+provider := metrics.NewPrometheusProvider(nil)
 metrics.SetProvider(provider)
 
 // Apply middleware to your router
@@ -17,6 +17,41 @@ router.Use(provider.Middleware)
 // Expose metrics endpoint
 http.Handle("/metrics", provider.Handler())
 ```
+
+## Configuration
+
+You can customize the metrics provider using a configuration struct:
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/metrics"
+
+// Create custom configuration
+config := &metrics.Config{
+    Enabled:  true,
+    Provider: "prometheus",
+    Namespace: "myapp", // Prefix all metrics with "myapp_"
+    HTTPRequestBuckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5},
+    DBQueryBuckets: []float64{0.001, 0.01, 0.05, 0.1, 0.5, 1},
+}
+
+// Initialize with custom config
+provider := metrics.NewPrometheusProvider(config)
+metrics.SetProvider(provider)
+```
+
+### Configuration Options
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Enabled` | `bool` | `true` | Enable/disable metrics collection |
+| `Provider` | `string` | `"prometheus"` | Metrics provider type |
+| `Namespace` | `string` | `""` | Prefix for all metric names |
+| `HTTPRequestBuckets` | `[]float64` | See below | Histogram buckets for HTTP duration (seconds) |
+| `DBQueryBuckets` | `[]float64` | See below | Histogram buckets for DB query duration (seconds) |
+
+**Default HTTP Request Buckets:** `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]`
+
+**Default DB Query Buckets:** `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]`
 
 ## Provider Interface
 
@@ -87,6 +122,13 @@ When using `PrometheusProvider`, the following metrics are available:
 | `cache_hits_total` | Counter | provider | Total cache hits |
 | `cache_misses_total` | Counter | provider | Total cache misses |
 | `cache_size_items` | Gauge | provider | Current cache size |
+| `events_published_total` | Counter | source, event_type | Total events published |
+| `events_processed_total` | Counter | source, event_type, status | Total events processed |
+| `event_processing_duration_seconds` | Histogram | source, event_type | Event processing duration |
+| `event_queue_size` | Gauge | - | Current event queue size |
+| `panics_total` | Counter | method | Total panics recovered |
+
+**Note:** If a custom `Namespace` is configured, all metric names will be prefixed with `{namespace}_`.
 
 ## Prometheus Queries
 
@@ -148,6 +190,8 @@ metrics.SetProvider(&CustomProvider{})
 
 ## Complete Example
 
+### Basic Usage
+
 ```go
 package main
 
@@ -162,8 +206,8 @@ import (
 )
 
 func main() {
-    // Initialize metrics
-    provider := metrics.NewPrometheusProvider()
+    // Initialize metrics with default config
+    provider := metrics.NewPrometheusProvider(nil)
     metrics.SetProvider(provider)
 
     // Create router
@@ -195,6 +239,42 @@ func getUsersHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     // Return users...
+}
+```
+
+### With Custom Configuration
+
+```go
+package main
+
+import (
+    "log"
+    "net/http"
+
+    "github.com/bitechdev/ResolveSpec/pkg/metrics"
+    "github.com/gorilla/mux"
+)
+
+func main() {
+    // Custom metrics configuration
+    metricsConfig := &metrics.Config{
+        Enabled:  true,
+        Provider: "prometheus",
+        Namespace: "myapp",
+        // Custom buckets optimized for your application
+        HTTPRequestBuckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10},
+        DBQueryBuckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1},
+    }
+
+    // Initialize with custom config
+    provider := metrics.NewPrometheusProvider(metricsConfig)
+    metrics.SetProvider(provider)
+
+    router := mux.NewRouter()
+    router.Use(provider.Middleware)
+    router.Handle("/metrics", provider.Handler())
+
+    log.Fatal(http.ListenAndServe(":8080", router))
 }
 ```
 

@@ -522,10 +522,16 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			if strings.HasPrefix(kLower, "x-fieldfilter-") {
 				colname := strings.ReplaceAll(kLower, "x-fieldfilter-", "")
 				if strings.Contains(strings.ToLower(sqlquery), colname) {
-					if val == "" || val == "0" {
-						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+					if val == "0" {
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = 0", ValidSQL(colname, "colname")))
+					} else if val == "" {
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", ValidSQL(colname, "colname")))
 					} else {
-						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+						if IsNumeric(val) {
+							sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+						} else {
+							sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = '%s'", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+						}
 					}
 				}
 			}
@@ -718,11 +724,17 @@ func (h *Handler) mergeQueryParams(r *http.Request, sqlquery string, variables m
 			} else {
 				if strings.Contains(val, "match=") {
 					colval := strings.ReplaceAll(val, "match=", "")
+					colval = ValidSQL(colval, "colvalue") // Sanitize immediately
 					if colval != "*" {
-						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(parmk, "colname"), ValidSQL(colval, "colvalue")))
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(parmk, "colname"), colval))
 					}
 				} else if val == "" || val == "0" {
-					sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = %[2]s OR %[1]s IS NULL)", ValidSQL(parmk, "colname"), ValidSQL(val, "colvalue")))
+					// For empty/zero values, treat as literal 0 or empty string with quotes
+					if val == "0" {
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = 0 OR %[1]s IS NULL)", ValidSQL(parmk, "colname")))
+					} else {
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", ValidSQL(parmk, "colname")))
+					}
 				} else {
 					if IsNumeric(val) {
 						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(parmk, "colname"), ValidSQL(val, "colvalue")))
@@ -763,10 +775,16 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 		// Handle special headers
 		if strings.Contains(k, "x-fieldfilter-") {
 			colname := strings.ReplaceAll(k, "x-fieldfilter-", "")
-			if val == "" || val == "0" {
-				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+			if val == "0" {
+				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = 0", ValidSQL(colname, "colname")))
+			} else if val == "" {
+				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", ValidSQL(colname, "colname")))
 			} else {
-				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+				if IsNumeric(val) {
+					sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+				} else {
+					sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = '%s'", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
+				}
 			}
 		}
 

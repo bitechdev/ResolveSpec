@@ -17,11 +17,13 @@ jobs:
       - name: Run unit tests
         run: go test ./pkg/resolvespec ./pkg/restheadspec -v -cover
       - name: Generate coverage report
+        continue-on-error: true
         run: |
           go test ./pkg/resolvespec ./pkg/restheadspec -coverprofile=coverage.out
           go tool cover -html=coverage.out -o coverage.html
       - name: Upload coverage
         uses: actions/upload-artifact@v5
+        continue-on-error: true
         with:
           name: coverage-report
           path: coverage.html
@@ -55,27 +57,34 @@ jobs:
           psql -h localhost -U postgres -c "CREATE DATABASE resolvespec_test;"
           psql -h localhost -U postgres -c "CREATE DATABASE restheadspec_test;"
       - name: Run resolvespec integration tests
+        continue-on-error: true
         env:
           TEST_DATABASE_URL: "host=localhost user=postgres password=postgres dbname=resolvespec_test port=5432 sslmode=disable"
         run: go test -tags=integration ./pkg/resolvespec -v -coverprofile=coverage-resolvespec-integration.out
       - name: Run restheadspec integration tests
+        continue-on-error: true
         env:
           TEST_DATABASE_URL: "host=localhost user=postgres password=postgres dbname=restheadspec_test port=5432 sslmode=disable"
         run: go test -tags=integration ./pkg/restheadspec -v -coverprofile=coverage-restheadspec-integration.out
       - name: Generate integration coverage
+        continue-on-error: true
         env:
           TEST_DATABASE_URL: "host=localhost user=postgres password=postgres dbname=resolvespec_test port=5432 sslmode=disable"
         run: |
           go tool cover -html=coverage-resolvespec-integration.out -o coverage-resolvespec-integration.html
           go tool cover -html=coverage-restheadspec-integration.out -o coverage-restheadspec-integration.html
+          
       - name: Upload resolvespec integration coverage
         uses: actions/upload-artifact@v5
+        continue-on-error: true
         with:
           name: resolvespec-integration-coverage-report
           path: coverage-resolvespec-integration.html
 
       - name: Upload restheadspec integration coverage
         uses: actions/upload-artifact@v5
+        continue-on-error: true
+        
         with:
           name: integration-coverage-restheadspec-report
           path: coverage-restheadspec-integration

@@ -729,8 +729,9 @@ func (h *Handler) mergeQueryParams(r *http.Request, sqlquery string, variables m
 			} else {
 				if strings.Contains(val, "match=") {
 					colval := strings.ReplaceAll(val, "match=", "")
-					// Don't sanitize LIKE patterns as it would escape wildcards
-					// Just remove single quotes to prevent SQL injection
+					// Escape single quotes and backslashes for LIKE patterns
+					// But don't escape wildcards % and _ which are intentional
+					colval = strings.ReplaceAll(colval, "\\", "\\\\")
 					colval = strings.ReplaceAll(colval, "'", "''")
 					if colval != "*" {
 						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(parmk, "colname"), colval))
@@ -910,19 +911,14 @@ func ValidSQL(input, mode string) string {
 		// For SELECT clauses, be more permissive but still safe
 		// Remove semicolons and common SQL injection patterns (case-insensitive)
 		dangerous := []string{
-			";", "--", "/*", "*/", "xp_", "sp_",
+			";", "--", "/\\*", "\\*/", "xp_", "sp_",
 			"drop ", "delete ", "truncate ", "update ", "insert ",
 			"exec ", "execute ", "union ", "declare ", "alter ", "create ",
 		}
-		result := input
-		// Use case-insensitive replacement via regex
-		for _, d := range dangerous {
-			// Create case-insensitive regex for the pattern
-			pattern := "(?i)" + regexp.QuoteMeta(d)
-			re := regexp.MustCompile(pattern)
-			result = re.ReplaceAllString(result, "")
-		}
-		return result
+		// Build a single regex pattern with all dangerous keywords
+		pattern := "(?i)(" + strings.Join(dangerous, "|") + ")"
+		re := regexp.MustCompile(pattern)
+		return re.ReplaceAllString(input, "")
 	default:
 		return input
 	}

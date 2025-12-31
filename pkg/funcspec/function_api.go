@@ -522,11 +522,12 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			if strings.HasPrefix(kLower, "x-fieldfilter-") {
 				colname := strings.ReplaceAll(kLower, "x-fieldfilter-", "")
 				if strings.Contains(strings.ToLower(sqlquery), colname) {
-					if val == "0" {
+					switch val {
+					case "0":
 						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = 0", ValidSQL(colname, "colname")))
-					} else if val == "" {
+					case "":
 						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", ValidSQL(colname, "colname")))
-					} else {
+					default:
 						if IsNumeric(val) {
 							sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
 						} else {
@@ -783,11 +784,12 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 		// Handle special headers
 		if strings.Contains(k, "x-fieldfilter-") {
 			colname := strings.ReplaceAll(k, "x-fieldfilter-", "")
-			if val == "0" {
+			switch val {
+			case "0":
 				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("COALESCE(%s, 0) = 0", ValidSQL(colname, "colname")))
-			} else if val == "" {
+			case "":
 				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", ValidSQL(colname, "colname")))
-			} else {
+			default:
 				if IsNumeric(val) {
 					sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", ValidSQL(colname, "colname"), ValidSQL(val, "colvalue")))
 				} else {

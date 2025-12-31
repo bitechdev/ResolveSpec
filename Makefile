@@ -13,14 +13,22 @@ test-integration:
 # Run all tests (unit + integration)
 test: test-unit test-integration
 
-release-version: ## Create and push a release with specific version (use: make release-version VERSION=v1.2.3)
+release-version: ## Create and push a release with specific version (use: make release-version VERSION=v1.2.3 or make release-version to auto-increment)
 	@if [ -z "$(VERSION)" ]; then \
-		echo "Error: VERSION is required. Usage: make release-version VERSION=v1.2.3"; \
-		exit 1; \
-	fi
-	@version="$(VERSION)"; \
-	if ! echo "$$version" | grep -q "^v"; then \
-		version="v$$version"; \
+		latest_tag=$$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0"); \
+		echo "No VERSION specified. Last version: $$latest_tag"; \
+		version_num=$$(echo "$$latest_tag" | sed 's/^v//'); \
+		major=$$(echo "$$version_num" | cut -d. -f1); \
+		minor=$$(echo "$$version_num" | cut -d. -f2); \
+		patch=$$(echo "$$version_num" | cut -d. -f3); \
+		new_patch=$$((patch + 1)); \
+		version="v$$major.$$minor.$$new_patch"; \
+		echo "Auto-incrementing to: $$version"; \
+	else \
+		version="$(VERSION)"; \
+		if ! echo "$$version" | grep -q "^v"; then \
+			version="v$$version"; \
+		fi; \
 	fi; \
 	echo "Creating release: $$version"; \
 	latest_tag=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \

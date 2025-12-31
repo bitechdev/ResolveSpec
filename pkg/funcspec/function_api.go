@@ -84,7 +84,7 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 		// Create local copy to avoid modifying the captured parameter across requests
 		sqlquery := sqlquery
 
-		ctx, cancel := context.WithTimeout(r.Context(), 900*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 		defer cancel()
 
 		var dbobjlist []map[string]interface{}
@@ -423,7 +423,7 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 		// Create local copy to avoid modifying the captured parameter across requests
 		sqlquery := sqlquery
 
-		ctx, cancel := context.WithTimeout(r.Context(), 600*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 		defer cancel()
 
 		propQry := make(map[string]string)
@@ -782,12 +782,15 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx *security.UserContext, metainfo map[string]interface{}, variables map[string]interface{}) string {
 	if strings.Contains(sqlquery, "[p_meta_default]") {
 		data, _ := json.Marshal(metainfo)
-		sqlquery = strings.ReplaceAll(sqlquery, "[p_meta_default]", fmt.Sprintf("'%s'::jsonb", string(data)))
+		dataStr := strings.ReplaceAll(string(data), "$META$", "/*META*/")
+		sqlquery = strings.ReplaceAll(sqlquery, "[p_meta_default]", fmt.Sprintf("$META$%s$META$::jsonb", dataStr))
 	}
 
 	if strings.Contains(sqlquery, "[json_variables]") {
 		data, _ := json.Marshal(variables)
-		sqlquery = strings.ReplaceAll(sqlquery, "[json_variables]", fmt.Sprintf("'%s'::jsonb", string(data)))
+		dataStr := strings.ReplaceAll(string(data), "$VAR$", "/*VAR*/")
+
+		sqlquery = strings.ReplaceAll(sqlquery, "[json_variables]", fmt.Sprintf("$VAR$%s$VAR$::jsonb", dataStr))
 	}
 
 	if strings.Contains(sqlquery, "[rid_user]") {
@@ -795,7 +798,7 @@ func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx
 	}
 
 	if strings.Contains(sqlquery, "[user]") {
-		sqlquery = strings.ReplaceAll(sqlquery, "[user]", fmt.Sprintf("'%s'", userCtx.UserName))
+		sqlquery = strings.ReplaceAll(sqlquery, "[user]", fmt.Sprintf("$USR$%s$USR$", strings.ReplaceAll(userCtx.UserName, "$USR$", "/*USR*/")))
 	}
 
 	if strings.Contains(sqlquery, "[rid_session]") {
@@ -806,7 +809,7 @@ func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx
 	}
 
 	if strings.Contains(sqlquery, "[method]") {
-		sqlquery = strings.ReplaceAll(sqlquery, "[method]", r.Method)
+		sqlquery = strings.ReplaceAll(sqlquery, "[method]", fmt.Sprintf("$M$%s$M$", strings.ReplaceAll(r.Method, "$M$", "/*M*/")))
 	}
 
 	if strings.Contains(sqlquery, "[post_body]") {
@@ -819,7 +822,7 @@ func (h *Handler) replaceMetaVariables(sqlquery string, r *http.Request, userCtx
 				}
 			}
 		}
-		sqlquery = strings.ReplaceAll(sqlquery, "[post_body]", fmt.Sprintf("'%s'", bodystr))
+		sqlquery = strings.ReplaceAll(sqlquery, "[post_body]", fmt.Sprintf("$PBODY$%s$PBODY$", strings.ReplaceAll(bodystr, "$PBODY$", "/*PBODY*/")))
 	}
 
 	return sqlquery

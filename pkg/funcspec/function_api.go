@@ -707,10 +707,12 @@ func (h *Handler) mergeQueryParams(r *http.Request, sqlquery string, variables m
 		// Apply filters if allowed
 		if allowFilter && len(parmk) > 1 && strings.Contains(strings.ToLower(sqlquery), strings.ToLower(parmk)) {
 			if len(parmv) > 1 {
-				// Sanitize each value in the IN clause
+				// Sanitize each value in the IN clause and wrap in quotes
 				sanitizedValues := make([]string, len(parmv))
 				for i, v := range parmv {
-					sanitizedValues[i] = ValidSQL(v, "colvalue")
+					sanitized := ValidSQL(v, "colvalue")
+					// Wrap each value in single quotes for SQL IN clause
+					sanitizedValues[i] = fmt.Sprintf("'%s'", sanitized)
 				}
 				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s IN (%s)", ValidSQL(parmk, "colname"), strings.Join(sanitizedValues, ",")))
 			} else {
@@ -875,29 +877,31 @@ func ValidSQL(input, mode string) string {
 		return reg.ReplaceAllString(input, "")
 	case "colvalue":
 		// For column values, escape single quotes and backslashes
+		// Note: Backslashes must be escaped first, then single quotes
 		result := strings.ReplaceAll(input, "\\", "\\\\")
 		result = strings.ReplaceAll(result, "'", "''")
 		return result
 	case "select":
 		// For SELECT clauses, be more permissive but still safe
-		// Remove semicolons and common SQL injection patterns
+		// Remove semicolons and common SQL injection patterns (case-insensitive)
 		dangerous := []string{
 			";", "--", "/*", "*/", "xp_", "sp_",
-			"DROP ", "drop ", "Drop ",
-			"DELETE ", "delete ", "Delete ",
-			"TRUNCATE ", "truncate ", "Truncate ",
-			"UPDATE ", "update ", "Update ",
-			"INSERT ", "insert ", "Insert ",
-			"EXEC ", "exec ", "Exec ",
-			"EXECUTE ", "execute ", "Execute ",
-			"UNION ", "union ", "Union ",
-			"DECLARE ", "declare ", "Declare ",
-			"ALTER ", "alter ", "Alter ",
-			"CREATE ", "create ", "Create ",
+			"drop ", "delete ", "truncate ", "update ", "insert ",
+			"exec ", "execute ", "union ", "declare ", "alter ", "create ",
 		}
 		result := input
+		lowerResult := strings.ToLower(result)
 		for _, d := range dangerous {
-			result = strings.ReplaceAll(result, d, "")
+			// Find all occurrences case-insensitively and remove them
+			for {
+				idx := strings.Index(lowerResult, d)
+				if idx == -1 {
+					break
+				}
+				// Remove from both result and lowerResult
+				result = result[:idx] + result[idx+len(d):]
+				lowerResult = lowerResult[:idx] + lowerResult[idx+len(d):]
+			}
 		}
 		return result
 	default:

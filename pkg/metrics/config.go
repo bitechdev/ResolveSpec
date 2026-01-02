@@ -18,6 +18,20 @@ type Config struct {
 	// DBQueryBuckets defines histogram buckets for database query duration (in seconds)
 	// Default: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
 	DBQueryBuckets []float64 `mapstructure:"db_query_buckets"`
+
+	// PushgatewayURL is the URL of the Prometheus Pushgateway (optional)
+	// If set, metrics will be pushed to this gateway instead of only being scraped
+	// Example: "http://pushgateway:9091"
+	PushgatewayURL string `mapstructure:"pushgateway_url"`
+
+	// PushgatewayJobName is the job name to use when pushing metrics to Pushgateway
+	// Default: "resolvespec"
+	PushgatewayJobName string `mapstructure:"pushgateway_job_name"`
+
+	// PushgatewayInterval is the interval at which to push metrics to Pushgateway
+	// Only used if PushgatewayURL is set. If 0, automatic pushing is disabled.
+	// Default: 0 (no automatic pushing)
+	PushgatewayInterval int `mapstructure:"pushgateway_interval"`
 }
 
 // DefaultConfig returns a Config with sensible defaults
@@ -42,5 +56,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if len(c.DBQueryBuckets) == 0 {
 		c.DBQueryBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
+	}
+	// Set default job name if pushgateway is configured but job name is empty
+	if c.PushgatewayURL != "" && c.PushgatewayJobName == "" {
+		c.PushgatewayJobName = "resolvespec"
 	}
 }

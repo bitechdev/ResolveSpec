@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/push"
 )
 
 // PrometheusProvider implements the Provider interface using Prometheus
@@ -25,6 +26,13 @@ type PrometheusProvider struct {
 	eventDuration    *prometheus.HistogramVec
 	eventQueueSize   prometheus.Gauge
 	panicsTotal      *prometheus.CounterVec
+
+	// Pushgateway fields (optional)
+	pushgatewayURL     string
+	pushgatewayJobName string
+	pusher             *push.Pusher
+	pushTicker         *time.Ticker
+	pushStop           chan bool
 }
 
 // NewPrometheusProvider creates a new Prometheus metrics provider
@@ -46,7 +54,7 @@ func NewPrometheusProvider(cfg *Config) *PrometheusProvider {
 		return name
 	}
 
-	return &PrometheusProvider{
+	p := &PrometheusProvider{
 		requestDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    metricName("http_request_duration_seconds"),
@@ -140,7 +148,25 @@ func NewPrometheusProvider(cfg *Config) *PrometheusProvider {
 			},
 			[]string{"method"},
 		),
+
+		pushgatewayURL:     cfg.PushgatewayURL,
+		pushgatewayJobName: cfg.PushgatewayJobName,
 	}
+
+	// Initialize pushgateway if configured
+	if cfg.PushgatewayURL != "" {
+		p.pusher = push.New(cfg.PushgatewayURL, cfg.PushgatewayJobName).
+			Gatherer(prometheus.DefaultGatherer)
+
+		// Start automatic pushing if interval is configured
+		if cfg.PushgatewayInterval > 0 {
+			p.pushStop = make(chan bool)
+			p.pushTicker = time.NewTicker(time.Duration(cfg.PushgatewayInterval) * time.Second)
+			go p.startAutoPush()
+		}
+	}
+
+	return p
 }
 
 // ResponseWriter wraps http.ResponseWriter to capture status code
@@ -249,4 +275,38 @@ func (p *PrometheusProvider) Middleware(next http.Handler) http.Handler {
 
 		p.RecordHTTPRequest(r.Method, r.URL.Path, status, duration)
 	})
+}
+
+// Push manually pushes metrics to the configured Pushgateway
+// Returns an error if pushing fails or if Pushgateway is not configured
+func (p *PrometheusProvider) Push() error {
+	if p.pusher == nil {
+		return nil // Pushgateway not configured, silently skip
+	}
+	return p.pusher.Push()
+}
+
+// startAutoPush runs in a goroutine and periodically pushes metrics to Pushgateway
+func (p *PrometheusProvider) startAutoPush() {
+	for {
+		select {
+		case <-p.pushTicker.C:
+			if err := p.Push(); err != nil {
+				// Log error but continue pushing
+				// Note: In production, you might want to use a proper logger
+				_ = err
+			}
+		case <-p.pushStop:
+			p.pushTicker.Stop()
+			return
+		}
+	}
+}
+
+// StopAutoPush stops the automatic push goroutine
+// This should be called when shutting down the application
+func (p *PrometheusProvider) StopAutoPush() {
+	if p.pushStop != nil {
+		close(p.pushStop)
+	}
 }

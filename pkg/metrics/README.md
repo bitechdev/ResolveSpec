@@ -53,6 +53,24 @@ metrics.SetProvider(provider)
 
 **Default DB Query Buckets:** `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]`
 
+### Pushgateway Configuration (Optional)
+
+For batch jobs, cron tasks, or short-lived processes, you can push metrics to Prometheus Pushgateway:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `PushgatewayURL` | `string` | `""` | URL of Pushgateway (e.g., "http://pushgateway:9091") |
+| `PushgatewayJobName` | `string` | `"resolvespec"` | Job name for pushed metrics |
+| `PushgatewayInterval` | `int` | `0` | Auto-push interval in seconds (0 = disabled) |
+
+```go
+config := &metrics.Config{
+    PushgatewayURL:      "http://pushgateway:9091",
+    PushgatewayJobName:  "batch-job",
+    PushgatewayInterval: 30, // Push every 30 seconds
+}
+```
+
 ## Provider Interface
 
 The package uses a provider interface, allowing you to plug in different metric systems:
@@ -186,6 +204,122 @@ func (c *CustomProvider) Handler() http.Handler {
 
 // Use it
 metrics.SetProvider(&CustomProvider{})
+```
+
+## Pushgateway Usage
+
+### Automatic Push (Batch Jobs)
+
+For jobs that run periodically, use automatic pushing:
+
+```go
+package main
+
+import (
+    "time"
+
+    "github.com/bitechdev/ResolveSpec/pkg/metrics"
+)
+
+func main() {
+    // Configure with automatic pushing every 30 seconds
+    config := &metrics.Config{
+        Enabled:             true,
+        Provider:            "prometheus",
+        Namespace:           "batch_job",
+        PushgatewayURL:      "http://pushgateway:9091",
+        PushgatewayJobName:  "data-processor",
+        PushgatewayInterval: 30, // Push every 30 seconds
+    }
+
+    provider := metrics.NewPrometheusProvider(config)
+    metrics.SetProvider(provider)
+
+    // Ensure cleanup on exit
+    defer provider.StopAutoPush()
+
+    // Your batch job logic here
+    processBatchData()
+}
+```
+
+### Manual Push (Short-lived Processes)
+
+For one-time jobs or when you want manual control:
+
+```go
+package main
+
+import (
+    "log"
+
+    "github.com/bitechdev/ResolveSpec/pkg/metrics"
+)
+
+func main() {
+    // Configure without automatic pushing
+    config := &metrics.Config{
+        Enabled:            true,
+        Provider:           "prometheus",
+        PushgatewayURL:     "http://pushgateway:9091",
+        PushgatewayJobName: "migration-job",
+        // PushgatewayInterval: 0 (default - no auto-push)
+    }
+
+    provider := metrics.NewPrometheusProvider(config)
+    metrics.SetProvider(provider)
+
+    // Run your job
+    err := runMigration()
+
+    // Push metrics at the end
+    if pushErr := provider.Push(); pushErr != nil {
+        log.Printf("Failed to push metrics: %v", pushErr)
+    }
+
+    if err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+### Docker Compose with Pushgateway
+
+```yaml
+version: '3'
+services:
+  batch-job:
+    build: .
+    environment:
+      PUSHGATEWAY_URL: "http://pushgateway:9091"
+
+  pushgateway:
+    image: prom/pushgateway
+    ports:
+      - "9091:9091"
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+```
+
+**prometheus.yml for Pushgateway:**
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Scrape the pushgateway
+  - job_name: 'pushgateway'
+    honor_labels: true  # Important: preserve job labels from pushed metrics
+    static_configs:
+      - targets: ['pushgateway:9091']
 ```
 
 ## Complete Example
@@ -337,3 +471,8 @@ scrape_configs:
 4. **Performance**: Metrics collection is lock-free and highly performant
    - Safe for high-throughput applications
    - Minimal overhead (<1% in most cases)
+
+5. **Pull vs Push**:
+   - **Use Pull (default)**: Long-running services, web servers, microservices
+   - **Use Push (Pushgateway)**: Batch jobs, cron tasks, short-lived processes, serverless functions
+   - Pull is preferred for most applications as it allows Prometheus to detect if your service is down

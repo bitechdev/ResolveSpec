@@ -50,6 +50,59 @@ type connectionManager struct {
 	wg           sync.WaitGroup
 }
 
+var (
+	// singleton instance of the manager
+	instance Manager
+	// instanceMu protects the singleton instance
+	instanceMu sync.RWMutex
+)
+
+// SetupManager initializes the singleton database manager with the provided configuration.
+// This function must be called before GetInstance().
+// Returns an error if the manager is already initialized or if configuration is invalid.
+func SetupManager(cfg ManagerConfig) error {
+	instanceMu.Lock()
+	defer instanceMu.Unlock()
+
+	if instance != nil {
+		return fmt.Errorf("manager already initialized")
+	}
+
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create manager: %w", err)
+	}
+
+	instance = mgr
+	return nil
+}
+
+// GetInstance returns the singleton instance of the database manager.
+// Returns an error if SetupManager has not been called yet.
+func GetInstance() (Manager, error) {
+	instanceMu.RLock()
+	defer instanceMu.RUnlock()
+
+	if instance == nil {
+		return nil, fmt.Errorf("manager not initialized: call SetupManager first")
+	}
+
+	return instance, nil
+}
+
+// ResetInstance resets the singleton instance (primarily for testing purposes).
+// WARNING: This should only be used in tests. Calling this in production code
+// while the manager is in use can lead to undefined behavior.
+func ResetInstance() {
+	instanceMu.Lock()
+	defer instanceMu.Unlock()
+
+	if instance != nil {
+		_ = instance.Close()
+	}
+	instance = nil
+}
+
 // NewManager creates a new database connection manager
 func NewManager(cfg ManagerConfig) (Manager, error) {
 	// Apply defaults and validate configuration

@@ -54,6 +54,7 @@
 		}
 	},
 	"conventionalCommits.scopes": [
-		"spectypes"
+		"spectypes",
+		"dbmanager"
 	]
 }

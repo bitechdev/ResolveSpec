@@ -11,8 +11,8 @@ type Config struct {
 	ErrorTracking ErrorTrackingConfig `mapstructure:"error_tracking"`
 	Middleware    MiddlewareConfig    `mapstructure:"middleware"`
 	CORS          CORSConfig          `mapstructure:"cors"`
-	Database      DatabaseConfig      `mapstructure:"database"`
 	EventBroker   EventBrokerConfig   `mapstructure:"event_broker"`
+	DBManager     DBManagerConfig     `mapstructure:"dbmanager"`
 }
 
 // ServerConfig holds server-related configuration
@@ -74,11 +74,6 @@ type CORSConfig struct {
 	AllowedMethods []string `mapstructure:"allowed_methods"`
 	AllowedHeaders []string `mapstructure:"allowed_headers"`
 	MaxAge         int      `mapstructure:"max_age"`
-}
-
-// DatabaseConfig holds database configuration (primarily for testing)
-type DatabaseConfig struct {
-	URL string `mapstructure:"url"`
 }
 
 // ErrorTrackingConfig holds error tracking configuration

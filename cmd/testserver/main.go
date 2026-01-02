@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/config"
+	"github.com/bitechdev/ResolveSpec/pkg/dbmanager"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/server"
@@ -15,7 +17,6 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/resolvespec"
 	"github.com/gorilla/mux"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	gormlog "gorm.io/gorm/logger"
 )
@@ -40,12 +41,14 @@ func main() {
 	logger.Info("ResolveSpec test server starting")
 	logger.Info("Configuration loaded - Server will listen on: %s", cfg.Server.Addr)
 
-	// Initialize database
-	db, err := initDB(cfg)
+	// Initialize database manager
+	ctx := context.Background()
+	dbMgr, db, err := initDB(ctx, cfg)
 	if err != nil {
 		logger.Error("Failed to initialize database: %+v", err)
 		os.Exit(1)
 	}
+	defer dbMgr.Close()
 
 	// Create router
 	r := mux.NewRouter()
@@ -117,7 +120,7 @@ func main() {
 	}
 }
 
-func initDB(cfg *config.Config) (*gorm.DB, error) {
+func initDB(ctx context.Context, cfg *config.Config) (dbmanager.Manager, *gorm.DB, error) {
 	// Configure GORM logger based on config
 	logLevel := gormlog.Info
 	if !cfg.Logger.Dev {
@@ -135,25 +138,41 @@ func initDB(cfg *config.Config) (*gorm.DB, error) {
 		},
 	)
 
-	// Use database URL from config if available, otherwise use default SQLite
-	dbURL := cfg.Database.URL
-	if dbURL == "" {
-		dbURL = "test.db"
+	// Create database manager from config
+	mgr, err := dbmanager.NewManager(dbmanager.FromConfig(cfg.DBManager))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create database manager: %w", err)
 	}
 
-	// Create SQLite database
-	db, err := gorm.Open(sqlite.Open(dbURL), &gorm.Config{Logger: newLogger, FullSaveAssociations: false})
-	if err != nil {
-		return nil, err
+	// Connect all databases
+	if err := mgr.Connect(ctx); err != nil {
+		return nil, nil, fmt.Errorf("failed to connect databases: %w", err)
 	}
+
+	// Get default connection
+	conn, err := mgr.GetDefault()
+	if err != nil {
+		mgr.Close()
+		return nil, nil, fmt.Errorf("failed to get default connection: %w", err)
+	}
+
+	// Get GORM database
+	gormDB, err := conn.GORM()
+	if err != nil {
+		mgr.Close()
+		return nil, nil, fmt.Errorf("failed to get GORM database: %w", err)
+	}
+
+	// Update GORM logger
+	gormDB.Logger = newLogger
 
 	modelList := testmodels.GetTestModels()
 
 	// Auto migrate schemas
-	err = db.AutoMigrate(modelList...)
-	if err != nil {
-		return nil, err
+	if err := gormDB.AutoMigrate(modelList...); err != nil {
+		mgr.Close()
+		return nil, nil, fmt.Errorf("failed to auto migrate: %w", err)
 	}
 
-	return db, nil
+	return mgr, gormDB, nil
 }

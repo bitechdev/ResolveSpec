@@ -97,6 +97,29 @@ func (m *Manager) GetConfig() (*Config, error) {
 	return &cfg, nil
 }
 
+// SetConfig sets the complete configuration
+func (m *Manager) SetConfig(cfg *Config) error {
+	configMap := make(map[string]interface{})
+
+	// Marshal the config to a map structure that viper can use
+	if err := m.v.Unmarshal(&configMap); err != nil {
+		return fmt.Errorf("failed to prepare config map: %w", err)
+	}
+
+	// Use viper's merge to apply the config
+	m.v.Set("server", cfg.Server)
+	m.v.Set("tracing", cfg.Tracing)
+	m.v.Set("cache", cfg.Cache)
+	m.v.Set("logger", cfg.Logger)
+	m.v.Set("error_tracking", cfg.ErrorTracking)
+	m.v.Set("middleware", cfg.Middleware)
+	m.v.Set("cors", cfg.CORS)
+	m.v.Set("event_broker", cfg.EventBroker)
+	m.v.Set("dbmanager", cfg.DBManager)
+
+	return nil
+}
+
 // Get returns a configuration value by key
 func (m *Manager) Get(key string) interface{} {
 	return m.v.Get(key)

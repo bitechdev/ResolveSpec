@@ -79,7 +79,8 @@ func (sc *ServersConfig) Validate() error {
 	}
 
 	// Validate each instance
-	for name, instance := range sc.Instances {
+	for name := range sc.Instances {
+		instance := sc.Instances[name]
 		if instance.Name != name {
 			return fmt.Errorf("server instance name mismatch: key='%s', name='%s'", name, instance.Name)
 		}

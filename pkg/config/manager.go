@@ -122,6 +122,14 @@ func (m *Manager) Set(key string, value interface{}) {
 	m.v.Set(key, value)
 }
 
+// SaveConfig writes the current configuration to the specified path
+func (m *Manager) SaveConfig(path string) error {
+	if err := m.v.WriteConfigAs(path); err != nil {
+		return fmt.Errorf("failed to save config to %s: %w", path, err)
+	}
+	return nil
+}
+
 // setDefaults sets default configuration values
 func setDefaults(v *viper.Viper) {
 	// Server defaults

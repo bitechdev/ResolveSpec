@@ -52,5 +52,8 @@
 			"upgrade_dependency": true,
 			"vendor": true
 		}
-	}
+	},
+	"conventionalCommits.scopes": [
+		"spectypes"
+	]
 }

@@ -486,7 +486,8 @@ func TestSqlUUID_Value(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Value failed: %v", err)
 	}
-	if val != testUUID {
+	// Value() should return a string for driver compatibility
+	if val != testUUID.String() {
 		t.Errorf("expected %s, got %s", testUUID.String(), val)
 	}
 

@@ -126,6 +126,13 @@ func (n SqlNull[T]) Value() (driver.Value, error) {
 	if !n.Valid {
 		return nil, nil
 	}
+
+	// Check if the type implements fmt.Stringer (e.g., uuid.UUID, custom types)
+	// Convert to string for driver compatibility
+	if stringer, ok := any(n.Val).(fmt.Stringer); ok {
+		return stringer.String(), nil
+	}
+
 	return any(n.Val), nil
 }
 
@@ -166,6 +173,10 @@ func (n *SqlNull[T]) UnmarshalJSON(b []byte) error {
 func (n SqlNull[T]) String() string {
 	if !n.Valid {
 		return ""
+	}
+	// Check if the type implements fmt.Stringer for better string representation
+	if stringer, ok := any(n.Val).(fmt.Stringer); ok {
+		return stringer.String()
 	}
 	return fmt.Sprintf("%v", n.Val)
 }

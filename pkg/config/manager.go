@@ -174,6 +174,34 @@ func setDefaults(v *viper.Viper) {
 	// Database defaults
 	v.SetDefault("database.url", "")
 
+	// Database Manager defaults
+	v.SetDefault("dbmanager.default_connection", "default")
+	v.SetDefault("dbmanager.max_open_conns", 25)
+	v.SetDefault("dbmanager.max_idle_conns", 5)
+	v.SetDefault("dbmanager.conn_max_lifetime", "30m")
+	v.SetDefault("dbmanager.conn_max_idle_time", "5m")
+	v.SetDefault("dbmanager.retry_attempts", 3)
+	v.SetDefault("dbmanager.retry_delay", "1s")
+	v.SetDefault("dbmanager.retry_max_delay", "10s")
+	v.SetDefault("dbmanager.health_check_interval", "30s")
+	v.SetDefault("dbmanager.enable_auto_reconnect", true)
+
+	// Default PostgreSQL connection
+	v.SetDefault("dbmanager.connections.default.name", "default")
+	v.SetDefault("dbmanager.connections.default.type", "postgres")
+	v.SetDefault("dbmanager.connections.default.host", "localhost")
+	v.SetDefault("dbmanager.connections.default.port", 5432)
+	v.SetDefault("dbmanager.connections.default.user", "postgres")
+	v.SetDefault("dbmanager.connections.default.password", "")
+	v.SetDefault("dbmanager.connections.default.database", "resolvespec")
+	v.SetDefault("dbmanager.connections.default.sslmode", "disable")
+	v.SetDefault("dbmanager.connections.default.connect_timeout", "10s")
+	v.SetDefault("dbmanager.connections.default.query_timeout", "30s")
+	v.SetDefault("dbmanager.connections.default.enable_tracing", false)
+	v.SetDefault("dbmanager.connections.default.enable_metrics", false)
+	v.SetDefault("dbmanager.connections.default.enable_logging", false)
+	v.SetDefault("dbmanager.connections.default.default_orm", "bun")
+
 	// Event Broker defaults
 	v.SetDefault("event_broker.enabled", false)
 	v.SetDefault("event_broker.provider", "memory")

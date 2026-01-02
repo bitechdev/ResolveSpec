@@ -39,7 +39,6 @@ func main() {
 		logger.UpdateLoggerPath(cfg.Logger.Path, cfg.Logger.Dev)
 	}
 	logger.Info("ResolveSpec test server starting")
-	logger.Info("Configuration loaded - Server will listen on: %s", cfg.Server.Addr)
 
 	// Initialize database manager
 	ctx := context.Background()
@@ -73,47 +72,30 @@ func main() {
 	// Create server manager
 	mgr := server.NewManager()
 
-	// Parse host and port from addr
-	host := ""
-	port := 8080
-	if cfg.Server.Addr != "" {
-		// Parse addr (format: ":8080" or "localhost:8080")
-		if cfg.Server.Addr[0] == ':' {
-			// Just port
-			_, err := fmt.Sscanf(cfg.Server.Addr, ":%d", &port)
-			if err != nil {
-				logger.Error("Invalid server address: %s", cfg.Server.Addr)
-				os.Exit(1)
-			}
-		} else {
-			// Host and port
-			_, err := fmt.Sscanf(cfg.Server.Addr, "%[^:]:%d", &host, &port)
-			if err != nil {
-				logger.Error("Invalid server address: %s", cfg.Server.Addr)
-				os.Exit(1)
-			}
-		}
+	// Get default server configuration
+	defaultServerCfg, err := cfg.Servers.GetDefault()
+	if err != nil {
+		logger.Error("Failed to get default server config: %v", err)
+		os.Exit(1)
 	}
 
-	// Add server instance
-	_, err = mgr.Add(server.Config{
-		Name:            "api",
-		Host:            host,
-		Port:            port,
-		Handler:         r,
-		ShutdownTimeout: cfg.Server.ShutdownTimeout,
-		DrainTimeout:    cfg.Server.DrainTimeout,
-		ReadTimeout:     cfg.Server.ReadTimeout,
-		WriteTimeout:    cfg.Server.WriteTimeout,
-		IdleTimeout:     cfg.Server.IdleTimeout,
-	})
+	// Apply global defaults
+	defaultServerCfg.ApplyGlobalDefaults(cfg.Servers)
+
+	// Convert to server.Config and add instance
+	serverCfg := server.FromConfigInstanceToServerConfig(defaultServerCfg, r)
+
+	logger.Info("Configuration loaded - Server '%s' will listen on %s:%d",
+		serverCfg.Name, serverCfg.Host, serverCfg.Port)
+
+	_, err = mgr.Add(serverCfg)
 	if err != nil {
 		logger.Error("Failed to add server: %v", err)
 		os.Exit(1)
 	}
 
 	// Start server with graceful shutdown
-	logger.Info("Starting server on %s", cfg.Server.Addr)
+	logger.Info("Starting server '%s' on %s:%d", serverCfg.Name, serverCfg.Host, serverCfg.Port)
 	if err := mgr.ServeWithGracefulShutdown(); err != nil {
 		logger.Error("Server failed: %v", err)
 		os.Exit(1)

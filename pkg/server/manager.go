@@ -501,7 +501,7 @@ func (s *serverInstance) Start() error {
 
 		if useTLS {
 			protocol = "HTTPS"
-			logger.Info("Starting %s server '%s' on %s", protocol, s.cfg.Name, s.Addr())
+			logger.Info("Starting %s server - Name: '%s', Address: %s, Port: %d", protocol, s.cfg.Name, s.cfg.Host, s.cfg.Port)
 
 			// For AutoTLS, we need to use a TLS listener
 			if s.cfg.AutoTLS {
@@ -519,7 +519,7 @@ func (s *serverInstance) Start() error {
 				err = s.gracefulServer.server.ListenAndServeTLS(s.certFile, s.keyFile)
 			}
 		} else {
-			logger.Info("Starting %s server '%s' on %s", protocol, s.cfg.Name, s.Addr())
+			logger.Info("Starting %s server - Name: '%s', Address: %s, Port: %d", protocol, s.cfg.Name, s.cfg.Host, s.cfg.Port)
 			err = s.gracefulServer.server.ListenAndServe()
 		}
 

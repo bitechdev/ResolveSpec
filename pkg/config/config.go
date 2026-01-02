@@ -4,25 +4,75 @@ import "time"
 
 // Config represents the complete application configuration
 type Config struct {
-	Server        ServerConfig        `mapstructure:"server"`
-	Tracing       TracingConfig       `mapstructure:"tracing"`
-	Cache         CacheConfig         `mapstructure:"cache"`
-	Logger        LoggerConfig        `mapstructure:"logger"`
-	ErrorTracking ErrorTrackingConfig `mapstructure:"error_tracking"`
-	Middleware    MiddlewareConfig    `mapstructure:"middleware"`
-	CORS          CORSConfig          `mapstructure:"cors"`
-	EventBroker   EventBrokerConfig   `mapstructure:"event_broker"`
-	DBManager     DBManagerConfig     `mapstructure:"dbmanager"`
+	Servers       ServersConfig          `mapstructure:"servers"`
+	Tracing       TracingConfig          `mapstructure:"tracing"`
+	Cache         CacheConfig            `mapstructure:"cache"`
+	Logger        LoggerConfig           `mapstructure:"logger"`
+	ErrorTracking ErrorTrackingConfig    `mapstructure:"error_tracking"`
+	Middleware    MiddlewareConfig       `mapstructure:"middleware"`
+	CORS          CORSConfig             `mapstructure:"cors"`
+	EventBroker   EventBrokerConfig      `mapstructure:"event_broker"`
+	DBManager     DBManagerConfig        `mapstructure:"dbmanager"`
+	Paths         PathsConfig            `mapstructure:"paths"`
+	Extensions    map[string]interface{} `mapstructure:"extensions"`
 }
 
-// ServerConfig holds server-related configuration
-type ServerConfig struct {
-	Addr            string        `mapstructure:"addr"`
+// ServersConfig contains configuration for the server manager
+type ServersConfig struct {
+	// DefaultServer is the name of the default server to use
+	DefaultServer string `mapstructure:"default_server"`
+
+	// Instances is a map of server name to server configuration
+	Instances map[string]ServerInstanceConfig `mapstructure:"instances"`
+
+	// Global timeout defaults (can be overridden per instance)
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	DrainTimeout    time.Duration `mapstructure:"drain_timeout"`
 	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
 	IdleTimeout     time.Duration `mapstructure:"idle_timeout"`
+}
+
+// ServerInstanceConfig defines configuration for a single server instance
+type ServerInstanceConfig struct {
+	// Name is the unique name of this server instance
+	Name string `mapstructure:"name"`
+
+	// Host is the host to bind to (e.g., "localhost", "0.0.0.0", "")
+	Host string `mapstructure:"host"`
+
+	// Port is the port number to listen on
+	Port int `mapstructure:"port"`
+
+	// Description is a human-readable description of this server
+	Description string `mapstructure:"description"`
+
+	// GZIP enables GZIP compression middleware
+	GZIP bool `mapstructure:"gzip"`
+
+	// TLS/HTTPS configuration options (mutually exclusive)
+	// Option 1: Provide certificate and key files directly
+	SSLCert string `mapstructure:"ssl_cert"`
+	SSLKey  string `mapstructure:"ssl_key"`
+
+	// Option 2: Use self-signed certificate (for development/testing)
+	SelfSignedSSL bool `mapstructure:"self_signed_ssl"`
+
+	// Option 3: Use Let's Encrypt / AutoTLS
+	AutoTLS         bool     `mapstructure:"auto_tls"`
+	AutoTLSDomains  []string `mapstructure:"auto_tls_domains"`
+	AutoTLSCacheDir string   `mapstructure:"auto_tls_cache_dir"`
+	AutoTLSEmail    string   `mapstructure:"auto_tls_email"`
+
+	// Timeout configurations (overrides global defaults)
+	ShutdownTimeout *time.Duration `mapstructure:"shutdown_timeout"`
+	DrainTimeout    *time.Duration `mapstructure:"drain_timeout"`
+	ReadTimeout     *time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout    *time.Duration `mapstructure:"write_timeout"`
+	IdleTimeout     *time.Duration `mapstructure:"idle_timeout"`
+
+	// Tags for organization and filtering
+	Tags map[string]string `mapstructure:"tags"`
 }
 
 // TracingConfig holds OpenTelemetry tracing configuration
@@ -136,3 +186,8 @@ type EventBrokerRetryPolicyConfig struct {
 	MaxDelay      time.Duration `mapstructure:"max_delay"`
 	BackoffFactor float64       `mapstructure:"backoff_factor"`
 }
+
+// PathsConfig contains configuration for named file system paths
+// This is a map of path name to file system path
+// Example: "data_dir": "/var/lib/myapp/data"
+type PathsConfig map[string]string

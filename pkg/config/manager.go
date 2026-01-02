@@ -107,7 +107,7 @@ func (m *Manager) SetConfig(cfg *Config) error {
 	}
 
 	// Use viper's merge to apply the config
-	m.v.Set("server", cfg.Server)
+	m.v.Set("servers", cfg.Servers)
 	m.v.Set("tracing", cfg.Tracing)
 	m.v.Set("cache", cfg.Cache)
 	m.v.Set("logger", cfg.Logger)
@@ -116,6 +116,8 @@ func (m *Manager) SetConfig(cfg *Config) error {
 	m.v.Set("cors", cfg.CORS)
 	m.v.Set("event_broker", cfg.EventBroker)
 	m.v.Set("dbmanager", cfg.DBManager)
+	m.v.Set("paths", cfg.Paths)
+	m.v.Set("extensions", cfg.Extensions)
 
 	return nil
 }
@@ -155,13 +157,22 @@ func (m *Manager) SaveConfig(path string) error {
 
 // setDefaults sets default configuration values
 func setDefaults(v *viper.Viper) {
-	// Server defaults
-	v.SetDefault("server.addr", ":8080")
-	v.SetDefault("server.shutdown_timeout", "30s")
-	v.SetDefault("server.drain_timeout", "25s")
-	v.SetDefault("server.read_timeout", "10s")
-	v.SetDefault("server.write_timeout", "10s")
-	v.SetDefault("server.idle_timeout", "120s")
+	// Server defaults - new structure
+	v.SetDefault("servers.default_server", "default")
+
+	// Global server timeout defaults
+	v.SetDefault("servers.shutdown_timeout", "30s")
+	v.SetDefault("servers.drain_timeout", "25s")
+	v.SetDefault("servers.read_timeout", "10s")
+	v.SetDefault("servers.write_timeout", "10s")
+	v.SetDefault("servers.idle_timeout", "120s")
+
+	// Default server instance
+	v.SetDefault("servers.instances.default.name", "default")
+	v.SetDefault("servers.instances.default.host", "")
+	v.SetDefault("servers.instances.default.port", 8080)
+	v.SetDefault("servers.instances.default.description", "Default HTTP server")
+	v.SetDefault("servers.instances.default.gzip", false)
 
 	// Tracing defaults
 	v.SetDefault("tracing.enabled", false)
@@ -259,4 +270,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("event_broker.retry_policy.initial_delay", "1s")
 	v.SetDefault("event_broker.retry_policy.max_delay", "30s")
 	v.SetDefault("event_broker.retry_policy.backoff_factor", 2.0)
+
+	// Paths defaults (common directory paths)
+	v.SetDefault("paths.data_dir", "./data")
+	v.SetDefault("paths.config_dir", "./config")
+	v.SetDefault("paths.logs_dir", "./logs")
+	v.SetDefault("paths.temp_dir", "./tmp")
+
+	// Extensions defaults (empty map)
+	v.SetDefault("extensions", map[string]interface{}{})
 }

@@ -270,9 +270,14 @@ func ExampleWithBun(bunDB *bun.DB) {
 	SetupMuxRoutes(muxRouter, handler, nil)
 }
 
+// BunRouterHandler is an interface that both bunrouter.Router and bunrouter.Group implement
+type BunRouterHandler interface {
+	Handle(method, path string, handler bunrouter.HandlerFunc)
+}
+
 // SetupBunRouterRoutes sets up bunrouter routes for the RestHeadSpec API
-func SetupBunRouterRoutes(bunRouter *router.StandardBunRouterAdapter, handler *Handler) {
-	r := bunRouter.GetBunRouter()
+// Accepts bunrouter.Router or bunrouter.Group
+func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
@@ -450,17 +455,34 @@ func ExampleBunRouterWithBunDB(bunDB *bun.DB) {
 	// Create handler
 	handler := NewHandlerWithBun(bunDB)
 
-	// Create BunRouter adapter
-	routerAdapter := NewStandardBunRouter()
+	// Create bunrouter
+	bunRouter := bunrouter.New()
 
 	// Setup routes
-	SetupBunRouterRoutes(routerAdapter, handler)
-
-	// Get the underlying router for server setup
-	r := routerAdapter.GetBunRouter()
+	SetupBunRouterRoutes(bunRouter, handler)
 
 	// Start server
-	if err := http.ListenAndServe(":8080", r); err != nil {
+	if err := http.ListenAndServe(":8080", bunRouter); err != nil {
+		logger.Error("Server failed to start: %v", err)
+	}
+}
+
+// ExampleBunRouterWithGroup shows how to use SetupBunRouterRoutes with a bunrouter.Group
+func ExampleBunRouterWithGroup(bunDB *bun.DB) {
+	// Create handler with Bun adapter
+	handler := NewHandlerWithBun(bunDB)
+
+	// Create bunrouter
+	bunRouter := bunrouter.New()
+
+	// Create a route group with a prefix
+	apiGroup := bunRouter.NewGroup("/api")
+
+	// Setup RestHeadSpec routes on the group - routes will be under /api
+	SetupBunRouterRoutes(apiGroup, handler)
+
+	// Start server
+	if err := http.ListenAndServe(":8080", bunRouter); err != nil {
 		logger.Error("Server failed to start: %v", err)
 	}
 }

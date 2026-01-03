@@ -207,9 +207,14 @@ func ExampleWithBun(bunDB *bun.DB) {
 	SetupMuxRoutes(muxRouter, handler, nil)
 }
 
+// BunRouterHandler is an interface that both bunrouter.Router and bunrouter.Group implement
+type BunRouterHandler interface {
+	Handle(method, path string, handler bunrouter.HandlerFunc)
+}
+
 // SetupBunRouterRoutes sets up bunrouter routes for the ResolveSpec API
-func SetupBunRouterRoutes(bunRouter *router.StandardBunRouterAdapter, handler *Handler) {
-	r := bunRouter.GetBunRouter()
+// Accepts bunrouter.Router or bunrouter.Group
+func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
@@ -337,13 +342,13 @@ func ExampleWithBunRouter(bunDB *bun.DB) {
 	handler := NewHandlerWithBun(bunDB)
 
 	// Create bunrouter
-	bunRouter := router.NewStandardBunRouterAdapter()
+	bunRouter := bunrouter.New()
 
 	// Setup ResolveSpec routes with bunrouter
 	SetupBunRouterRoutes(bunRouter, handler)
 
 	// Start server
-	// http.ListenAndServe(":8080", bunRouter.GetBunRouter())
+	// http.ListenAndServe(":8080", bunRouter)
 }
 
 // ExampleBunRouterWithBunDB shows the full uptrace stack (bunrouter + Bun ORM)
@@ -359,11 +364,29 @@ func ExampleBunRouterWithBunDB(bunDB *bun.DB) {
 	handler := NewHandler(dbAdapter, registry)
 
 	// Create bunrouter
-	bunRouter := router.NewStandardBunRouterAdapter()
+	bunRouter := bunrouter.New()
 
 	// Setup ResolveSpec routes
 	SetupBunRouterRoutes(bunRouter, handler)
 
 	// This gives you the full uptrace stack: bunrouter + Bun ORM
-	// http.ListenAndServe(":8080", bunRouter.GetBunRouter())
+	// http.ListenAndServe(":8080", bunRouter)
+}
+
+// ExampleBunRouterWithGroup shows how to use SetupBunRouterRoutes with a bunrouter.Group
+func ExampleBunRouterWithGroup(bunDB *bun.DB) {
+	// Create handler with Bun adapter
+	handler := NewHandlerWithBun(bunDB)
+
+	// Create bunrouter
+	bunRouter := bunrouter.New()
+
+	// Create a route group with a prefix
+	apiGroup := bunRouter.NewGroup("/api")
+
+	// Setup ResolveSpec routes on the group - routes will be under /api
+	SetupBunRouterRoutes(apiGroup, handler)
+
+	// Start server
+	// http.ListenAndServe(":8080", bunRouter)
 }

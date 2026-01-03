@@ -3,6 +3,7 @@ package dbmanager
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -159,6 +160,9 @@ func (c *sqlConnection) Close() error {
 
 // HealthCheck verifies the connection is alive
 func (c *sqlConnection) HealthCheck(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("connection is nil")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -188,6 +192,9 @@ func (c *sqlConnection) Reconnect(ctx context.Context) error {
 
 // Native returns the native *sql.DB connection
 func (c *sqlConnection) Native() (*sql.DB, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.nativeDB != nil {
 		defer c.mu.RUnlock()
@@ -219,6 +226,9 @@ func (c *sqlConnection) Native() (*sql.DB, error) {
 
 // Bun returns a Bun ORM instance wrapping the native connection
 func (c *sqlConnection) Bun() (*bun.DB, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.bunDB != nil {
 		defer c.mu.RUnlock()
@@ -249,6 +259,9 @@ func (c *sqlConnection) Bun() (*bun.DB, error) {
 
 // GORM returns a GORM instance wrapping the native connection
 func (c *sqlConnection) GORM() (*gorm.DB, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.gormDB != nil {
 		defer c.mu.RUnlock()
@@ -283,6 +296,9 @@ func (c *sqlConnection) GORM() (*gorm.DB, error) {
 
 // Database returns the common.Database interface using the configured default ORM
 func (c *sqlConnection) Database() (common.Database, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	defaultORM := c.config.DefaultORM
 	c.mu.RUnlock()
@@ -307,6 +323,9 @@ func (c *sqlConnection) MongoDB() (*mongo.Client, error) {
 
 // Stats returns connection statistics
 func (c *sqlConnection) Stats() *ConnectionStats {
+	if c == nil {
+		return nil
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -336,6 +355,9 @@ func (c *sqlConnection) Stats() *ConnectionStats {
 
 // getBunAdapter returns or creates the Bun adapter
 func (c *sqlConnection) getBunAdapter() (common.Database, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.bunAdapter != nil {
 		defer c.mu.RUnlock()
@@ -361,6 +383,9 @@ func (c *sqlConnection) getBunAdapter() (common.Database, error) {
 
 // getGORMAdapter returns or creates the GORM adapter
 func (c *sqlConnection) getGORMAdapter() (common.Database, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.gormAdapter != nil {
 		defer c.mu.RUnlock()
@@ -386,6 +411,9 @@ func (c *sqlConnection) getGORMAdapter() (common.Database, error) {
 
 // getNativeAdapter returns or creates the native adapter
 func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
+	if c == nil {
+		return nil, fmt.Errorf("connection is nil")
+	}
 	c.mu.RLock()
 	if c.nativeAdapter != nil {
 		defer c.mu.RUnlock()
@@ -424,6 +452,7 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 
 // getBunDialect returns the appropriate Bun dialect for the database type
 func (c *sqlConnection) getBunDialect() schema.Dialect {
+
 	switch c.dbType {
 	case DatabaseTypePostgreSQL:
 		return database.GetPostgresDialect()

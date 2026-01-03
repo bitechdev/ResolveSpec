@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
+	"strings"
 	"sync"
 
 	"github.com/bitechdev/ResolveSpec/pkg/server/zipfs"
@@ -15,16 +17,18 @@ import (
 // EmbedFSProvider serves files from an embedded filesystem.
 // It supports both direct embedded directories and embedded zip files.
 type EmbedFSProvider struct {
-	embedFS   *embed.FS
-	zipFile   string // Optional: path within embedded FS to zip file
-	zipReader *zip.Reader
-	fs        fs.FS
-	mu        sync.RWMutex
+	embedFS     *embed.FS
+	zipFile     string // Optional: path within embedded FS to zip file
+	stripPrefix string // Optional: prefix to strip from requested paths (e.g., "/dist")
+	zipReader   *zip.Reader
+	fs          fs.FS
+	mu          sync.RWMutex
 }
 
 // NewEmbedFSProvider creates a new EmbedFSProvider.
 // If zipFile is empty, the embedded FS is used directly.
 // If zipFile is specified, it's treated as a path to a zip file within the embedded FS.
+// Use WithStripPrefix to configure path prefix stripping.
 func NewEmbedFSProvider(embedFS fs.FS, zipFile string) (*EmbedFSProvider, error) {
 	if embedFS == nil {
 		return nil, fmt.Errorf("embedded filesystem cannot be nil")
@@ -81,6 +85,9 @@ func NewEmbedFSProvider(embedFS fs.FS, zipFile string) (*EmbedFSProvider, error)
 }
 
 // Open opens the named file from the embedded filesystem.
+// If a strip prefix is configured, it prepends the prefix to the requested path.
+// For example, with stripPrefix="/dist", requesting "/assets/style.css" will
+// open "/dist/assets/style.css" from the embedded filesystem.
 func (p *EmbedFSProvider) Open(name string) (fs.File, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -89,7 +96,21 @@ func (p *EmbedFSProvider) Open(name string) (fs.File, error) {
 		return nil, fmt.Errorf("embedded filesystem is closed")
 	}
 
-	return p.fs.Open(name)
+	// Apply prefix stripping by prepending the prefix to the requested path
+	actualPath := name
+	if p.stripPrefix != "" {
+		// Clean the paths to handle leading/trailing slashes
+		prefix := strings.Trim(p.stripPrefix, "/")
+		cleanName := strings.TrimPrefix(name, "/")
+
+		if prefix != "" {
+			actualPath = path.Join(prefix, cleanName)
+		} else {
+			actualPath = cleanName
+		}
+	}
+
+	return p.fs.Open(actualPath)
 }
 
 // Close releases any resources held by the provider.
@@ -116,4 +137,22 @@ func (p *EmbedFSProvider) Type() string {
 // ZipFile returns the path to the zip file within the embedded FS, if any.
 func (p *EmbedFSProvider) ZipFile() string {
 	return p.zipFile
+}
+
+// WithStripPrefix sets the prefix to strip from requested paths.
+// For example, WithStripPrefix("/dist") will make files at "/dist/assets"
+// accessible via "/assets".
+// Returns the provider for method chaining.
+func (p *EmbedFSProvider) WithStripPrefix(prefix string) *EmbedFSProvider {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stripPrefix = prefix
+	return p
+}
+
+// StripPrefix returns the configured strip prefix.
+func (p *EmbedFSProvider) StripPrefix() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stripPrefix
 }

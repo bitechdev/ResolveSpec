@@ -372,12 +372,20 @@ func (c *sqlConnection) getBunAdapter() (common.Database, error) {
 		return c.bunAdapter, nil
 	}
 
-	bunDB, err := c.Bun()
-	if err != nil {
-		return nil, err
+	// Double-check bunDB exists (while already holding write lock)
+	if c.bunDB == nil {
+		// Get native connection first
+		native, err := c.provider.GetNative()
+		if err != nil {
+			return nil, NewConnectionError(c.name, "get bun", err)
+		}
+
+		// Create Bun DB wrapping the same sql.DB
+		dialect := c.getBunDialect()
+		c.bunDB = bun.NewDB(native, dialect)
 	}
 
-	c.bunAdapter = database.NewBunAdapter(bunDB)
+	c.bunAdapter = database.NewBunAdapter(c.bunDB)
 	return c.bunAdapter, nil
 }
 
@@ -400,12 +408,25 @@ func (c *sqlConnection) getGORMAdapter() (common.Database, error) {
 		return c.gormAdapter, nil
 	}
 
-	gormDB, err := c.GORM()
-	if err != nil {
-		return nil, err
+	// Double-check gormDB exists (while already holding write lock)
+	if c.gormDB == nil {
+		// Get native connection first
+		native, err := c.provider.GetNative()
+		if err != nil {
+			return nil, NewConnectionError(c.name, "get gorm", err)
+		}
+
+		// Create GORM DB wrapping the same sql.DB
+		dialector := c.getGORMDialector(native)
+		db, err := gorm.Open(dialector, &gorm.Config{})
+		if err != nil {
+			return nil, NewConnectionError(c.name, "initialize gorm", err)
+		}
+
+		c.gormDB = db
 	}
 
-	c.gormAdapter = database.NewGormAdapter(gormDB)
+	c.gormAdapter = database.NewGormAdapter(c.gormDB)
 	return c.gormAdapter, nil
 }
 
@@ -428,21 +449,31 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 		return c.nativeAdapter, nil
 	}
 
-	native, err := c.Native()
-	if err != nil {
-		return nil, err
+	// Double-check nativeDB exists (while already holding write lock)
+	if c.nativeDB == nil {
+		if !c.connected {
+			return nil, ErrConnectionClosed
+		}
+
+		// Get native connection from provider
+		db, err := c.provider.GetNative()
+		if err != nil {
+			return nil, NewConnectionError(c.name, "get native", err)
+		}
+
+		c.nativeDB = db
 	}
 
 	// Create a native adapter based on database type
 	switch c.dbType {
 	case DatabaseTypePostgreSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(native)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
 	case DatabaseTypeSQLite:
 		// For SQLite, we'll use the PgSQL adapter as it works with standard sql.DB
-		c.nativeAdapter = database.NewPgSQLAdapter(native)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
 	case DatabaseTypeMSSQL:
 		// For MSSQL, we'll use the PgSQL adapter as it works with standard sql.DB
-		c.nativeAdapter = database.NewPgSQLAdapter(native)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
 	default:
 		return nil, ErrUnsupportedDatabase
 	}

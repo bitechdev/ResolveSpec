@@ -51,8 +51,10 @@ type PrefixStrippingProvider interface {
 // WithStripPrefix is a helper function that sets the strip prefix on a provider
 // if it implements PrefixStrippingProvider. Returns the provider for method chaining.
 func WithStripPrefix(provider FileSystemProvider, prefix string) FileSystemProvider {
-	if p, ok := provider.(PrefixStrippingProvider); ok {
-		p.WithStripPrefix(prefix)
+	if provider != nil {
+		if p, ok := provider.(PrefixStrippingProvider); ok {
+			p.WithStripPrefix(prefix)
+		}
 	}
 	return provider
 }

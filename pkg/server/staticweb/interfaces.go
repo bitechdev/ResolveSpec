@@ -3,6 +3,7 @@ package staticweb
 import (
 	"io/fs"
 	"net/http"
+	"reflect"
 )
 
 // FileSystemProvider abstracts the source of files (local, zip, embedded, future: http, s3)
@@ -51,7 +52,10 @@ type PrefixStrippingProvider interface {
 // WithStripPrefix is a helper function that sets the strip prefix on a provider
 // if it implements PrefixStrippingProvider. Returns the provider for method chaining.
 func WithStripPrefix(provider FileSystemProvider, prefix string) FileSystemProvider {
-	if p, ok := provider.(PrefixStrippingProvider); ok {
+	if provider == nil || reflect.ValueOf(provider).IsNil() {
+		return provider
+	}
+	if p, ok := provider.(PrefixStrippingProvider); ok && p != nil {
 		p.WithStripPrefix(prefix)
 	}
 	return provider

@@ -142,12 +142,10 @@ func (p *EmbedFSProvider) ZipFile() string {
 // WithStripPrefix sets the prefix to strip from requested paths.
 // For example, WithStripPrefix("/dist") will make files at "/dist/assets"
 // accessible via "/assets".
-// Returns the provider for method chaining.
-func (p *EmbedFSProvider) WithStripPrefix(prefix string) *EmbedFSProvider {
+func (p *EmbedFSProvider) WithStripPrefix(prefix string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stripPrefix = prefix
-	return p
 }
 
 // StripPrefix returns the configured strip prefix.

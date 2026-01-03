@@ -34,6 +34,29 @@ type ReloadableProvider interface {
 	Reload() error
 }
 
+// PrefixStrippingProvider is an optional interface that providers can implement
+// to support stripping path prefixes from requested paths.
+// This is useful when files are stored in a subdirectory but should be accessible
+// at the root level (e.g., files at "/dist/assets" accessible via "/assets").
+type PrefixStrippingProvider interface {
+	// WithStripPrefix sets the prefix to strip from requested paths.
+	// For example, WithStripPrefix("/dist") will make files at "/dist/assets"
+	// accessible via "/assets".
+	WithStripPrefix(prefix string)
+
+	// StripPrefix returns the configured strip prefix.
+	StripPrefix() string
+}
+
+// WithStripPrefix is a helper function that sets the strip prefix on a provider
+// if it implements PrefixStrippingProvider. Returns the provider for method chaining.
+func WithStripPrefix(provider FileSystemProvider, prefix string) FileSystemProvider {
+	if p, ok := provider.(PrefixStrippingProvider); ok {
+		p.WithStripPrefix(prefix)
+	}
+	return provider
+}
+
 // CachePolicy defines how files should be cached by browsers and proxies.
 // Implementations must be safe for concurrent use.
 type CachePolicy interface {

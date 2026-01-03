@@ -4,13 +4,18 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // LocalFSProvider serves files from a local directory.
 type LocalFSProvider struct {
-	path string
-	fs   fs.FS
+	path        string
+	stripPrefix string
+	fs          fs.FS
+	mu          sync.RWMutex
 }
 
 // NewLocalFSProvider creates a new LocalFSProvider for the given directory path.
@@ -39,8 +44,28 @@ func NewLocalFSProvider(path string) (*LocalFSProvider, error) {
 }
 
 // Open opens the named file from the local directory.
+// If a strip prefix is configured, it prepends the prefix to the requested path.
+// For example, with stripPrefix="/dist", requesting "/assets/style.css" will
+// open "/dist/assets/style.css" from the local filesystem.
 func (p *LocalFSProvider) Open(name string) (fs.File, error) {
-	return p.fs.Open(name)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	// Apply prefix stripping by prepending the prefix to the requested path
+	actualPath := name
+	if p.stripPrefix != "" {
+		// Clean the paths to handle leading/trailing slashes
+		prefix := strings.Trim(p.stripPrefix, "/")
+		cleanName := strings.TrimPrefix(name, "/")
+
+		if prefix != "" {
+			actualPath = path.Join(prefix, cleanName)
+		} else {
+			actualPath = cleanName
+		}
+	}
+
+	return p.fs.Open(actualPath)
 }
 
 // Close releases any resources held by the provider.
@@ -63,6 +88,9 @@ func (p *LocalFSProvider) Path() string {
 // For local directories, os.DirFS automatically picks up changes,
 // so this recreates the DirFS to ensure a fresh view.
 func (p *LocalFSProvider) Reload() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// Verify the directory still exists
 	info, err := os.Stat(p.path)
 	if err != nil {
@@ -77,4 +105,20 @@ func (p *LocalFSProvider) Reload() error {
 	p.fs = os.DirFS(p.path)
 
 	return nil
+}
+
+// WithStripPrefix sets the prefix to strip from requested paths.
+// For example, WithStripPrefix("/dist") will make files at "/dist/assets"
+// accessible via "/assets".
+func (p *LocalFSProvider) WithStripPrefix(prefix string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stripPrefix = prefix
+}
+
+// StripPrefix returns the configured strip prefix.
+func (p *LocalFSProvider) StripPrefix() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stripPrefix
 }

@@ -123,27 +123,6 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			ComplexAPI:  complexAPI,
 		}
 
-		// Execute BeforeQueryList hook
-		if err := h.hooks.Execute(BeforeQueryList, hookCtx); err != nil {
-			logger.Error("BeforeQueryList hook failed: %v", err)
-			sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-			return
-		}
-
-		// Check if hook aborted the operation
-		if hookCtx.Abort {
-			if hookCtx.AbortCode == 0 {
-				hookCtx.AbortCode = http.StatusBadRequest
-			}
-			sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
-			return
-		}
-
-		// Use potentially modified SQL query and variables from hooks
-		sqlquery = hookCtx.SQLQuery
-		variables = hookCtx.Variables
-		// complexAPI = hookCtx.ComplexAPI
-
 		// Extract input variables from SQL query (placeholders like [variable])
 		sqlquery = h.extractInputVariables(sqlquery, &inputvars)
 
@@ -203,6 +182,27 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 
 		// Execute query within transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			// Set transaction in hook context for hooks to use
+			hookCtx.Tx = tx
+
+			// Execute BeforeQueryList hook (inside transaction)
+			if err := h.hooks.Execute(BeforeQueryList, hookCtx); err != nil {
+				logger.Error("BeforeQueryList hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+
+			// Check if hook aborted the operation
+			if hookCtx.Abort {
+				if hookCtx.AbortCode == 0 {
+					hookCtx.AbortCode = http.StatusBadRequest
+				}
+				sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
+				return fmt.Errorf("operation aborted: %s", hookCtx.AbortMessage)
+			}
+
+			// Use potentially modified SQL query from hook
+			sqlquery = hookCtx.SQLQuery
 			sqlqueryCnt := sqlquery
 
 			// Parse sorting and pagination parameters
@@ -286,6 +286,21 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			}
 			total = hookCtx.Total
 
+			// Execute AfterQueryList hook (inside transaction)
+			hookCtx.Result = dbobjlist
+			hookCtx.Total = total
+			hookCtx.Error = nil
+			if err := h.hooks.Execute(AfterQueryList, hookCtx); err != nil {
+				logger.Error("AfterQueryList hook failed: %v", err)
+				sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified result from hook
+			if modifiedResult, ok := hookCtx.Result.([]map[string]interface{}); ok {
+				dbobjlist = modifiedResult
+			}
+			total = hookCtx.Total
+
 			return nil
 		})
 
@@ -293,21 +308,6 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			logger.Error("Transaction failed: %v", err)
 			return
 		}
-
-		// Execute AfterQueryList hook
-		hookCtx.Result = dbobjlist
-		hookCtx.Total = total
-		hookCtx.Error = err
-		if err := h.hooks.Execute(AfterQueryList, hookCtx); err != nil {
-			logger.Error("AfterQueryList hook failed: %v", err)
-			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-			return
-		}
-		// Use potentially modified result from hook
-		if modifiedResult, ok := hookCtx.Result.([]map[string]interface{}); ok {
-			dbobjlist = modifiedResult
-		}
-		total = hookCtx.Total
 
 		// Set response headers
 		respOffset := 0
@@ -459,26 +459,6 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			ComplexAPI:  complexAPI,
 		}
 
-		// Execute BeforeQuery hook
-		if err := h.hooks.Execute(BeforeQuery, hookCtx); err != nil {
-			logger.Error("BeforeQuery hook failed: %v", err)
-			sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-			return
-		}
-
-		// Check if hook aborted the operation
-		if hookCtx.Abort {
-			if hookCtx.AbortCode == 0 {
-				hookCtx.AbortCode = http.StatusBadRequest
-			}
-			sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
-			return
-		}
-
-		// Use potentially modified SQL query and variables from hooks
-		sqlquery = hookCtx.SQLQuery
-		variables = hookCtx.Variables
-
 		// Extract input variables from SQL query
 		sqlquery = h.extractInputVariables(sqlquery, &inputvars)
 
@@ -554,6 +534,28 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 
 		// Execute query within transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			// Set transaction in hook context for hooks to use
+			hookCtx.Tx = tx
+
+			// Execute BeforeQuery hook (inside transaction)
+			if err := h.hooks.Execute(BeforeQuery, hookCtx); err != nil {
+				logger.Error("BeforeQuery hook failed: %v", err)
+				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
+				return err
+			}
+
+			// Check if hook aborted the operation
+			if hookCtx.Abort {
+				if hookCtx.AbortCode == 0 {
+					hookCtx.AbortCode = http.StatusBadRequest
+				}
+				sendError(w, hookCtx.AbortCode, "operation_aborted", hookCtx.AbortMessage, nil)
+				return fmt.Errorf("operation aborted: %s", hookCtx.AbortMessage)
+			}
+
+			// Use potentially modified SQL query from hook
+			sqlquery = hookCtx.SQLQuery
+
 			// Execute BeforeSQLExec hook
 			if err := h.hooks.Execute(BeforeSQLExec, hookCtx); err != nil {
 				logger.Error("BeforeSQLExec hook failed: %v", err)
@@ -586,25 +588,25 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 				dbobj = modifiedResult
 			}
 
+			// Execute AfterQuery hook (inside transaction)
+			hookCtx.Result = dbobj
+			hookCtx.Error = nil
+			if err := h.hooks.Execute(AfterQuery, hookCtx); err != nil {
+				logger.Error("AfterQuery hook failed: %v", err)
+				sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+				return err
+			}
+			// Use potentially modified result from hook
+			if modifiedResult, ok := hookCtx.Result.(map[string]interface{}); ok {
+				dbobj = modifiedResult
+			}
+
 			return nil
 		})
 
 		if err != nil {
 			logger.Error("Transaction failed: %v", err)
 			return
-		}
-
-		// Execute AfterQuery hook
-		hookCtx.Result = dbobj
-		hookCtx.Error = err
-		if err := h.hooks.Execute(AfterQuery, hookCtx); err != nil {
-			logger.Error("AfterQuery hook failed: %v", err)
-			sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-			return
-		}
-		// Use potentially modified result from hook
-		if modifiedResult, ok := hookCtx.Result.(map[string]interface{}); ok {
-			dbobj = modifiedResult
 		}
 
 		// Execute BeforeResponse hook

@@ -1239,6 +1239,26 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
+		// First, read the existing record from the database
+		existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		if err := selectQuery.ScanModel(ctx); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("record not found with ID: %v", targetID)
+			}
+			return fmt.Errorf("failed to fetch existing record: %w", err)
+		}
+
+		// Convert existing record to map
+		existingMap := make(map[string]interface{})
+		jsonData, err := json.Marshal(existingRecord)
+		if err != nil {
+			return fmt.Errorf("failed to marshal existing record: %w", err)
+		}
+		if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+			return fmt.Errorf("failed to unmarshal existing record: %w", err)
+		}
+
 		// Extract nested relations if present (but don't process them yet)
 		var nestedRelations map[string]interface{}
 		if h.shouldUseNestedProcessor(dataMap, model) {
@@ -1251,8 +1271,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			nestedRelations = relations
 		}
 
+		// Merge only non-null and non-empty values from the incoming request into the existing record
+		for key, newValue := range dataMap {
+			// Skip if the value is nil
+			if newValue == nil {
+				continue
+			}
+
+			// Skip if the value is an empty string
+			if strVal, ok := newValue.(string); ok && strVal == "" {
+				continue
+			}
+
+			// Update the existing map with the new value
+			existingMap[key] = newValue
+		}
+
 		// Ensure ID is in the data map for the update
-		dataMap[pkName] = targetID
+		existingMap[pkName] = targetID
+		dataMap = existingMap
 
 		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
 		// Get the type of the model, handling both pointer and non-pointer types
@@ -1297,7 +1334,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Fetch the updated record to return the new values
 		modelValue := reflect.New(reflect.TypeOf(model)).Interface()
-		selectQuery := tx.NewSelect().Model(modelValue).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery = tx.NewSelect().Model(modelValue).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			return fmt.Errorf("failed to fetch updated record: %w", err)
 		}

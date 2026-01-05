@@ -698,20 +698,83 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard processing without nested relations
-		query := h.db.NewUpdate().Table(tableName).SetMap(updates)
+		// Get the primary key name
+		pkName := reflection.GetPrimaryKeyName(model)
 
-		// Apply conditions
+		// First, read the existing record from the database
+		existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		selectQuery := h.db.NewSelect().Model(existingRecord)
+
+		// Apply conditions to select
 		if urlID != "" {
 			logger.Debug("Updating by URL ID: %s", urlID)
-			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), urlID)
+			selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
 		} else if reqID != nil {
 			switch id := reqID.(type) {
 			case string:
 				logger.Debug("Updating by request ID: %s", id)
-				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 			case []string:
-				logger.Debug("Updating by multiple IDs: %v", id)
-				query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+				if len(id) > 0 {
+					logger.Debug("Updating by multiple IDs: %v", id)
+					selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+				}
+			}
+		}
+
+		if err := selectQuery.ScanModel(ctx); err != nil {
+			if err == sql.ErrNoRows {
+				logger.Warn("No records found to update")
+				h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", nil)
+				return
+			}
+			logger.Error("Error fetching existing record: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "update_error", "Error fetching existing record", err)
+			return
+		}
+
+		// Convert existing record to map
+		existingMap := make(map[string]interface{})
+		jsonData, err := json.Marshal(existingRecord)
+		if err != nil {
+			logger.Error("Error marshaling existing record: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "update_error", "Error processing existing record", err)
+			return
+		}
+		if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+			logger.Error("Error unmarshaling existing record: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "update_error", "Error processing existing record", err)
+			return
+		}
+
+		// Merge only non-null and non-empty values from the incoming request into the existing record
+		for key, newValue := range updates {
+			// Skip if the value is nil
+			if newValue == nil {
+				continue
+			}
+
+			// Skip if the value is an empty string
+			if strVal, ok := newValue.(string); ok && strVal == "" {
+				continue
+			}
+
+			// Update the existing map with the new value
+			existingMap[key] = newValue
+		}
+
+		// Build update query with merged data
+		query := h.db.NewUpdate().Table(tableName).SetMap(existingMap)
+
+		// Apply conditions
+		if urlID != "" {
+			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+		} else if reqID != nil {
+			switch id := reqID.(type) {
+			case string:
+				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+			case []string:
+				query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
 			}
 		}
 
@@ -782,11 +845,42 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard batch update without nested relations
+		pkName := reflection.GetPrimaryKeyName(model)
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
+					// First, read the existing record
+					existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+					selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					if err := selectQuery.ScanModel(ctx); err != nil {
+						if err == sql.ErrNoRows {
+							continue // Skip if record not found
+						}
+						return fmt.Errorf("failed to fetch existing record: %w", err)
+					}
 
-					txQuery := tx.NewUpdate().Table(tableName).SetMap(item).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
+					// Convert existing record to map
+					existingMap := make(map[string]interface{})
+					jsonData, err := json.Marshal(existingRecord)
+					if err != nil {
+						return fmt.Errorf("failed to marshal existing record: %w", err)
+					}
+					if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+						return fmt.Errorf("failed to unmarshal existing record: %w", err)
+					}
+
+					// Merge only non-null and non-empty values
+					for key, newValue := range item {
+						if newValue == nil {
+							continue
+						}
+						if strVal, ok := newValue.(string); ok && strVal == "" {
+							continue
+						}
+						existingMap[key] = newValue
+					}
+
+					txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
@@ -857,13 +951,44 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard batch update without nested relations
+		pkName := reflection.GetPrimaryKeyName(model)
 		list := make([]interface{}, 0)
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range updates {
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
+						// First, read the existing record
+						existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+						selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						if err := selectQuery.ScanModel(ctx); err != nil {
+							if err == sql.ErrNoRows {
+								continue // Skip if record not found
+							}
+							return fmt.Errorf("failed to fetch existing record: %w", err)
+						}
 
-						txQuery := tx.NewUpdate().Table(tableName).SetMap(itemMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
+						// Convert existing record to map
+						existingMap := make(map[string]interface{})
+						jsonData, err := json.Marshal(existingRecord)
+						if err != nil {
+							return fmt.Errorf("failed to marshal existing record: %w", err)
+						}
+						if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+							return fmt.Errorf("failed to unmarshal existing record: %w", err)
+						}
+
+						// Merge only non-null and non-empty values
+						for key, newValue := range itemMap {
+							if newValue == nil {
+								continue
+							}
+							if strVal, ok := newValue.(string); ok && strVal == "" {
+								continue
+							}
+							existingMap[key] = newValue
+						}
+
+						txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if _, err := txQuery.Exec(ctx); err != nil {
 							return err
 						}

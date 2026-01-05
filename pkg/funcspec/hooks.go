@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
@@ -45,6 +46,10 @@ type HookContext struct {
 
 	// User context
 	UserContext *security.UserContext
+
+	// Tx provides access to the database/transaction for executing additional SQL
+	// This allows hooks to run custom queries in addition to the main Query chain
+	Tx common.Database
 
 	// Pagination and filtering (for list queries)
 	SortColumns string

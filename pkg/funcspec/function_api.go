@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/restheadspec"
@@ -1099,9 +1101,25 @@ func normalizePostgresValue(value interface{}) interface{} {
 	case map[string]interface{}:
 		// Recursively normalize nested maps
 		return normalizePostgresTypes(v)
-
+	case string:
+		var jsonObj interface{}
+		if err := json.Unmarshal([]byte(v), &jsonObj); err == nil {
+			// It's valid JSON, return as json.RawMessage so it's not double-encoded
+			return json.RawMessage(v)
+		}
+		return v
+	case uuid.UUID:
+		return v.String()
+	case time.Time:
+		return v.Format(time.RFC3339)
+	case bool, int, int8, int16, int32, int64, float32, float64, uint, uint8, uint16, uint32, uint64:
+		return v
 	default:
-		// For other types (int, float, string, bool, etc.), return as-is
+		// For other types (int, float, bool, etc.), return as-is
+		// Check stringers
+		if str, ok := v.(fmt.Stringer); ok {
+			return str.String()
+		}
 		return v
 	}
 }

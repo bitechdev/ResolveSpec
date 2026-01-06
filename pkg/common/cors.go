@@ -3,6 +3,8 @@ package common
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bitechdev/ResolveSpec/pkg/config"
 )
 
 // CORSConfig holds CORS configuration
@@ -15,8 +17,28 @@ type CORSConfig struct {
 
 // DefaultCORSConfig returns a default CORS configuration suitable for HeadSpec
 func DefaultCORSConfig() CORSConfig {
+	configManager := config.GetConfigManager()
+	cfg, _ := configManager.GetConfig()
+	hosts := make([]string, 0)
+	//hosts = append(hosts, "*")
+
+	_, _, ipsList := config.GetIPs()
+
+	for _, server := range cfg.Servers.Instances {
+		hosts = append(hosts, fmt.Sprintf("http://%s:%d", server.Host, server.Port))
+		hosts = append(hosts, fmt.Sprintf("https://%s:%d", server.Host, server.Port))
+		hosts = append(hosts, fmt.Sprintf("http://%s:%d", "localhost", server.Port))
+		for _, extURL := range server.ExternalURLs {
+			hosts = append(hosts, extURL)
+		}
+		for _, ip := range ipsList {
+			hosts = append(hosts, fmt.Sprintf("http://%s:%d", ip.String(), server.Port))
+			hosts = append(hosts, fmt.Sprintf("https://%s:%d", ip.String(), server.Port))
+		}
+	}
+
 	return CORSConfig{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins: hosts,
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: GetHeadSpecHeaders(),
 		MaxAge:         86400, // 24 hours

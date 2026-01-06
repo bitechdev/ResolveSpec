@@ -47,3 +47,20 @@ func ExtractTableNameOnly(fullName string) string {
 
 	return fullName[startIndex:]
 }
+
+// GetPointerElement returns the element type if the provided reflect.Type is a pointer.
+// If the type is a slice of pointers, it returns the element type of the pointer within the slice.
+// If neither condition is met, it returns the original type.
+func GetPointerElement(v reflect.Type) reflect.Type {
+	if v.Kind() == reflect.Ptr {
+		return v.Elem()
+	}
+	if v.Kind() == reflect.Slice && v.Elem().Kind() == reflect.Ptr {
+		subElem := v.Elem()
+		if subElem.Elem().Kind() == reflect.Ptr {
+			return subElem.Elem().Elem()
+		}
+		return v.Elem()
+	}
+	return v
+}

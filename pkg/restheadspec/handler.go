@@ -1240,7 +1240,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
 		// First, read the existing record from the database
-		existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
@@ -1294,9 +1294,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
 		// Get the type of the model, handling both pointer and non-pointer types
 		modelType := reflect.TypeOf(model)
-		if modelType.Kind() == reflect.Ptr {
-			modelType = modelType.Elem()
-		}
+		modelType = reflection.GetPointerElement(modelType)
 		modelInstance := reflect.New(modelType).Interface()
 		if err := reflection.MapToStruct(dataMap, modelInstance); err != nil {
 			return fmt.Errorf("failed to populate model from data: %w", err)
@@ -1600,9 +1598,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
-	}
+	modelType = reflection.GetPointerElement(modelType)
 	recordToDelete := reflect.New(modelType).Interface()
 
 	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)

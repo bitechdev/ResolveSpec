@@ -702,7 +702,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		pkName := reflection.GetPrimaryKeyName(model)
 
 		// First, read the existing record from the database
-		existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 		selectQuery := h.db.NewSelect().Model(existingRecord)
 
 		// Apply conditions to select
@@ -850,7 +850,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
 					// First, read the existing record
-					existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+					existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 					selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if err := selectQuery.ScanModel(ctx); err != nil {
 						if err == sql.ErrNoRows {
@@ -958,7 +958,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
 						// First, read the existing record
-						existingRecord := reflect.New(reflect.TypeOf(model).Elem()).Interface()
+						existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 						selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if err := selectQuery.ScanModel(ctx); err != nil {
 							if err == sql.ErrNoRows {

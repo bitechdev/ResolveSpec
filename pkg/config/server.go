@@ -110,13 +110,13 @@ func (sc *ServersConfig) GetDefault() (*ServerInstanceConfig, error) {
 }
 
 // GetIPs - GetIP for pc
-func GetIPs() (string, string, []net.IP) {
+func GetIPs() (hostname string, ipList string, ipNetList []net.IP) {
 	defer func() {
 		if err := recover(); err != nil {
 			fmt.Println("Recovered in GetIPs", err)
 		}
 	}()
-	hostname, _ := os.Hostname()
+	hostname, _ = os.Hostname()
 	ipaddrlist := make([]net.IP, 0)
 	iplist := ""
 	addrs, err := net.LookupIP(hostname)
@@ -125,7 +125,7 @@ func GetIPs() (string, string, []net.IP) {
 	}
 
 	for _, a := range addrs {
-		//cfg.LogInfo("\nFound IP Host Address: %s", a)
+		// cfg.LogInfo("\nFound IP Host Address: %s", a)
 		if strings.Contains(a.String(), "127.0.0.1") {
 			continue
 		}
@@ -135,7 +135,7 @@ func GetIPs() (string, string, []net.IP) {
 	if iplist == "" {
 		iff, _ := net.InterfaceAddrs()
 		for _, a := range iff {
-			//cfg.LogInfo("\nFound IP Address: %s", a)
+			// cfg.LogInfo("\nFound IP Address: %s", a)
 			if strings.Contains(a.String(), "127.0.0.1") {
 				continue
 			}

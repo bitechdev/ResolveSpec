@@ -207,9 +207,9 @@ func (p *NestedCUDProcessor) processInsert(
 	for key, value := range data {
 		query = query.Value(key, value)
 	}
-
+	pkName := reflection.GetPrimaryKeyName(tableName)
 	// Add RETURNING clause to get the inserted ID
-	query = query.Returning("id")
+	query = query.Returning(pkName)
 
 	result, err := query.Exec(ctx)
 	if err != nil {
@@ -220,8 +220,8 @@ func (p *NestedCUDProcessor) processInsert(
 	var id interface{}
 	if lastID, err := result.LastInsertId(); err == nil && lastID > 0 {
 		id = lastID
-	} else if data["id"] != nil {
-		id = data["id"]
+	} else if data[pkName] != nil {
+		id = data[pkName]
 	}
 
 	logger.Debug("Insert successful, ID: %v, rows affected: %d", id, result.RowsAffected())

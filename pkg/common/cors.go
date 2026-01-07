@@ -26,10 +26,13 @@ func DefaultCORSConfig() CORSConfig {
 
 	for i := range cfg.Servers.Instances {
 		server := cfg.Servers.Instances[i]
+		if server.Port == 0 {
+			continue
+		}
+		hosts = append(hosts, server.ExternalURLs...)
 		hosts = append(hosts, fmt.Sprintf("http://%s:%d", server.Host, server.Port))
 		hosts = append(hosts, fmt.Sprintf("https://%s:%d", server.Host, server.Port))
 		hosts = append(hosts, fmt.Sprintf("http://%s:%d", "localhost", server.Port))
-		hosts = append(hosts, server.ExternalURLs...)
 		for _, ip := range ipsList {
 			hosts = append(hosts, fmt.Sprintf("http://%s:%d", ip.String(), server.Port))
 			hosts = append(hosts, fmt.Sprintf("https://%s:%d", ip.String(), server.Port))

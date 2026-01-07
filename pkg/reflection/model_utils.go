@@ -973,7 +973,7 @@ func MapToStruct(dataMap map[string]interface{}, target interface{}) error {
 		// 4. Field name variations
 		columnNames = append(columnNames, field.Name)
 		columnNames = append(columnNames, strings.ToLower(field.Name))
-		//columnNames = append(columnNames, ToSnakeCase(field.Name))
+		// columnNames = append(columnNames, ToSnakeCase(field.Name))
 
 		// Map all column name variations to this field index
 		for _, colName := range columnNames {

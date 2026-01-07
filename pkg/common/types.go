@@ -111,3 +111,14 @@ type TableMetadata struct {
 	Columns   []Column `json:"columns"`
 	Relations []string `json:"relations"`
 }
+
+// RelationshipInfo contains information about a model relationship
+type RelationshipInfo struct {
+	FieldName    string      `json:"field_name"`
+	JSONName     string      `json:"json_name"`
+	RelationType string      `json:"relation_type"` // "belongsTo", "hasMany", "hasOne", "many2many"
+	ForeignKey   string      `json:"foreign_key"`
+	References   string      `json:"references"`
+	JoinTable    string      `json:"join_table"`
+	RelatedModel interface{} `json:"related_model"`
+}

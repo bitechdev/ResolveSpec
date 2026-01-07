@@ -20,17 +20,6 @@ type RelationshipInfoProvider interface {
 	GetRelationshipInfo(modelType reflect.Type, relationName string) *RelationshipInfo
 }
 
-// RelationshipInfo contains information about a model relationship
-type RelationshipInfo struct {
-	FieldName    string
-	JSONName     string
-	RelationType string // "belongsTo", "hasMany", "hasOne", "many2many"
-	ForeignKey   string
-	References   string
-	JoinTable    string
-	RelatedModel interface{}
-}
-
 // NestedCUDProcessor handles recursive processing of nested object graphs
 type NestedCUDProcessor struct {
 	db                 Database

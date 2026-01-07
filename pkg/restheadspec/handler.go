@@ -766,7 +766,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 			// Apply ComputedQL fields if any
 			if len(preload.ComputedQL) > 0 {
 				// Get the base table name from the related model
-				baseTableName := getTableNameFromModel(relatedModel)
+				baseTableName := common.GetTableNameFromModel(relatedModel)
 
 				// Convert the preload relation path to the appropriate alias format
 				// This is ORM-specific. Currently we only support Bun's format.
@@ -777,7 +777,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 					underlyingType := fmt.Sprintf("%T", h.db.GetUnderlyingDB())
 					if strings.Contains(underlyingType, "bun.DB") {
 						// Use Bun's alias format: lowercase with double underscores
-						preloadAlias = relationPathToBunAlias(preload.Relation)
+						preloadAlias = common.RelationPathToBunAlias(preload.Relation)
 					}
 					// For GORM: GORM doesn't use the same alias format, and this fix
 					// may not be needed since GORM handles preloads differently
@@ -792,7 +792,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 					// levels of recursive/nested preloads
 					adjustedExpr := colExpr
 					if baseTableName != "" && preloadAlias != "" {
-						adjustedExpr = replaceTableReferencesInSQL(colExpr, baseTableName, preloadAlias)
+						adjustedExpr = common.ReplaceTableReferencesInSQL(colExpr, baseTableName, preloadAlias)
 						if adjustedExpr != colExpr {
 							logger.Debug("Adjusted computed column expression for %s: '%s' -> '%s'",
 								colName, colExpr, adjustedExpr)
@@ -901,73 +901,6 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 	}
 
 	return query
-}
-
-// relationPathToBunAlias converts a relation path like "MAL.MAL.DEF" to the Bun alias format "mal__mal__def"
-// Bun generates aliases for nested relations by lowercasing and replacing dots with double underscores
-func relationPathToBunAlias(relationPath string) string {
-	if relationPath == "" {
-		return ""
-	}
-	// Convert to lowercase and replace dots with double underscores
-	alias := strings.ToLower(relationPath)
-	alias = strings.ReplaceAll(alias, ".", "__")
-	return alias
-}
-
-// replaceTableReferencesInSQL replaces references to a base table name in a SQL expression
-// with the appropriate alias for the current preload level
-// For example, if baseTableName is "mastertaskitem" and targetAlias is "mal__mal",
-// it will replace "mastertaskitem.rid_mastertaskitem" with "mal__mal.rid_mastertaskitem"
-func replaceTableReferencesInSQL(sqlExpr, baseTableName, targetAlias string) string {
-	if sqlExpr == "" || baseTableName == "" || targetAlias == "" {
-		return sqlExpr
-	}
-
-	// Replace both quoted and unquoted table references
-	// Handle patterns like: tablename.column, "tablename".column, tablename."column", "tablename"."column"
-
-	// Pattern 1: tablename.column (unquoted)
-	result := strings.ReplaceAll(sqlExpr, baseTableName+".", targetAlias+".")
-
-	// Pattern 2: "tablename".column or "tablename"."column" (quoted table name)
-	result = strings.ReplaceAll(result, "\""+baseTableName+"\".", "\""+targetAlias+"\".")
-
-	return result
-}
-
-// getTableNameFromModel extracts the table name from a model
-// It checks the bun tag first, then falls back to converting the struct name to snake_case
-func getTableNameFromModel(model interface{}) string {
-	if model == nil {
-		return ""
-	}
-
-	modelType := reflect.TypeOf(model)
-
-	// Unwrap pointers
-	for modelType != nil && modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
-	}
-
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		return ""
-	}
-
-	// Look for bun tag on embedded BaseModel
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		if field.Anonymous {
-			bunTag := field.Tag.Get("bun")
-			if strings.HasPrefix(bunTag, "table:") {
-				return strings.TrimPrefix(bunTag, "table:")
-			}
-		}
-	}
-
-	// Fallback: convert struct name to lowercase (simple heuristic)
-	// This handles cases like "MasterTaskItem" -> "mastertaskitem"
-	return strings.ToLower(modelType.Name())
 }
 
 func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, data interface{}, options ExtendedRequestOptions) {
@@ -2570,10 +2503,10 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 		filteredExpand := expand
 
 		// Get the relationship info for this expand relation
-		relInfo := h.getRelationshipInfo(modelType, expand.Relation)
-		if relInfo != nil && relInfo.relatedModel != nil {
+		relInfo := common.GetRelationshipInfo(modelType, expand.Relation)
+		if relInfo != nil && relInfo.RelatedModel != nil {
 			// Create a validator for the related model
-			expandValidator := common.NewColumnValidator(relInfo.relatedModel)
+			expandValidator := common.NewColumnValidator(relInfo.RelatedModel)
 			// Filter columns using the related model's validator
 			filteredExpand.Columns = expandValidator.FilterValidColumns(expand.Columns)
 
@@ -2650,110 +2583,7 @@ func (h *Handler) shouldUseNestedProcessor(data map[string]interface{}, model in
 
 // GetRelationshipInfo implements common.RelationshipInfoProvider interface
 func (h *Handler) GetRelationshipInfo(modelType reflect.Type, relationName string) *common.RelationshipInfo {
-	info := h.getRelationshipInfo(modelType, relationName)
-	if info == nil {
-		return nil
-	}
-	// Convert internal type to common type
-	return &common.RelationshipInfo{
-		FieldName:    info.fieldName,
-		JSONName:     info.jsonName,
-		RelationType: info.relationType,
-		ForeignKey:   info.foreignKey,
-		References:   info.references,
-		JoinTable:    info.joinTable,
-		RelatedModel: info.relatedModel,
-	}
-}
-
-type relationshipInfo struct {
-	fieldName    string
-	jsonName     string
-	relationType string // "belongsTo", "hasMany", "hasOne", "many2many"
-	foreignKey   string
-	references   string
-	joinTable    string
-	relatedModel interface{}
-}
-
-func (h *Handler) getRelationshipInfo(modelType reflect.Type, relationName string) *relationshipInfo {
-	// Ensure we have a struct type
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		logger.Warn("Cannot get relationship info from non-struct type: %v", modelType)
-		return nil
-	}
-
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		jsonTag := field.Tag.Get("json")
-		jsonName := strings.Split(jsonTag, ",")[0]
-
-		if jsonName == relationName {
-			gormTag := field.Tag.Get("gorm")
-			info := &relationshipInfo{
-				fieldName: field.Name,
-				jsonName:  jsonName,
-			}
-
-			// Parse GORM tag to determine relationship type and keys
-			if strings.Contains(gormTag, "foreignKey") {
-				info.foreignKey = h.extractTagValue(gormTag, "foreignKey")
-				info.references = h.extractTagValue(gormTag, "references")
-
-				// Determine if it's belongsTo or hasMany/hasOne
-				if field.Type.Kind() == reflect.Slice {
-					info.relationType = "hasMany"
-					// Get the element type for slice
-					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				} else if field.Type.Kind() == reflect.Ptr || field.Type.Kind() == reflect.Struct {
-					info.relationType = "belongsTo"
-					elemType := field.Type
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				}
-			} else if strings.Contains(gormTag, "many2many") {
-				info.relationType = "many2many"
-				info.joinTable = h.extractTagValue(gormTag, "many2many")
-				// Get the element type for many2many (always slice)
-				if field.Type.Kind() == reflect.Slice {
-					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				}
-			} else {
-				// Field has no GORM relationship tags, so it's not a relation
-				return nil
-			}
-
-			return info
-		}
-	}
-	return nil
-}
-
-func (h *Handler) extractTagValue(tag, key string) string {
-	parts := strings.Split(tag, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, key+":") {
-			return strings.TrimPrefix(part, key+":")
-		}
-	}
-	return ""
+	return common.GetRelationshipInfo(modelType, relationName)
 }
 
 // HandleOpenAPI generates and returns the OpenAPI specification

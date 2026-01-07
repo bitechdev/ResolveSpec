@@ -269,8 +269,6 @@ func TestToSnakeCase(t *testing.T) {
 }
 
 func TestExtractTagValue(t *testing.T) {
-	handler := NewHandler(nil, nil)
-
 	tests := []struct {
 		name     string
 		tag      string
@@ -311,9 +309,9 @@ func TestExtractTagValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := handler.extractTagValue(tt.tag, tt.key)
+			result := common.ExtractTagValue(tt.tag, tt.key)
 			if result != tt.expected {
-				t.Errorf("extractTagValue(%q, %q) = %q, expected %q", tt.tag, tt.key, result, tt.expected)
+				t.Errorf("ExtractTagValue(%q, %q) = %q, expected %q", tt.tag, tt.key, result, tt.expected)
 			}
 		})
 	}

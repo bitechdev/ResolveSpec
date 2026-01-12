@@ -354,6 +354,12 @@ func (h *Handler) parseSearchOp(options *ExtendedRequestOptions, headerKey, valu
 	operator := parts[0]
 	colName := parts[1]
 
+	if strings.HasPrefix(colName, "cql") {
+		// Computed column - Will not filter on it
+		logger.Warn("Search operators on computed columns are not supported: %s", colName)
+		return
+	}
+
 	// Map operator names to filter operators
 	filterOp := h.mapSearchOperator(colName, operator, value)
 

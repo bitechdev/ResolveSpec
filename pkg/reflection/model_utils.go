@@ -1102,6 +1102,12 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 		}
 	}
 
+	// If we can convert the type, do it
+	if valueReflect.Type().ConvertibleTo(field.Type()) {
+		field.Set(valueReflect.Convert(field.Type()))
+		return nil
+	}
+
 	// Handle struct types (like SqlTimeStamp, SqlDate, SqlTime which wrap SqlNull[time.Time])
 	if field.Kind() == reflect.Struct {
 
@@ -1113,9 +1119,9 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 				// Call the Scan method with the value
 				results := scanMethod.Call([]reflect.Value{reflect.ValueOf(value)})
 				if len(results) > 0 {
-					// Check if there was an error
-					if err, ok := results[0].Interface().(error); ok && err != nil {
-						return err
+					// The Scan method returns error - check if it's nil
+					if !results[0].IsNil() {
+						return results[0].Interface().(error)
 					}
 					return nil
 				}
@@ -1168,12 +1174,6 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 			}
 		}
 
-	}
-
-	// If we can convert the type, do it
-	if valueReflect.Type().ConvertibleTo(field.Type()) {
-		field.Set(valueReflect.Convert(field.Type()))
-		return nil
 	}
 
 	return fmt.Errorf("cannot convert %v to %v", valueReflect.Type(), field.Type())

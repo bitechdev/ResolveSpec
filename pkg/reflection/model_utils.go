@@ -948,29 +948,35 @@ func MapToStruct(dataMap map[string]interface{}, target interface{}) error {
 		// Build list of possible column names for this field
 		var columnNames []string
 
-		// 1. Bun tag
-		if bunTag := field.Tag.Get("bun"); bunTag != "" && bunTag != "-" {
-			if colName := ExtractColumnFromBunTag(bunTag); colName != "" {
-				columnNames = append(columnNames, colName)
-			}
-		}
-
-		// 2. Gorm tag
-		if gormTag := field.Tag.Get("gorm"); gormTag != "" && gormTag != "-" {
-			if colName := ExtractColumnFromGormTag(gormTag); colName != "" {
-				columnNames = append(columnNames, colName)
-			}
-		}
-
-		// 3. JSON tag
+		// 1. JSON tag (primary - most common)
+		jsonFound := false
 		if jsonTag := field.Tag.Get("json"); jsonTag != "" && jsonTag != "-" {
 			parts := strings.Split(jsonTag, ",")
 			if len(parts) > 0 && parts[0] != "" {
 				columnNames = append(columnNames, parts[0])
+				jsonFound = true
 			}
 		}
 
-		// 4. Field name variations
+		// 2. Bun tag (fallback if no JSON tag)
+		if !jsonFound {
+			if bunTag := field.Tag.Get("bun"); bunTag != "" && bunTag != "-" {
+				if colName := ExtractColumnFromBunTag(bunTag); colName != "" {
+					columnNames = append(columnNames, colName)
+				}
+			}
+		}
+
+		// 3. Gorm tag (fallback if no JSON tag)
+		if !jsonFound {
+			if gormTag := field.Tag.Get("gorm"); gormTag != "" && gormTag != "-" {
+				if colName := ExtractColumnFromGormTag(gormTag); colName != "" {
+					columnNames = append(columnNames, colName)
+				}
+			}
+		}
+
+		// 4. Field name variations (last resort)
 		columnNames = append(columnNames, field.Name)
 		columnNames = append(columnNames, strings.ToLower(field.Name))
 		// columnNames = append(columnNames, ToSnakeCase(field.Name))

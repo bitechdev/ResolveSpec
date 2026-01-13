@@ -701,97 +701,130 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		// Get the primary key name
 		pkName := reflection.GetPrimaryKeyName(model)
 
-		// First, read the existing record from the database
-		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		selectQuery := h.db.NewSelect().Model(existingRecord)
+		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
+		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			// First, read the existing record from the database
+			existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+			selectQuery := tx.NewSelect().Model(existingRecord).Column("*")
 
-		// Apply conditions to select
-		if urlID != "" {
-			logger.Debug("Updating by URL ID: %s", urlID)
-			selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-		} else if reqID != nil {
-			switch id := reqID.(type) {
-			case string:
-				logger.Debug("Updating by request ID: %s", id)
-				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-			case []string:
-				if len(id) > 0 {
-					logger.Debug("Updating by multiple IDs: %v", id)
-					selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+			// Apply conditions to select
+			if urlID != "" {
+				logger.Debug("Updating by URL ID: %s", urlID)
+				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					logger.Debug("Updating by request ID: %s", id)
+					selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					if len(id) > 0 {
+						logger.Debug("Updating by multiple IDs: %v", id)
+						selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+					}
 				}
 			}
-		}
 
-		if err := selectQuery.ScanModel(ctx); err != nil {
-			if err == sql.ErrNoRows {
-				logger.Warn("No records found to update")
-				h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", nil)
-				return
-			}
-			logger.Error("Error fetching existing record: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "update_error", "Error fetching existing record", err)
-			return
-		}
-
-		// Convert existing record to map
-		existingMap := make(map[string]interface{})
-		jsonData, err := json.Marshal(existingRecord)
-		if err != nil {
-			logger.Error("Error marshaling existing record: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "update_error", "Error processing existing record", err)
-			return
-		}
-		if err := json.Unmarshal(jsonData, &existingMap); err != nil {
-			logger.Error("Error unmarshaling existing record: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "update_error", "Error processing existing record", err)
-			return
-		}
-
-		// Merge only non-null and non-empty values from the incoming request into the existing record
-		for key, newValue := range updates {
-			// Skip if the value is nil
-			if newValue == nil {
-				continue
+			if err := selectQuery.ScanModel(ctx); err != nil {
+				if err == sql.ErrNoRows {
+					return fmt.Errorf("no records found to update")
+				}
+				return fmt.Errorf("error fetching existing record: %w", err)
 			}
 
-			// Skip if the value is an empty string
-			if strVal, ok := newValue.(string); ok && strVal == "" {
-				continue
+			// Convert existing record to map
+			existingMap := make(map[string]interface{})
+			jsonData, err := json.Marshal(existingRecord)
+			if err != nil {
+				return fmt.Errorf("error marshaling existing record: %w", err)
+			}
+			if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+				return fmt.Errorf("error unmarshaling existing record: %w", err)
 			}
 
-			// Update the existing map with the new value
-			existingMap[key] = newValue
-		}
-
-		// Build update query with merged data
-		query := h.db.NewUpdate().Table(tableName).SetMap(existingMap)
-
-		// Apply conditions
-		if urlID != "" {
-			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-		} else if reqID != nil {
-			switch id := reqID.(type) {
-			case string:
-				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-			case []string:
-				query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+			// Execute BeforeUpdate hooks inside transaction
+			hookCtx := &HookContext{
+				Context: ctx,
+				Handler: h,
+				Schema:  schema,
+				Entity:  entity,
+				Model:   model,
+				Options: options,
+				ID:      urlID,
+				Data:    updates,
+				Writer:  w,
+				Tx:      tx,
 			}
-		}
 
-		result, err := query.Exec(ctx)
+			if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+				return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+			}
+
+			// Use potentially modified data from hook context
+			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+				updates = modifiedData
+			}
+
+			// Merge only non-null and non-empty values from the incoming request into the existing record
+			for key, newValue := range updates {
+				// Skip if the value is nil
+				if newValue == nil {
+					continue
+				}
+
+				// Skip if the value is an empty string
+				if strVal, ok := newValue.(string); ok && strVal == "" {
+					continue
+				}
+
+				// Update the existing map with the new value
+				existingMap[key] = newValue
+			}
+
+			// Build update query with merged data
+			query := tx.NewUpdate().Table(tableName).SetMap(existingMap)
+
+			// Apply conditions
+			if urlID != "" {
+				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+				}
+			}
+
+			result, err := query.Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("error updating record(s): %w", err)
+			}
+
+			if result.RowsAffected() == 0 {
+				return fmt.Errorf("no records found to update")
+			}
+
+			// Execute AfterUpdate hooks inside transaction
+			hookCtx.Result = updates
+			hookCtx.Error = nil
+			if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+				return fmt.Errorf("AfterUpdate hook failed: %w", err)
+			}
+
+			return nil
+		})
+
 		if err != nil {
 			logger.Error("Update error: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "update_error", "Error updating record(s)", err)
+			if err.Error() == "no records found to update" {
+				h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", err)
+			} else {
+				h.sendError(w, http.StatusInternalServerError, "update_error", "Error updating record(s)", err)
+			}
 			return
 		}
 
-		if result.RowsAffected() == 0 {
-			logger.Warn("No records found to update")
-			h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", nil)
-			return
-		}
-
-		logger.Info("Successfully updated %d records", result.RowsAffected())
+		logger.Info("Successfully updated record(s)")
 		// Invalidate cache for this table
 		cacheTags := buildCacheTags(schema, tableName)
 		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
@@ -849,9 +882,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
+					itemIDStr := fmt.Sprintf("%v", itemID)
+
 					// First, read the existing record
 					existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-					selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if err := selectQuery.ScanModel(ctx); err != nil {
 						if err == sql.ErrNoRows {
 							continue // Skip if record not found
@@ -869,6 +904,29 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 						return fmt.Errorf("failed to unmarshal existing record: %w", err)
 					}
 
+					// Execute BeforeUpdate hooks inside transaction
+					hookCtx := &HookContext{
+						Context: ctx,
+						Handler: h,
+						Schema:  schema,
+						Entity:  entity,
+						Model:   model,
+						Options: options,
+						ID:      itemIDStr,
+						Data:    item,
+						Writer:  w,
+						Tx:      tx,
+					}
+
+					if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+						return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
+					}
+
+					// Use potentially modified data from hook context
+					if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+						item = modifiedData
+					}
+
 					// Merge only non-null and non-empty values
 					for key, newValue := range item {
 						if newValue == nil {
@@ -883,6 +941,13 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 					txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
+					}
+
+					// Execute AfterUpdate hooks inside transaction
+					hookCtx.Result = item
+					hookCtx.Error = nil
+					if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+						return fmt.Errorf("AfterUpdate hook failed for ID %v: %w", itemID, err)
 					}
 				}
 			}
@@ -957,9 +1022,11 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			for _, item := range updates {
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
+						itemIDStr := fmt.Sprintf("%v", itemID)
+
 						// First, read the existing record
 						existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-						selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if err := selectQuery.ScanModel(ctx); err != nil {
 							if err == sql.ErrNoRows {
 								continue // Skip if record not found
@@ -977,6 +1044,29 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 							return fmt.Errorf("failed to unmarshal existing record: %w", err)
 						}
 
+						// Execute BeforeUpdate hooks inside transaction
+						hookCtx := &HookContext{
+							Context: ctx,
+							Handler: h,
+							Schema:  schema,
+							Entity:  entity,
+							Model:   model,
+							Options: options,
+							ID:      itemIDStr,
+							Data:    itemMap,
+							Writer:  w,
+							Tx:      tx,
+						}
+
+						if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+							return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
+						}
+
+						// Use potentially modified data from hook context
+						if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+							itemMap = modifiedData
+						}
+
 						// Merge only non-null and non-empty values
 						for key, newValue := range itemMap {
 							if newValue == nil {
@@ -992,6 +1082,14 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 						if _, err := txQuery.Exec(ctx); err != nil {
 							return err
 						}
+
+						// Execute AfterUpdate hooks inside transaction
+						hookCtx.Result = itemMap
+						hookCtx.Error = nil
+						if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+							return fmt.Errorf("AfterUpdate hook failed for ID %v: %w", itemID, err)
+						}
+
 						list = append(list, item)
 					}
 				}

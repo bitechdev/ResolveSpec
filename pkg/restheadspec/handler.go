@@ -1110,30 +1110,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 	logger.Info("Updating record in %s.%s", schema, entity)
 
-	// Execute BeforeUpdate hooks
-	hookCtx := &HookContext{
-		Context:   ctx,
-		Handler:   h,
-		Schema:    schema,
-		Entity:    entity,
-		TableName: tableName,
-		Tx:        h.db,
-		Model:     model,
-		Options:   options,
-		ID:        id,
-		Data:      data,
-		Writer:    w,
-	}
-
-	if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
-		logger.Error("BeforeUpdate hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
-	}
-
-	// Use potentially modified data from hook context
-	data = hookCtx.Data
-
 	// Convert data to map
 	dataMap, ok := data.(map[string]interface{})
 	if !ok {
@@ -1167,6 +1143,9 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Variable to store the updated record
 	var updatedRecord interface{}
 
+	// Declare hook context to be used inside and outside transaction
+	var hookCtx *HookContext
+
 	// Process nested relations if present
 	err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		// Create temporary nested processor with transaction
@@ -1174,7 +1153,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// First, read the existing record from the database
 		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return fmt.Errorf("record not found with ID: %v", targetID)
@@ -1202,6 +1181,30 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			}
 			dataMap = cleanedData
 			nestedRelations = relations
+		}
+
+		// Execute BeforeUpdate hooks inside transaction
+		hookCtx = &HookContext{
+			Context:   ctx,
+			Handler:   h,
+			Schema:    schema,
+			Entity:    entity,
+			TableName: tableName,
+			Tx:        tx,
+			Model:     model,
+			Options:   options,
+			ID:        id,
+			Data:      dataMap,
+			Writer:    w,
+		}
+
+		if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+		}
+
+		// Use potentially modified data from hook context
+		if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+			dataMap = modifiedData
 		}
 
 		// Merge only non-null and non-empty values from the incoming request into the existing record

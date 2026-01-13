@@ -74,6 +74,10 @@ func (n *SqlNull[T]) Scan(value any) error {
 		return n.FromString(v)
 	case []byte:
 		return n.FromString(string(v))
+	case float32, float64:
+		return n.FromString(fmt.Sprintf("%f", value))
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return n.FromString(fmt.Sprintf("%d", value))
 	default:
 		return n.FromString(fmt.Sprintf("%v", value))
 	}
@@ -92,6 +96,10 @@ func (n *SqlNull[T]) FromString(s string) error {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 			reflect.ValueOf(&n.Val).Elem().SetInt(i)
+			n.Valid = true
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			reflect.ValueOf(&n.Val).Elem().SetInt(int64(f))
 			n.Valid = true
 		}
 	case float32, float64:

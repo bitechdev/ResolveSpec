@@ -211,6 +211,7 @@ type BunSelectQuery struct {
 	deferredPreloads []deferredPreload // Preloads to execute as separate queries
 	inJoinContext    bool              // Track if we're in a JOIN relation context
 	joinTableAlias   string            // Alias to use for JOIN conditions
+	skipAutoDetect   bool              // Skip auto-detection to prevent circular calls
 }
 
 // deferredPreload represents a preload that will be executed as a separate query
@@ -531,22 +532,25 @@ func (b *BunSelectQuery) Preload(relation string, conditions ...interface{}) com
 func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
 	// Auto-detect relationship type and choose optimal loading strategy
 	// Get the model from the query if available
-	model := b.query.GetModel()
-	if model != nil && model.Value() != nil {
-		relType := reflection.GetRelationType(model.Value(), relation)
+	// Skip auto-detection if flag is set (prevents circular calls from JoinRelation)
+	if !b.skipAutoDetect {
+		model := b.query.GetModel()
+		if model != nil && model.Value() != nil {
+			relType := reflection.GetRelationType(model.Value(), relation)
 
-		// Log the detected relationship type
-		logger.Debug("PreloadRelation '%s' detected as: %s", relation, relType)
+			// Log the detected relationship type
+			logger.Debug("PreloadRelation '%s' detected as: %s", relation, relType)
 
-		// If this is a belongs-to or has-one relation, use JOIN for better performance
-		if relType.ShouldUseJoin() {
-			logger.Info("Using JOIN strategy for %s relation '%s'", relType, relation)
-			return b.JoinRelation(relation, apply...)
-		}
+			// If this is a belongs-to or has-one relation, use JOIN for better performance
+			if relType.ShouldUseJoin() {
+				logger.Info("Using JOIN strategy for %s relation '%s'", relType, relation)
+				return b.JoinRelation(relation, apply...)
+			}
 
-		// For has-many, many-to-many, or unknown: use separate query (safer default)
-		if relType == reflection.RelationHasMany || relType == reflection.RelationManyToMany {
-			logger.Debug("Using separate query for %s relation '%s'", relType, relation)
+			// For has-many, many-to-many, or unknown: use separate query (safer default)
+			if relType == reflection.RelationHasMany || relType == reflection.RelationManyToMany {
+				logger.Debug("Using separate query for %s relation '%s'", relType, relation)
+			}
 		}
 	}
 
@@ -559,7 +563,7 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 	const safeAliasLimit = 35 // Leave room for column names
 
 	// If the alias chain is too long, defer this preload to be executed as a separate query
-	if len(aliasChain) > safeAliasLimit {
+	if len(relationParts) > 1 && len(aliasChain) > safeAliasLimit {
 		logger.Info("Preload relation '%s' creates long alias chain '%s' (%d chars). "+
 			"Using separate query to avoid PostgreSQL %d-char identifier limit.",
 			relation, aliasChain, len(aliasChain), postgresIdentifierLimit)
@@ -683,6 +687,10 @@ func (b *BunSelectQuery) JoinRelation(relation string, apply ...func(common.Sele
 
 	// Use PreloadRelation with the wrapped functions
 	// Bun's Relation() will use JOIN for belongs-to and has-one relations
+	// CRITICAL: Set skipAutoDetect flag to prevent circular call
+	// (PreloadRelation would detect belongs-to and call JoinRelation again)
+	b.skipAutoDetect = true
+	defer func() { b.skipAutoDetect = false }()
 	return b.PreloadRelation(relation, wrappedApply...)
 }
 
@@ -742,6 +750,8 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 			logger.Warn("Failed to execute deferred preloads: %v", err)
 			// Don't fail the whole query, just log the warning
 		}
+		// Clear deferred preloads to prevent re-execution
+		b.deferredPreloads = nil
 	}
 
 	return nil
@@ -810,6 +820,8 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 			logger.Warn("Failed to execute deferred preloads: %v", err)
 			// Don't fail the whole query, just log the warning
 		}
+		// Clear deferred preloads to prevent re-execution
+		b.deferredPreloads = nil
 	}
 
 	return nil
@@ -898,13 +910,30 @@ func (b *BunSelectQuery) loadChildRelationForRecord(ctx context.Context, record 
 		return nil
 	}
 
-	// Get the interface value to pass to Bun
-	parentValue := parentField.Interface()
+	// Get a pointer to the parent field so Bun can modify it
+	// CRITICAL: We need to pass a pointer, not a value, so that when Bun
+	// loads the child records and appends them to the slice, the changes
+	// are reflected in the original struct field.
+	var parentPtr interface{}
+	if parentField.Kind() == reflect.Ptr {
+		// Field is already a pointer (e.g., Parent *Parent), use as-is
+		parentPtr = parentField.Interface()
+	} else {
+		// Field is a value (e.g., Comments []Comment), get its address
+		if parentField.CanAddr() {
+			parentPtr = parentField.Addr().Interface()
+		} else {
+			return fmt.Errorf("cannot get address of field '%s'", parentRelation)
+		}
+	}
 
 	// Load the child relation on the parent record
 	// This uses a shorter alias since we're only loading "Child", not "Parent.Child"
+	// CRITICAL: Use WherePK() to ensure we only load children for THIS specific parent
+	// record, not the first parent in the database table.
 	return b.db.NewSelect().
-		Model(parentValue).
+		Model(parentPtr).
+		WherePK().
 		Relation(childRelation, func(sq *bun.SelectQuery) *bun.SelectQuery {
 			// Apply any custom query modifications
 			if len(apply) > 0 {

@@ -883,7 +883,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 	})
 
 	// Handle recursive preloading
-	if preload.Recursive && depth < 5 {
+	if preload.Recursive && depth < 4 {
 		logger.Debug("Applying recursive preload for %s at depth %d", preload.Relation, depth+1)
 
 		// For recursive relationships, we need to get the last part of the relation path

@@ -98,6 +98,10 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		}
 	}
 
+	// Filter regularData to only include fields that exist in the model
+	// Use MapToStruct to validate and filter fields
+	regularData = p.filterValidFields(regularData, model)
+
 	// Inject parent IDs for foreign key resolution
 	p.injectForeignKeys(regularData, modelType, parentIDs)
 
@@ -185,6 +189,115 @@ func (p *NestedCUDProcessor) extractCRUDRequest(data map[string]interface{}) str
 		}
 	}
 	return ""
+}
+
+// filterValidFields filters input data to only include fields that exist in the model
+// Uses reflection.MapToStruct to validate fields and extract only those that match the model
+func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, model interface{}) map[string]interface{} {
+	if len(data) == 0 {
+		return data
+	}
+
+	// Create a new instance of the model to use with MapToStruct
+	modelType := reflect.TypeOf(model)
+	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return data
+	}
+
+	// Create a new instance of the model
+	tempModel := reflect.New(modelType).Interface()
+
+	// Use MapToStruct to map the data - this will only map valid fields
+	err := reflection.MapToStruct(data, tempModel)
+	if err != nil {
+		logger.Debug("Error mapping data to model: %v", err)
+		return data
+	}
+
+	// Extract the mapped fields back into a map
+	// This effectively filters out any fields that don't exist in the model
+	filteredData := make(map[string]interface{})
+	tempModelValue := reflect.ValueOf(tempModel).Elem()
+
+	for key, value := range data {
+		// Check if the field was successfully mapped
+		if fieldWasMapped(tempModelValue, modelType, key) {
+			filteredData[key] = value
+		} else {
+			logger.Debug("Skipping invalid field '%s' - not found in model %v", key, modelType)
+		}
+	}
+
+	return filteredData
+}
+
+// fieldWasMapped checks if a field with the given key was mapped to the model
+func fieldWasMapped(modelValue reflect.Value, modelType reflect.Type, key string) bool {
+	// Look for the field by JSON tag or field name
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Check JSON tag
+		jsonTag := field.Tag.Get("json")
+		if jsonTag != "" && jsonTag != "-" {
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] == key {
+				return true
+			}
+		}
+
+		// Check bun tag
+		bunTag := field.Tag.Get("bun")
+		if bunTag != "" && bunTag != "-" {
+			if colName := reflection.ExtractColumnFromBunTag(bunTag); colName == key {
+				return true
+			}
+		}
+
+		// Check gorm tag
+		gormTag := field.Tag.Get("gorm")
+		if gormTag != "" && gormTag != "-" {
+			if colName := reflection.ExtractColumnFromGormTag(gormTag); colName == key {
+				return true
+			}
+		}
+
+		// Check lowercase field name
+		if strings.EqualFold(field.Name, key) {
+			return true
+		}
+
+		// Handle embedded structs recursively
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				embeddedValue := modelValue.Field(i)
+				if embeddedValue.Kind() == reflect.Ptr {
+					if embeddedValue.IsNil() {
+						continue
+					}
+					embeddedValue = embeddedValue.Elem()
+				}
+				if fieldWasMapped(embeddedValue, fieldType, key) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // injectForeignKeys injects parent IDs into data for foreign key fields

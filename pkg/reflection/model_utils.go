@@ -1370,6 +1370,63 @@ func convertToFloat64(value interface{}) (float64, bool) {
 	return 0, false
 }
 
+// GetValidJSONFieldNames returns a map of valid JSON field names for a model
+// This can be used to validate input data against a model's structure
+// The map keys are the JSON field names (from json tags) that exist in the model
+func GetValidJSONFieldNames(modelType reflect.Type) map[string]bool {
+	validFields := make(map[string]bool)
+
+	// Unwrap pointers to get to the base struct type
+	for modelType != nil && modelType.Kind() == reflect.Pointer {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return validFields
+	}
+
+	collectValidFieldNames(modelType, validFields)
+	return validFields
+}
+
+// collectValidFieldNames recursively collects valid JSON field names from a struct type
+func collectValidFieldNames(typ reflect.Type, validFields map[string]bool) {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Check for embedded structs
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				// Recursively add fields from embedded struct
+				collectValidFieldNames(fieldType, validFields)
+				continue
+			}
+		}
+
+		// Get the JSON tag name for this field (same logic as MapToStruct)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag != "" && jsonTag != "-" {
+			// Extract the field name from the JSON tag (before any options like omitempty)
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] != "" {
+				validFields[parts[0]] = true
+			}
+		} else {
+			// If no JSON tag, use the field name in lowercase as a fallback
+			validFields[strings.ToLower(field.Name)] = true
+		}
+	}
+}
+
 // getRelationModelSingleLevel gets the model type for a single level field (non-recursive)
 // This is a helper function used by GetRelationModel to handle one level at a time
 func getRelationModelSingleLevel(model interface{}, fieldName string) interface{} {

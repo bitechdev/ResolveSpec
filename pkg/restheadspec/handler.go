@@ -1813,16 +1813,26 @@ func (h *Handler) processChildRelationsForField(
 		}
 	}
 
-	logger.Debug("Setting parent ID in child data: foreignKeyField=%s, parentID=%v, relForeignKey=%s",
-		foreignKeyFieldName, parentID, relInfo.ForeignKey)
+	// Get the primary key name for the child model to avoid overwriting it in recursive relationships
+	childPKName := reflection.GetPrimaryKeyName(relatedModel)
+	childPKFieldName := reflection.GetJSONNameForField(relatedModelType, childPKName)
+	if childPKFieldName == "" {
+		childPKFieldName = strings.ToLower(childPKName)
+	}
+
+	logger.Debug("Setting parent ID in child data: foreignKeyField=%s, parentID=%v, relForeignKey=%s, childPK=%s",
+		foreignKeyFieldName, parentID, relInfo.ForeignKey, childPKFieldName)
 
 	// Process based on relation type and data structure
 	switch v := relationValue.(type) {
 	case map[string]interface{}:
 		// Single related object - add parent ID to foreign key field
-		if parentID != nil && foreignKeyFieldName != "" {
+		// IMPORTANT: In recursive relationships, don't overwrite the primary key
+		if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 			v[foreignKeyFieldName] = parentID
 			logger.Debug("Set foreign key in single relation: %s=%v", foreignKeyFieldName, parentID)
+		} else if foreignKeyFieldName == childPKFieldName {
+			logger.Debug("Skipping foreign key assignment - same as primary key (recursive relationship): %s", foreignKeyFieldName)
 		}
 		_, err := processor.ProcessNestedCUD(ctx, operation, v, relatedModel, parentIDs, relatedTableName)
 		if err != nil {
@@ -1834,9 +1844,12 @@ func (h *Handler) processChildRelationsForField(
 		for i, item := range v {
 			if itemMap, ok := item.(map[string]interface{}); ok {
 				// Add parent ID to foreign key field
-				if parentID != nil && foreignKeyFieldName != "" {
+				// IMPORTANT: In recursive relationships, don't overwrite the primary key
+				if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 					itemMap[foreignKeyFieldName] = parentID
 					logger.Debug("Set foreign key in relation array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+				} else if foreignKeyFieldName == childPKFieldName {
+					logger.Debug("Skipping foreign key assignment in array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
 				}
 				_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 				if err != nil {
@@ -1849,9 +1862,12 @@ func (h *Handler) processChildRelationsForField(
 		// Multiple related objects (typed slice)
 		for i, itemMap := range v {
 			// Add parent ID to foreign key field
-			if parentID != nil && foreignKeyFieldName != "" {
+			// IMPORTANT: In recursive relationships, don't overwrite the primary key
+			if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 				itemMap[foreignKeyFieldName] = parentID
 				logger.Debug("Set foreign key in relation typed array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+			} else if foreignKeyFieldName == childPKFieldName {
+				logger.Debug("Skipping foreign key assignment in typed array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
 			}
 			_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 			if err != nil {

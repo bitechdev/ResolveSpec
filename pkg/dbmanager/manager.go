@@ -219,9 +219,10 @@ func (m *connectionManager) Connect(ctx context.Context) error {
 		logger.Info("Database connection established: name=%s, type=%s", name, connCfg.Type)
 	}
 
-	// Start background health checks if enabled
-	if m.config.EnableAutoReconnect && m.config.HealthCheckInterval > 0 {
+	// Always start background health checks
+	if m.config.HealthCheckInterval > 0 {
 		m.startHealthChecker()
+		logger.Info("Background health checker started: interval=%v", m.config.HealthCheckInterval)
 	}
 
 	logger.Info("Database manager initialized: connections=%d", len(m.connections))

@@ -128,7 +128,7 @@ func DefaultManagerConfig() ManagerConfig {
 		RetryAttempts:       3,
 		RetryDelay:          1 * time.Second,
 		RetryMaxDelay:       10 * time.Second,
-		HealthCheckInterval: 30 * time.Second,
+		HealthCheckInterval: 15 * time.Second,
 		EnableAutoReconnect: true,
 	}
 }
@@ -160,6 +160,11 @@ func (c *ManagerConfig) ApplyDefaults() {
 	}
 	if c.HealthCheckInterval == 0 {
 		c.HealthCheckInterval = defaults.HealthCheckInterval
+	}
+	// EnableAutoReconnect defaults to true - apply if not explicitly set
+	// Since this is a boolean, we apply the default unconditionally when it's false
+	if !c.EnableAutoReconnect {
+		c.EnableAutoReconnect = defaults.EnableAutoReconnect
 	}
 }
 

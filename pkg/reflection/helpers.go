@@ -1,6 +1,9 @@
 package reflection
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 func Len(v any) int {
 	val := reflect.ValueOf(v)
@@ -63,4 +66,42 @@ func GetPointerElement(v reflect.Type) reflect.Type {
 		return v.Elem()
 	}
 	return v
+}
+
+// GetJSONNameForField gets the JSON tag name for a struct field.
+// Returns the JSON field name from the json struct tag, or an empty string if not found.
+// Handles the "json" tag format: "name", "name,omitempty", etc.
+func GetJSONNameForField(modelType reflect.Type, fieldName string) string {
+	if modelType == nil {
+		return ""
+	}
+
+	// Handle pointer types
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType.Kind() != reflect.Struct {
+		return ""
+	}
+
+	// Find the field
+	field, found := modelType.FieldByName(fieldName)
+	if !found {
+		return ""
+	}
+
+	// Get the JSON tag
+	jsonTag := field.Tag.Get("json")
+	if jsonTag == "" {
+		return ""
+	}
+
+	// Parse the tag (format: "name,omitempty" or just "name")
+	parts := strings.Split(jsonTag, ",")
+	if len(parts) > 0 && parts[0] != "" && parts[0] != "-" {
+		return parts[0]
+	}
+
+	return ""
 }

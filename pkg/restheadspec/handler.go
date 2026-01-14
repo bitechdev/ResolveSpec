@@ -1794,10 +1794,36 @@ func (h *Handler) processChildRelationsForField(
 		parentIDs[baseName] = parentID
 	}
 
+	// Determine which field name to use for setting parent ID in child data
+	// Priority: Use foreign key field name if specified, otherwise use parent's PK name
+	var foreignKeyFieldName string
+	if relInfo.ForeignKey != "" {
+		// Get the JSON name for the foreign key field in the child model
+		foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, relInfo.ForeignKey)
+		if foreignKeyFieldName == "" {
+			// Fallback to lowercase field name
+			foreignKeyFieldName = strings.ToLower(relInfo.ForeignKey)
+		}
+	} else {
+		// Fallback: use parent's primary key name
+		parentPKName := reflection.GetPrimaryKeyName(parentModelType)
+		foreignKeyFieldName = reflection.GetJSONNameForField(parentModelType, parentPKName)
+		if foreignKeyFieldName == "" {
+			foreignKeyFieldName = strings.ToLower(parentPKName)
+		}
+	}
+
+	logger.Debug("Setting parent ID in child data: foreignKeyField=%s, parentID=%v, relForeignKey=%s",
+		foreignKeyFieldName, parentID, relInfo.ForeignKey)
+
 	// Process based on relation type and data structure
 	switch v := relationValue.(type) {
 	case map[string]interface{}:
-		// Single related object
+		// Single related object - add parent ID to foreign key field
+		if parentID != nil && foreignKeyFieldName != "" {
+			v[foreignKeyFieldName] = parentID
+			logger.Debug("Set foreign key in single relation: %s=%v", foreignKeyFieldName, parentID)
+		}
 		_, err := processor.ProcessNestedCUD(ctx, operation, v, relatedModel, parentIDs, relatedTableName)
 		if err != nil {
 			return fmt.Errorf("failed to process single relation: %w", err)
@@ -1807,6 +1833,11 @@ func (h *Handler) processChildRelationsForField(
 		// Multiple related objects
 		for i, item := range v {
 			if itemMap, ok := item.(map[string]interface{}); ok {
+				// Add parent ID to foreign key field
+				if parentID != nil && foreignKeyFieldName != "" {
+					itemMap[foreignKeyFieldName] = parentID
+					logger.Debug("Set foreign key in relation array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+				}
 				_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 				if err != nil {
 					return fmt.Errorf("failed to process relation item %d: %w", i, err)
@@ -1817,6 +1848,11 @@ func (h *Handler) processChildRelationsForField(
 	case []map[string]interface{}:
 		// Multiple related objects (typed slice)
 		for i, itemMap := range v {
+			// Add parent ID to foreign key field
+			if parentID != nil && foreignKeyFieldName != "" {
+				itemMap[foreignKeyFieldName] = parentID
+				logger.Debug("Set foreign key in relation typed array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+			}
 			_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 			if err != nil {
 				return fmt.Errorf("failed to process relation item %d: %w", i, err)

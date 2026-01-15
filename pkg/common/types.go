@@ -23,6 +23,10 @@ type RequestOptions struct {
 	CursorForward  string  `json:"cursor_forward"`
 	CursorBackward string  `json:"cursor_backward"`
 	FetchRowNumber *string `json:"fetch_row_number"`
+
+	// Join table aliases (used for validation of prefixed columns in filters/sorts)
+	// Not serialized to JSON as it's internal validation state
+	JoinAliases []string `json:"-"`
 }
 
 type Parameter struct {

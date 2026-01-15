@@ -28,6 +28,7 @@ type ExtendedRequestOptions struct {
 	// Joins
 	Expand        []ExpandOption
 	CustomSQLJoin []string // Custom SQL JOIN clauses
+	JoinAliases   []string // Extracted table aliases from CustomSQLJoin for validation
 
 	// Advanced features
 	AdvancedSQL map[string]string // Column -> SQL expression
@@ -528,9 +529,67 @@ func (h *Handler) parseCustomSQLJoin(options *ExtendedRequestOptions, value stri
 			continue
 		}
 
+		// Extract table alias from the JOIN clause
+		alias := extractJoinAlias(sanitizedJoin)
+		if alias != "" {
+			options.JoinAliases = append(options.JoinAliases, alias)
+			// Also add to the embedded RequestOptions for validation
+			options.RequestOptions.JoinAliases = append(options.RequestOptions.JoinAliases, alias)
+			logger.Debug("Extracted join alias: %s", alias)
+		}
+
 		logger.Debug("Adding custom SQL join: %s", sanitizedJoin)
 		options.CustomSQLJoin = append(options.CustomSQLJoin, sanitizedJoin)
 	}
+}
+
+// extractJoinAlias extracts the table alias from a JOIN clause
+// Examples:
+//   - "LEFT JOIN departments d ON ..." -> "d"
+//   - "INNER JOIN users AS u ON ..." -> "u"
+//   - "JOIN roles r ON ..." -> "r"
+func extractJoinAlias(joinClause string) string {
+	// Pattern: JOIN table_name [AS] alias ON ...
+	// We need to extract the alias (word before ON)
+
+	upperJoin := strings.ToUpper(joinClause)
+
+	// Find the "JOIN" keyword position
+	joinIdx := strings.Index(upperJoin, "JOIN")
+	if joinIdx == -1 {
+		return ""
+	}
+
+	// Find the "ON" keyword position
+	onIdx := strings.Index(upperJoin, " ON ")
+	if onIdx == -1 {
+		return ""
+	}
+
+	// Extract the part between JOIN and ON
+	betweenJoinAndOn := strings.TrimSpace(joinClause[joinIdx+4 : onIdx])
+
+	// Split by spaces to get words
+	words := strings.Fields(betweenJoinAndOn)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// If there's an AS keyword, the alias is after it
+	for i, word := range words {
+		if strings.EqualFold(word, "AS") && i+1 < len(words) {
+			return words[i+1]
+		}
+	}
+
+	// Otherwise, the alias is the last word (if there are 2+ words)
+	// Format: "table_name alias" or just "table_name"
+	if len(words) >= 2 {
+		return words[len(words)-1]
+	}
+
+	// Only one word means it's just the table name, no alias
+	return ""
 }
 
 // parseSorting parses x-sort header

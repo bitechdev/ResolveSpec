@@ -166,6 +166,14 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 				logger.Debug("Added preload relation '%s' as allowed table prefix", options[0].Preload[pi].Relation)
 			}
 		}
+
+		// Add join aliases as allowed prefixes
+		for _, alias := range options[0].JoinAliases {
+			if alias != "" {
+				allowedPrefixes[alias] = true
+				logger.Debug("Added join alias '%s' as allowed table prefix", alias)
+			}
+		}
 	}
 
 	// Split by AND to handle multiple conditions

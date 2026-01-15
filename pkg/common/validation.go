@@ -237,15 +237,29 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	for _, sort := range options.Sort {
 		if v.IsValidColumn(sort.Column) {
 			validSorts = append(validSorts, sort)
-		} else if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
-			// Allow sort by expression/subquery, but validate for security
-			if IsSafeSortExpression(sort.Column) {
-				validSorts = append(validSorts, sort)
-			} else {
-				logger.Warn("Unsafe sort expression '%s' removed", sort.Column)
-			}
 		} else {
-			logger.Warn("Invalid column in sort '%s' removed", sort.Column)
+			foundJoin := false
+			for _, j := range options.JoinAliases {
+				if strings.Contains(sort.Column, j) {
+					foundJoin = true
+					break
+				}
+			}
+			if foundJoin {
+				validSorts = append(validSorts, sort)
+				continue
+			}
+			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+				// Allow sort by expression/subquery, but validate for security
+				if IsSafeSortExpression(sort.Column) {
+					validSorts = append(validSorts, sort)
+				} else {
+					logger.Warn("Unsafe sort expression '%s' removed", sort.Column)
+				}
+
+			} else {
+				logger.Warn("Invalid column in sort '%s' removed", sort.Column)
+			}
 		}
 	}
 	filtered.Sort = validSorts
@@ -290,6 +304,9 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 		validPreloads = append(validPreloads, filteredPreload)
 	}
 	filtered.Preload = validPreloads
+
+	// Clear JoinAliases - this is an internal validation field and should not be persisted
+	filtered.JoinAliases = nil
 
 	return filtered
 }

@@ -26,7 +26,8 @@ type ExtendedRequestOptions struct {
 	CustomSQLOr    string
 
 	// Joins
-	Expand []ExpandOption
+	Expand        []ExpandOption
+	CustomSQLJoin []string // Custom SQL JOIN clauses
 
 	// Advanced features
 	AdvancedSQL map[string]string // Column -> SQL expression
@@ -111,6 +112,7 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		AdvancedSQL:          make(map[string]string),
 		ComputedQL:           make(map[string]string),
 		Expand:               make([]ExpandOption, 0),
+		CustomSQLJoin:        make([]string, 0),
 		ResponseFormat:       "simple", // Default response format
 		SingleRecordAsObject: true,     // Default: normalize single-element arrays to objects
 	}
@@ -185,8 +187,7 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		case strings.HasPrefix(key, "x-expand"):
 			h.parseExpand(&options, decodedValue)
 		case strings.HasPrefix(key, "x-custom-sql-join"):
-			// TODO: Implement custom SQL join
-			logger.Debug("Custom SQL join not yet implemented: %s", decodedValue)
+			h.parseCustomSQLJoin(&options, decodedValue)
 
 		// Sorting & Pagination
 		case strings.HasPrefix(key, "x-sort"):
@@ -492,6 +493,43 @@ func (h *Handler) parseExpand(options *ExtendedRequestOptions, value string) {
 		}
 
 		options.Expand = append(options.Expand, expand)
+	}
+}
+
+// parseCustomSQLJoin parses x-custom-sql-join header
+// Format: Single JOIN clause or multiple JOIN clauses separated by |
+// Example: "LEFT JOIN departments d ON d.id = employees.department_id"
+// Example: "LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles r ON r.id = e.role_id"
+func (h *Handler) parseCustomSQLJoin(options *ExtendedRequestOptions, value string) {
+	if value == "" {
+		return
+	}
+
+	// Split by | for multiple joins
+	joins := strings.Split(value, "|")
+	for _, joinStr := range joins {
+		joinStr = strings.TrimSpace(joinStr)
+		if joinStr == "" {
+			continue
+		}
+
+		// Basic validation: should contain "JOIN" keyword
+		upperJoin := strings.ToUpper(joinStr)
+		if !strings.Contains(upperJoin, "JOIN") {
+			logger.Warn("Invalid custom SQL join (missing JOIN keyword): %s", joinStr)
+			continue
+		}
+
+		// Sanitize the join clause using common.SanitizeWhereClause
+		// Note: This is basic sanitization - in production you may want stricter validation
+		sanitizedJoin := common.SanitizeWhereClause(joinStr, "", nil)
+		if sanitizedJoin == "" {
+			logger.Warn("Custom SQL join failed sanitization: %s", joinStr)
+			continue
+		}
+
+		logger.Debug("Adding custom SQL join: %s", sanitizedJoin)
+		options.CustomSQLJoin = append(options.CustomSQLJoin, sanitizedJoin)
 	}
 }
 

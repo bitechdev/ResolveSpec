@@ -301,6 +301,62 @@ func TestParseOptionsFromQueryParams(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "Parse custom SQL JOIN from query params",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = employees.department_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) == 0 {
+					t.Error("Expected CustomSQLJoin to be set")
+					return
+				}
+				if len(options.CustomSQLJoin) != 1 {
+					t.Errorf("Expected 1 custom SQL join, got %d", len(options.CustomSQLJoin))
+					return
+				}
+				expected := `LEFT JOIN departments d ON d.id = employees.department_id`
+				if options.CustomSQLJoin[0] != expected {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected, options.CustomSQLJoin[0])
+				}
+			},
+		},
+		{
+			name: "Parse multiple custom SQL JOINs from query params",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles r ON r.id = e.role_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) != 2 {
+					t.Errorf("Expected 2 custom SQL joins, got %d", len(options.CustomSQLJoin))
+					return
+				}
+				expected1 := `LEFT JOIN departments d ON d.id = e.dept_id`
+				expected2 := `INNER JOIN roles r ON r.id = e.role_id`
+				if options.CustomSQLJoin[0] != expected1 {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected1, options.CustomSQLJoin[0])
+				}
+				if options.CustomSQLJoin[1] != expected2 {
+					t.Errorf("Expected CustomSQLJoin[1]=%q, got %q", expected2, options.CustomSQLJoin[1])
+				}
+			},
+		},
+		{
+			name: "Parse custom SQL JOIN from headers",
+			headers: map[string]string{
+				"X-Custom-SQL-Join": `LEFT JOIN users u ON u.id = posts.user_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) == 0 {
+					t.Error("Expected CustomSQLJoin to be set from header")
+					return
+				}
+				expected := `LEFT JOIN users u ON u.id = posts.user_id`
+				if options.CustomSQLJoin[0] != expected {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected, options.CustomSQLJoin[0])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

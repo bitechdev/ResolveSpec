@@ -214,14 +214,25 @@ x-expand: department:id,name,code
 **Note:** Currently, expand falls back to preload behavior. Full JOIN expansion is planned for future implementation.
 
 #### `x-custom-sql-join`
-Raw SQL JOIN statement.
+Custom SQL JOIN clauses for joining tables in queries.
 
-**Format:** SQL JOIN clause
+**Format:** SQL JOIN clause or multiple clauses separated by `|`
+
+**Single JOIN:**
 ```
 x-custom-sql-join: LEFT JOIN departments d ON d.id = employees.department_id
 ```
 
-⚠️ **Note:** Not yet fully implemented.
+**Multiple JOINs:**
+```
+x-custom-sql-join: LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles r ON r.id = e.role_id
+```
+
+**Features:**
+- Supports any type of JOIN (INNER, LEFT, RIGHT, FULL, CROSS)
+- Multiple JOINs can be specified using the pipe `|` separator
+- JOINs are sanitized for security
+- Can be specified via headers or query parameters
 
 ---
 

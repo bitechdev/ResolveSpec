@@ -32,6 +32,7 @@
 //   - X-Clean-JSON: Boolean to remove null/empty fields
 //   - X-Custom-SQL-Where: Custom SQL WHERE clause (AND)
 //   - X-Custom-SQL-Or: Custom SQL WHERE clause (OR)
+//   - X-Custom-SQL-Join: Custom SQL JOIN clauses (pipe-separated for multiple)
 //
 // # Usage Example
 //

@@ -502,6 +502,15 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 	}
 
+	// Apply custom SQL JOIN clauses
+	if len(options.CustomSQLJoin) > 0 {
+		for _, joinClause := range options.CustomSQLJoin {
+			logger.Debug("Applying custom SQL JOIN: %s", joinClause)
+			// Joins are already sanitized during parsing, so we can apply them directly
+			query = query.Join(joinClause)
+		}
+	}
+
 	// If ID is provided, filter by ID
 	if id != "" {
 		pkName := reflection.GetPrimaryKeyName(model)
@@ -552,6 +561,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				options.Sort,
 				options.CustomSQLWhere,
 				options.CustomSQLOr,
+				options.CustomSQLJoin,
 				expandOpts,
 				options.Distinct,
 				options.CursorForward,

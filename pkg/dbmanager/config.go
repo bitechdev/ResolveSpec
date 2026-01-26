@@ -221,7 +221,10 @@ func (cc *ConnectionConfig) ApplyDefaults(global *ManagerConfig) {
 		cc.ConnectTimeout = 10 * time.Second
 	}
 	if cc.QueryTimeout == 0 {
-		cc.QueryTimeout = 30 * time.Second
+		cc.QueryTimeout = 2 * time.Minute // Default to 2 minutes
+	} else if cc.QueryTimeout < 2*time.Minute {
+		// Enforce minimum of 2 minutes
+		cc.QueryTimeout = 2 * time.Minute
 	}
 
 	// Default ORM
@@ -325,14 +328,29 @@ func (cc *ConnectionConfig) buildPostgresDSN() string {
 		dsn += fmt.Sprintf(" search_path=%s", cc.Schema)
 	}
 
+	// Add statement_timeout for query execution timeout (in milliseconds)
+	if cc.QueryTimeout > 0 {
+		timeoutMs := int(cc.QueryTimeout.Milliseconds())
+		dsn += fmt.Sprintf(" statement_timeout=%d", timeoutMs)
+	}
+
 	return dsn
 }
 
 func (cc *ConnectionConfig) buildSQLiteDSN() string {
-	if cc.FilePath != "" {
-		return cc.FilePath
+	filepath := cc.FilePath
+	if filepath == "" {
+		filepath = ":memory:"
 	}
-	return ":memory:"
+
+	// Add query parameters for timeouts
+	// Note: SQLite driver supports _timeout parameter (in milliseconds)
+	if cc.QueryTimeout > 0 {
+		timeoutMs := int(cc.QueryTimeout.Milliseconds())
+		filepath += fmt.Sprintf("?_timeout=%d", timeoutMs)
+	}
+
+	return filepath
 }
 
 func (cc *ConnectionConfig) buildMSSQLDSN() string {
@@ -342,6 +360,24 @@ func (cc *ConnectionConfig) buildMSSQLDSN() string {
 
 	if cc.Schema != "" {
 		dsn += fmt.Sprintf("&schema=%s", cc.Schema)
+	}
+
+	// Add connection timeout (in seconds)
+	if cc.ConnectTimeout > 0 {
+		timeoutSec := int(cc.ConnectTimeout.Seconds())
+		dsn += fmt.Sprintf("&connection timeout=%d", timeoutSec)
+	}
+
+	// Add dial timeout for TCP connection (in seconds)
+	if cc.ConnectTimeout > 0 {
+		dialTimeoutSec := int(cc.ConnectTimeout.Seconds())
+		dsn += fmt.Sprintf("&dial timeout=%d", dialTimeoutSec)
+	}
+
+	// Add read timeout (in seconds) - enforces timeout for reading data
+	if cc.QueryTimeout > 0 {
+		readTimeoutSec := int(cc.QueryTimeout.Seconds())
+		dsn += fmt.Sprintf("&read timeout=%d", readTimeoutSec)
 	}
 
 	return dsn

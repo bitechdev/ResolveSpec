@@ -76,8 +76,12 @@ func (p *SQLiteProvider) Connect(ctx context.Context, cfg ConnectionConfig) erro
 		// Don't fail connection if WAL mode cannot be enabled
 	}
 
-	// Set busy timeout to handle locked database
-	_, err = db.ExecContext(ctx, "PRAGMA busy_timeout=5000")
+	// Set busy timeout to handle locked database (minimum 2 minutes = 120000ms)
+	busyTimeout := cfg.GetQueryTimeout().Milliseconds()
+	if busyTimeout < 120000 {
+		busyTimeout = 120000 // Enforce minimum of 2 minutes
+	}
+	_, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeout))
 	if err != nil {
 		if cfg.GetEnableLogging() {
 			logger.Warn("Failed to set busy timeout for SQLite", "error", err)

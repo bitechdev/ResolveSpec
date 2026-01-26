@@ -318,6 +318,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		if cursorFilter != "" {
 			logger.Debug("Applying cursor filter: %s", cursorFilter)
 			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options)
+			// Ensure outer parentheses to prevent OR logic from escaping
+			sanitizedCursor = common.EnsureOuterParentheses(sanitizedCursor)
 			if sanitizedCursor != "" {
 				query = query.Where(sanitizedCursor)
 			}
@@ -1656,6 +1658,8 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 				// Build RequestOptions with all preloads to allow references to sibling relations
 				preloadOpts := &common.RequestOptions{Preload: preloads}
 				sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
+				// Ensure outer parentheses to prevent OR logic from escaping
+				sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
 				if len(sanitizedWhere) > 0 {
 					sq = sq.Where(sanitizedWhere)
 				}

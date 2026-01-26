@@ -130,6 +130,9 @@ func validateWhereClauseSecurity(where string) error {
 // Note: This function will NOT add prefixes to unprefixed columns. It will only fix
 // incorrect prefixes (e.g., wrong_table.column -> correct_table.column), unless the
 // prefix matches a preloaded relation name, in which case it's left unchanged.
+//
+// IMPORTANT: Outer parentheses are preserved if the clause contains top-level OR operators
+// to prevent OR logic from escaping and affecting the entire query incorrectly.
 func SanitizeWhereClause(where string, tableName string, options ...*RequestOptions) string {
 	if where == "" {
 		return ""
@@ -143,8 +146,19 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 		return ""
 	}
 
-	// Strip outer parentheses and re-trim
-	where = stripOuterParentheses(where)
+	// Check if the original clause has outer parentheses and contains OR operators
+	// If so, we need to preserve the outer parentheses to prevent OR logic from escaping
+	hasOuterParens := false
+	if len(where) > 0 && where[0] == '(' && where[len(where)-1] == ')' {
+		_, hasOuterParens = stripOneMatchingOuterParen(where)
+	}
+
+	// Strip outer parentheses and re-trim for processing
+	whereWithoutParens := stripOuterParentheses(where)
+	shouldPreserveParens := hasOuterParens && containsTopLevelOR(whereWithoutParens)
+
+	// Use the stripped version for processing
+	where = whereWithoutParens
 
 	// Get valid columns from the model if tableName is provided
 	var validColumns map[string]bool
@@ -229,7 +243,14 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 
 	result := strings.Join(validConditions, " AND ")
 
-	if result != where {
+	// If the original clause had outer parentheses and contains OR operators,
+	// restore the outer parentheses to prevent OR logic from escaping
+	if shouldPreserveParens {
+		result = "(" + result + ")"
+		logger.Debug("Preserved outer parentheses for OR conditions: '%s'", result)
+	}
+
+	if result != where && !shouldPreserveParens {
 		logger.Debug("Sanitized WHERE clause: '%s' -> '%s'", where, result)
 	}
 
@@ -288,6 +309,93 @@ func stripOneMatchingOuterParen(s string) (string, bool) {
 
 	// Strip the outer parentheses
 	return strings.TrimSpace(s[1 : len(s)-1]), true
+}
+
+// EnsureOuterParentheses ensures that a SQL clause is wrapped in parentheses
+// to prevent OR logic from escaping. It checks if the clause already has
+// matching outer parentheses and only adds them if they don't exist.
+//
+// This is particularly important for OR conditions and complex filters where
+// the absence of parentheses could cause the logic to escape and affect
+// the entire query incorrectly.
+//
+// Parameters:
+//   - clause: The SQL clause to check and potentially wrap
+//
+// Returns:
+//   - The clause with guaranteed outer parentheses, or empty string if input is empty
+func EnsureOuterParentheses(clause string) string {
+	if clause == "" {
+		return ""
+	}
+
+	clause = strings.TrimSpace(clause)
+	if clause == "" {
+		return ""
+	}
+
+	// Check if the clause already has matching outer parentheses
+	_, hasOuterParens := stripOneMatchingOuterParen(clause)
+
+	// If it already has matching outer parentheses, return as-is
+	if hasOuterParens {
+		return clause
+	}
+
+	// Otherwise, wrap it in parentheses
+	return "(" + clause + ")"
+}
+
+// containsTopLevelOR checks if a SQL clause contains OR operators at the top level
+// (i.e., not inside parentheses or subqueries). This is used to determine if
+// outer parentheses should be preserved to prevent OR logic from escaping.
+func containsTopLevelOR(clause string) bool {
+	if clause == "" {
+		return false
+	}
+
+	depth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+	lowerClause := strings.ToLower(clause)
+
+	for i := 0; i < len(clause); i++ {
+		ch := clause[i]
+
+		// Track quote state
+		if ch == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+		if ch == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+
+		// Skip if inside quotes
+		if inSingleQuote || inDoubleQuote {
+			continue
+		}
+
+		// Track parenthesis depth
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+
+		// Only check for OR at depth 0 (not inside parentheses)
+		if depth == 0 && i+4 <= len(clause) {
+			// Check for " OR " (case-insensitive)
+			substring := lowerClause[i : i+4]
+			if substring == " or " {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // splitByAND splits a WHERE clause by AND operators (case-insensitive)

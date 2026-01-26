@@ -463,7 +463,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Apply filters - validate and adjust for column types first
-	for i := range options.Filters {
+	// Group consecutive OR filters together to prevent OR logic from escaping
+	for i := 0; i < len(options.Filters); {
 		filter := &options.Filters[i]
 
 		// Validate and adjust filter based on column type
@@ -475,8 +476,39 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			logicOp = "AND"
 		}
 
-		logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
-		query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+		// Check if this is the start of an OR group
+		if logicOp == "OR" {
+			// Collect all consecutive OR filters
+			orFilters := []*common.FilterOption{filter}
+			orCastInfo := []ColumnCastInfo{castInfo}
+
+			j := i + 1
+			for j < len(options.Filters) {
+				nextFilter := &options.Filters[j]
+				nextLogicOp := nextFilter.LogicOperator
+				if nextLogicOp == "" {
+					nextLogicOp = "AND"
+				}
+				if nextLogicOp == "OR" {
+					nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
+					orFilters = append(orFilters, nextFilter)
+					orCastInfo = append(orCastInfo, nextCastInfo)
+					j++
+				} else {
+					break
+				}
+			}
+
+			// Apply the OR group as a single grouped condition
+			logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
+			query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName)
+			i = j
+		} else {
+			// Single AND filter - apply normally
+			logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
+			query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+			i++
+		}
 	}
 
 	// Apply custom SQL WHERE clause (AND condition)
@@ -486,6 +518,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
 		// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
 		sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// Ensure outer parentheses to prevent OR logic from escaping
+		sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
 		if sanitizedWhere != "" {
 			query = query.Where(sanitizedWhere)
 		}
@@ -497,6 +531,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
 		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
 		sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// Ensure outer parentheses to prevent OR logic from escaping
+		sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
 		if sanitizedOr != "" {
 			query = query.WhereOr(sanitizedOr)
 		}
@@ -1993,6 +2029,99 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 	default:
 		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
 		return applyWhere(fmt.Sprintf("%s = ?", qualifiedColumn), filter.Value)
+	}
+}
+
+// applyOrFilterGroup applies a group of OR filters as a single grouped condition
+// This ensures OR conditions are properly grouped with parentheses to prevent OR logic from escaping
+func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common.FilterOption, castInfo []ColumnCastInfo, tableName string) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	// Build individual filter conditions
+	conditions := []string{}
+	args := []interface{}{}
+
+	for i, filter := range filters {
+		// Qualify the column name with table name if not already qualified
+		qualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+
+		// Apply casting to text if needed for non-numeric columns or non-numeric values
+		if castInfo[i].NeedsCast {
+			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", qualifiedColumn)
+		}
+
+		// Build the condition based on operator
+		condition, filterArgs := h.buildFilterCondition(qualifiedColumn, filter, tableName)
+		if condition != "" {
+			conditions = append(conditions, condition)
+			args = append(args, filterArgs...)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return query
+	}
+
+	// Join all conditions with OR and wrap in parentheses
+	groupedCondition := "(" + strings.Join(conditions, " OR ") + ")"
+	logger.Debug("Applying grouped OR conditions: %s", groupedCondition)
+
+	// Apply as AND condition (the OR is already inside the parentheses)
+	return query.Where(groupedCondition, args...)
+}
+
+// buildFilterCondition builds a single filter condition and returns the condition string and args
+func (h *Handler) buildFilterCondition(qualifiedColumn string, filter *common.FilterOption, tableName string) (filterStr string, filterInterface []interface{}) {
+	switch strings.ToLower(filter.Operator) {
+	case "eq", "equals":
+		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
+	case "neq", "not_equals", "ne":
+		return fmt.Sprintf("%s != ?", qualifiedColumn), []interface{}{filter.Value}
+	case "gt", "greater_than":
+		return fmt.Sprintf("%s > ?", qualifiedColumn), []interface{}{filter.Value}
+	case "gte", "greater_than_equals", "ge":
+		return fmt.Sprintf("%s >= ?", qualifiedColumn), []interface{}{filter.Value}
+	case "lt", "less_than":
+		return fmt.Sprintf("%s < ?", qualifiedColumn), []interface{}{filter.Value}
+	case "lte", "less_than_equals", "le":
+		return fmt.Sprintf("%s <= ?", qualifiedColumn), []interface{}{filter.Value}
+	case "like":
+		return fmt.Sprintf("%s LIKE ?", qualifiedColumn), []interface{}{filter.Value}
+	case "ilike":
+		return fmt.Sprintf("%s ILIKE ?", qualifiedColumn), []interface{}{filter.Value}
+	case "in":
+		return fmt.Sprintf("%s IN (?)", qualifiedColumn), []interface{}{filter.Value}
+	case "between":
+		// Handle between operator - exclusive (> val1 AND < val2)
+		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s > ? AND %s < ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		} else if values, ok := filter.Value.([]string); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s > ? AND %s < ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		}
+		logger.Warn("Invalid BETWEEN filter value format")
+		return "", nil
+	case "between_inclusive":
+		// Handle between inclusive operator - inclusive (>= val1 AND <= val2)
+		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s >= ? AND %s <= ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		} else if values, ok := filter.Value.([]string); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s >= ? AND %s <= ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		}
+		logger.Warn("Invalid BETWEEN INCLUSIVE filter value format")
+		return "", nil
+	case "is_null", "isnull":
+		// Check for NULL values - don't use cast for NULL checks
+		colName := h.qualifyColumnName(filter.Column, tableName)
+		return fmt.Sprintf("(%s IS NULL OR %s = '')", colName, colName), nil
+	case "is_not_null", "isnotnull":
+		// Check for NOT NULL values - don't use cast for NULL checks
+		colName := h.qualifyColumnName(filter.Column, tableName)
+		return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", colName, colName), nil
+	default:
+		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
+		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
 	}
 }
 

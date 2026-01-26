@@ -659,6 +659,179 @@ func TestSanitizeWhereClauseWithModel(t *testing.T) {
 	}
 }
 
+func TestEnsureOuterParentheses(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "no parentheses",
+			input:    "status = 'active'",
+			expected: "(status = 'active')",
+		},
+		{
+			name:     "already has outer parentheses",
+			input:    "(status = 'active')",
+			expected: "(status = 'active')",
+		},
+		{
+			name:     "OR condition without parentheses",
+			input:    "status = 'active' OR status = 'pending'",
+			expected: "(status = 'active' OR status = 'pending')",
+		},
+		{
+			name:     "OR condition with parentheses",
+			input:    "(status = 'active' OR status = 'pending')",
+			expected: "(status = 'active' OR status = 'pending')",
+		},
+		{
+			name:     "complex condition with nested parentheses",
+			input:    "(status = 'active' OR status = 'pending') AND (age > 18)",
+			expected: "((status = 'active' OR status = 'pending') AND (age > 18))",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "mismatched parentheses - adds outer ones",
+			input:    "(status = 'active' OR status = 'pending'",
+			expected: "((status = 'active' OR status = 'pending')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := EnsureOuterParentheses(tt.input)
+			if result != tt.expected {
+				t.Errorf("EnsureOuterParentheses(%q) = %q; want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestContainsTopLevelOR(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "no OR operator",
+			input:    "status = 'active' AND age > 18",
+			expected: false,
+		},
+		{
+			name:     "top-level OR",
+			input:    "status = 'active' OR status = 'pending'",
+			expected: true,
+		},
+		{
+			name:     "OR inside parentheses",
+			input:    "age > 18 AND (status = 'active' OR status = 'pending')",
+			expected: false,
+		},
+		{
+			name:     "OR in subquery",
+			input:    "id IN (SELECT id FROM users WHERE status = 'active' OR status = 'pending')",
+			expected: false,
+		},
+		{
+			name:     "OR inside quotes",
+			input:    "comment = 'this OR that'",
+			expected: false,
+		},
+		{
+			name:     "mixed - top-level OR and nested OR",
+			input:    "name = 'test' OR (status = 'active' OR status = 'pending')",
+			expected: true,
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: false,
+		},
+		{
+			name:     "lowercase or",
+			input:    "status = 'active' or status = 'pending'",
+			expected: true,
+		},
+		{
+			name:     "uppercase OR",
+			input:    "status = 'active' OR status = 'pending'",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := containsTopLevelOR(tt.input)
+			if result != tt.expected {
+				t.Errorf("containsTopLevelOR(%q) = %v; want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeWhereClause_PreservesParenthesesWithOR(t *testing.T) {
+	tests := []struct {
+		name      string
+		where     string
+		tableName string
+		expected  string
+	}{
+		{
+			name:      "OR condition with outer parentheses - preserved",
+			where:     "(status = 'active' OR status = 'pending')",
+			tableName: "users",
+			expected:  "(users.status = 'active' OR users.status = 'pending')",
+		},
+		{
+			name:      "AND condition with outer parentheses - stripped (no OR)",
+			where:     "(status = 'active' AND age > 18)",
+			tableName: "users",
+			expected:  "users.status = 'active' AND users.age > 18",
+		},
+		{
+			name:      "complex OR with nested conditions",
+			where:     "((status = 'active' OR status = 'pending') AND age > 18)",
+			tableName: "users",
+			// Outer parens are stripped, but inner parens with OR are preserved
+			expected: "(users.status = 'active' OR users.status = 'pending') AND users.age > 18",
+		},
+		{
+			name:      "OR without outer parentheses - no parentheses added by SanitizeWhereClause",
+			where:     "status = 'active' OR status = 'pending'",
+			tableName: "users",
+			expected:  "users.status = 'active' OR users.status = 'pending'",
+		},
+		{
+			name:      "simple OR with parentheses - preserved",
+			where:     "(users.status = 'active' OR users.status = 'pending')",
+			tableName: "users",
+			// Already has correct prefixes, parentheses preserved
+			expected: "(users.status = 'active' OR users.status = 'pending')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefixedWhere := AddTablePrefixToColumns(tt.where, tt.tableName)
+			result := SanitizeWhereClause(prefixedWhere, tt.tableName)
+			if result != tt.expected {
+				t.Errorf("SanitizeWhereClause(%q, %q) = %q; want %q", tt.where, tt.tableName, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestAddTablePrefixToColumns_ComplexConditions(t *testing.T) {
 tests := []struct {
 name      string

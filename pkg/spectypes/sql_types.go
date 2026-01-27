@@ -64,8 +64,7 @@ func (n *SqlNull[T]) Scan(value any) error {
 	// Check if T is []byte, and decode base64 if applicable
 	// Do this BEFORE trying sql.Null to ensure base64 is handled
 	var zero T
-	switch any(zero).(type) {
-	case []byte:
+	if _, ok := any(zero).([]byte); ok {
 		// For []byte types, try to decode from base64
 		var strVal string
 		switch v := value.(type) {
@@ -182,10 +181,9 @@ func (n SqlNull[T]) MarshalJSON() ([]byte, error) {
 	}
 
 	// Check if T is []byte, and encode to base64
-	switch v := any(n.Val).(type) {
-	case []byte:
+	if _, ok := any(n.Val).([]byte); ok {
 		// Encode []byte as base64
-		encoded := base64.StdEncoding.EncodeToString(v)
+		encoded := base64.StdEncoding.EncodeToString(any(n.Val).([]byte))
 		return json.Marshal(encoded)
 	}
 
@@ -202,8 +200,7 @@ func (n *SqlNull[T]) UnmarshalJSON(b []byte) error {
 
 	// Check if T is []byte, and decode from base64
 	var val T
-	switch any(val).(type) {
-	case []byte:
+	if _, ok := any(val).([]byte); ok {
 		// Unmarshal as string first (JSON representation)
 		var s string
 		if err := json.Unmarshal(b, &s); err == nil {

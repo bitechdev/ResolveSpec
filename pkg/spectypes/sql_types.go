@@ -4,6 +4,7 @@ package spectypes
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -60,7 +61,34 @@ func (n *SqlNull[T]) Scan(value any) error {
 		return nil
 	}
 
-	// Try standard sql.Null[T] first.
+	// Check if T is []byte, and decode base64 if applicable
+	// Do this BEFORE trying sql.Null to ensure base64 is handled
+	var zero T
+	switch any(zero).(type) {
+	case []byte:
+		// For []byte types, try to decode from base64
+		var strVal string
+		switch v := value.(type) {
+		case string:
+			strVal = v
+		case []byte:
+			strVal = string(v)
+		default:
+			strVal = fmt.Sprintf("%v", value)
+		}
+		// Try base64 decode
+		if decoded, err := base64.StdEncoding.DecodeString(strVal); err == nil {
+			n.Val = any(decoded).(T)
+			n.Valid = true
+			return nil
+		}
+		// Fallback to raw bytes
+		n.Val = any([]byte(strVal)).(T)
+		n.Valid = true
+		return nil
+	}
+
+	// Try standard sql.Null[T] for other types.
 	var sqlNull sql.Null[T]
 	if err := sqlNull.Scan(value); err == nil {
 		n.Val = sqlNull.V
@@ -122,6 +150,9 @@ func (n *SqlNull[T]) FromString(s string) error {
 			n.Val = any(u).(T)
 			n.Valid = true
 		}
+	case []byte:
+		n.Val = any([]byte(s)).(T)
+		n.Valid = true
 	case string:
 		n.Val = any(s).(T)
 		n.Valid = true
@@ -149,6 +180,15 @@ func (n SqlNull[T]) MarshalJSON() ([]byte, error) {
 	if !n.Valid {
 		return []byte("null"), nil
 	}
+
+	// Check if T is []byte, and encode to base64
+	switch v := any(n.Val).(type) {
+	case []byte:
+		// Encode []byte as base64
+		encoded := base64.StdEncoding.EncodeToString(v)
+		return json.Marshal(encoded)
+	}
+
 	return json.Marshal(n.Val)
 }
 
@@ -160,8 +200,26 @@ func (n *SqlNull[T]) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	// Try direct unmarshal.
+	// Check if T is []byte, and decode from base64
 	var val T
+	switch any(val).(type) {
+	case []byte:
+		// Unmarshal as string first (JSON representation)
+		var s string
+		if err := json.Unmarshal(b, &s); err == nil {
+			// Decode from base64
+			if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+				n.Val = any(decoded).(T)
+				n.Valid = true
+				return nil
+			}
+			// Fallback to raw string as bytes
+			n.Val = any([]byte(s)).(T)
+			n.Valid = true
+			return nil
+		}
+	}
+
 	if err := json.Unmarshal(b, &val); err == nil {
 		n.Val = val
 		n.Valid = true
@@ -271,13 +329,14 @@ func (n SqlNull[T]) UUID() uuid.UUID {
 
 // Type aliases for common types.
 type (
-	SqlInt16   = SqlNull[int16]
-	SqlInt32   = SqlNull[int32]
-	SqlInt64   = SqlNull[int64]
-	SqlFloat64 = SqlNull[float64]
-	SqlBool    = SqlNull[bool]
-	SqlString  = SqlNull[string]
-	SqlUUID    = SqlNull[uuid.UUID]
+	SqlInt16     = SqlNull[int16]
+	SqlInt32     = SqlNull[int32]
+	SqlInt64     = SqlNull[int64]
+	SqlFloat64   = SqlNull[float64]
+	SqlBool      = SqlNull[bool]
+	SqlString    = SqlNull[string]
+	SqlByteArray = SqlNull[[]byte]
+	SqlUUID      = SqlNull[uuid.UUID]
 )
 
 // SqlTimeStamp - Timestamp with custom formatting (YYYY-MM-DDTHH:MM:SS).
@@ -579,6 +638,10 @@ func NewSqlBool(v bool) SqlBool {
 
 func NewSqlString(v string) SqlString {
 	return SqlString{Val: v, Valid: true}
+}
+
+func NewSqlByteArray(v []byte) SqlByteArray {
+	return SqlByteArray{Val: v, Valid: true}
 }
 
 func NewSqlUUID(v uuid.UUID) SqlUUID {

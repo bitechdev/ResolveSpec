@@ -1088,6 +1088,32 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		logger.Debug("X-Files: Set foreign key for %s: %s", relationPath, xfile.ForeignKey)
 	}
 
+	// Transfer SqlJoins from XFiles to PreloadOption
+	if len(xfile.SqlJoins) > 0 {
+		preloadOpt.SqlJoins = make([]string, 0, len(xfile.SqlJoins))
+		preloadOpt.JoinAliases = make([]string, 0, len(xfile.SqlJoins))
+
+		for _, joinClause := range xfile.SqlJoins {
+			// Sanitize the join clause
+			sanitizedJoin := common.SanitizeWhereClause(joinClause, "", nil)
+			if sanitizedJoin == "" {
+				logger.Warn("X-Files: SqlJoin failed sanitization for %s: %s", relationPath, joinClause)
+				continue
+			}
+
+			preloadOpt.SqlJoins = append(preloadOpt.SqlJoins, sanitizedJoin)
+
+			// Extract join alias for validation
+			alias := extractJoinAlias(sanitizedJoin)
+			if alias != "" {
+				preloadOpt.JoinAliases = append(preloadOpt.JoinAliases, alias)
+				logger.Debug("X-Files: Extracted join alias for %s: %s", relationPath, alias)
+			}
+		}
+
+		logger.Debug("X-Files: Added %d SQL joins to preload %s", len(preloadOpt.SqlJoins), relationPath)
+	}
+
 	// Add the preload option
 	options.Preload = append(options.Preload, preloadOpt)
 

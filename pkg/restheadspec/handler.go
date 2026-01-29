@@ -882,6 +882,15 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 			}
 		}
 
+		// Apply custom SQL joins from XFiles
+		if len(preload.SqlJoins) > 0 {
+			logger.Debug("Applying %d SQL joins to preload %s", len(preload.SqlJoins), preload.Relation)
+			for _, joinClause := range preload.SqlJoins {
+				sq = sq.Join(joinClause)
+				logger.Debug("Applied SQL join to preload %s: %s", preload.Relation, joinClause)
+			}
+		}
+
 		// Apply filters
 		if len(preload.Filters) > 0 {
 			for _, filter := range preload.Filters {

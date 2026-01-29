@@ -272,13 +272,29 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 		filteredPreload.Columns = v.FilterValidColumns(preload.Columns)
 		filteredPreload.OmitColumns = v.FilterValidColumns(preload.OmitColumns)
 
+		// Preserve SqlJoins and JoinAliases for preloads with custom joins
+		filteredPreload.SqlJoins = preload.SqlJoins
+		filteredPreload.JoinAliases = preload.JoinAliases
+
 		// Filter preload filters
 		validPreloadFilters := make([]FilterOption, 0, len(preload.Filters))
 		for _, filter := range preload.Filters {
 			if v.IsValidColumn(filter.Column) {
 				validPreloadFilters = append(validPreloadFilters, filter)
 			} else {
-				logger.Warn("Invalid column in preload '%s' filter '%s' removed", preload.Relation, filter.Column)
+				// Check if the filter column references a joined table alias
+				foundJoin := false
+				for _, alias := range preload.JoinAliases {
+					if strings.Contains(filter.Column, alias) {
+						foundJoin = true
+						break
+					}
+				}
+				if foundJoin {
+					validPreloadFilters = append(validPreloadFilters, filter)
+				} else {
+					logger.Warn("Invalid column in preload '%s' filter '%s' removed", preload.Relation, filter.Column)
+				}
 			}
 		}
 		filteredPreload.Filters = validPreloadFilters

@@ -54,8 +54,8 @@ type PreloadOption struct {
 	ForeignKey string `json:"foreign_key"` // For parent tables: column in current table that references parent
 
 	// Custom SQL JOINs from XFiles - used when preload needs additional joins
-	SqlJoins    []string `json:"sql_joins"`     // Custom SQL JOIN clauses
-	JoinAliases []string `json:"join_aliases"`  // Extracted table aliases from SqlJoins for validation
+	SqlJoins    []string `json:"sql_joins"`    // Custom SQL JOIN clauses
+	JoinAliases []string `json:"join_aliases"` // Extracted table aliases from SqlJoins for validation
 }
 
 type FilterOption struct {

@@ -938,21 +938,57 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 	})
 
 	// Handle recursive preloading
-	if preload.Recursive && depth < 4 {
+	if preload.Recursive && depth < 8 {
 		logger.Debug("Applying recursive preload for %s at depth %d", preload.Relation, depth+1)
 
-		// For recursive relationships, we need to get the last part of the relation path
-		// e.g., "MastertaskItems" -> "MastertaskItems.MastertaskItems"
 		relationParts := strings.Split(preload.Relation, ".")
 		lastRelationName := relationParts[len(relationParts)-1]
 
-		// Create a recursive preload with the same configuration
-		// but with the relation path extended
-		recursivePreload := preload
-		recursivePreload.Relation = preload.Relation + "." + lastRelationName
+		// Generate FK-based relation name for children
+		recursiveRelationName := lastRelationName
+		if preload.RelatedKey != "" {
+			// Convert "rid_parentmastertaskitem" to "RID_PARENTMASTERTASKITEM"
+			fkUpper := strings.ToUpper(preload.RelatedKey)
+			recursiveRelationName = lastRelationName + "_" + fkUpper
+			logger.Debug("Generated recursive relation name from RelatedKey: %s (from %s)",
+				recursiveRelationName, preload.RelatedKey)
+		} else {
+			logger.Warn("Recursive preload for %s has no RelatedKey, falling back to %s.%s",
+				preload.Relation, preload.Relation, lastRelationName)
+		}
 
-		// Recursively apply preload until we reach depth 5
+		// Create recursive preload
+		recursivePreload := preload
+		recursivePreload.Relation = preload.Relation + "." + recursiveRelationName
+		recursivePreload.Recursive = false // Prevent infinite recursion at this level
+
+		// CRITICAL: Clear parent's WHERE clause - let Bun use FK traversal
+		recursivePreload.Where = ""
+		recursivePreload.Filters = []common.FilterOption{}
+		logger.Debug("Cleared WHERE clause for recursive preload %s at depth %d",
+			recursivePreload.Relation, depth+1)
+
+		// Apply recursively up to depth 8
 		query = h.applyPreloadWithRecursion(query, recursivePreload, allPreloads, model, depth+1)
+
+		// ALSO: Extend any child relations (like DEF) to recursive levels
+		baseRelation := preload.Relation + "."
+		for i := range allPreloads {
+			relatedPreload := allPreloads[i]
+			if strings.HasPrefix(relatedPreload.Relation, baseRelation) &&
+				!strings.Contains(strings.TrimPrefix(relatedPreload.Relation, baseRelation), ".") {
+				childRelationName := strings.TrimPrefix(relatedPreload.Relation, baseRelation)
+
+				extendedChildPreload := relatedPreload
+				extendedChildPreload.Relation = recursivePreload.Relation + "." + childRelationName
+				extendedChildPreload.Recursive = false
+
+				logger.Debug("Extending related preload '%s' to '%s' at recursive depth %d",
+					relatedPreload.Relation, extendedChildPreload.Relation, depth+1)
+
+				query = h.applyPreloadWithRecursion(query, extendedChildPreload, allPreloads, model, depth+1)
+			}
+		}
 	}
 
 	return query

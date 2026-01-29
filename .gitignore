@@ -26,3 +26,4 @@ go.work.sum
 bin/
 test.db
 /testserver
+tests/data/

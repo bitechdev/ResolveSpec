@@ -435,9 +435,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Apply preloading
+	logger.Debug("Total preloads to apply: %d", len(options.Preload))
 	for idx := range options.Preload {
 		preload := options.Preload[idx]
-		logger.Debug("Applying preload: %s", preload.Relation)
+		logger.Debug("Applying preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, Where=%s",
+			idx, preload.Relation, preload.Recursive, preload.RelatedKey, preload.Where)
 
 		// Validate and fix WHERE clause to ensure it contains the relation prefix
 		if len(preload.Where) > 0 {
@@ -916,10 +918,25 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		if len(preload.Where) > 0 {
 			// Build RequestOptions with all preloads to allow references to sibling relations
 			preloadOpts := &common.RequestOptions{Preload: allPreloads}
-			// First add table prefixes to unqualified columns
-			prefixedWhere := common.AddTablePrefixToColumns(preload.Where, reflection.ExtractTableNameOnly(preload.Relation))
-			// Then sanitize and allow preload table prefixes
-			sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
+
+			// Determine the table name to use for WHERE clause processing
+			// Prefer the explicit TableName field (set by XFiles), otherwise extract from relation name
+			tableName := preload.TableName
+			if tableName == "" {
+				tableName = reflection.ExtractTableNameOnly(preload.Relation)
+			}
+
+			// In Bun's Relation context, table prefixes are only needed when there are JOINs
+			// Without JOINs, Bun already knows which table is being queried
+			whereClause := preload.Where
+			if len(preload.SqlJoins) > 0 {
+				// Has JOINs: add table prefixes to disambiguate columns
+				whereClause = common.AddTablePrefixToColumns(preload.Where, tableName)
+				logger.Debug("Added table prefix for preload with joins: '%s' -> '%s'", preload.Where, whereClause)
+			}
+
+			// Sanitize the WHERE clause and allow preload table prefixes
+			sanitizedWhere := common.SanitizeWhereClause(whereClause, tableName, preloadOpts)
 			if len(sanitizedWhere) > 0 {
 				sq = sq.Where(sanitizedWhere)
 			}
@@ -945,15 +962,35 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		lastRelationName := relationParts[len(relationParts)-1]
 
 		// Generate FK-based relation name for children
+		// Use RecursiveChildKey if available, otherwise fall back to RelatedKey
+		recursiveFK := preload.RecursiveChildKey
+		if recursiveFK == "" {
+			recursiveFK = preload.RelatedKey
+		}
+
 		recursiveRelationName := lastRelationName
-		if preload.RelatedKey != "" {
-			// Convert "rid_parentmastertaskitem" to "RID_PARENTMASTERTASKITEM"
-			fkUpper := strings.ToUpper(preload.RelatedKey)
-			recursiveRelationName = lastRelationName + "_" + fkUpper
-			logger.Debug("Generated recursive relation name from RelatedKey: %s (from %s)",
-				recursiveRelationName, preload.RelatedKey)
+		if recursiveFK != "" {
+			// Check if the last relation name already contains the FK suffix
+			// (this happens when XFiles already generated the FK-based name)
+			fkUpper := strings.ToUpper(recursiveFK)
+			expectedSuffix := "_" + fkUpper
+
+			if strings.HasSuffix(lastRelationName, expectedSuffix) {
+				// Already has FK suffix, just reuse the same name
+				recursiveRelationName = lastRelationName
+				logger.Debug("Reusing FK-based relation name for recursion: %s", recursiveRelationName)
+			} else {
+				// Generate FK-based name
+				recursiveRelationName = lastRelationName + expectedSuffix
+				keySource := "RelatedKey"
+				if preload.RecursiveChildKey != "" {
+					keySource = "RecursiveChildKey"
+				}
+				logger.Debug("Generated recursive relation name from %s: %s (from %s)",
+					keySource, recursiveRelationName, recursiveFK)
+			}
 		} else {
-			logger.Warn("Recursive preload for %s has no RelatedKey, falling back to %s.%s",
+			logger.Warn("Recursive preload for %s has no RecursiveChildKey or RelatedKey, falling back to %s.%s",
 				preload.Relation, preload.Relation, lastRelationName)
 		}
 
@@ -961,6 +998,11 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		recursivePreload := preload
 		recursivePreload.Relation = preload.Relation + "." + recursiveRelationName
 		recursivePreload.Recursive = false // Prevent infinite recursion at this level
+
+		// Use the recursive FK for child relations, not the parent's RelatedKey
+		if preload.RecursiveChildKey != "" {
+			recursivePreload.RelatedKey = preload.RecursiveChildKey
+		}
 
 		// CRITICAL: Clear parent's WHERE clause - let Bun use FK traversal
 		recursivePreload.Where = ""

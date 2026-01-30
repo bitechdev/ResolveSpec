@@ -37,6 +37,7 @@ type Parameter struct {
 
 type PreloadOption struct {
 	Relation    string            `json:"relation"`
+	TableName   string            `json:"table_name"` // Actual database table name (e.g., "mastertaskitem")
 	Columns     []string          `json:"columns"`
 	OmitColumns []string          `json:"omit_columns"`
 	Sort        []SortOption      `json:"sort"`
@@ -49,9 +50,10 @@ type PreloadOption struct {
 	Recursive   bool              `json:"recursive"`   // if true, preload recursively up to 5 levels
 
 	// Relationship keys from XFiles - used to build proper foreign key filters
-	PrimaryKey string `json:"primary_key"` // Primary key of the related table
-	RelatedKey string `json:"related_key"` // For child tables: column in child that references parent
-	ForeignKey string `json:"foreign_key"` // For parent tables: column in current table that references parent
+	PrimaryKey        string `json:"primary_key"`         // Primary key of the related table
+	RelatedKey        string `json:"related_key"`         // For child tables: column in child that references parent
+	ForeignKey        string `json:"foreign_key"`         // For parent tables: column in current table that references parent
+	RecursiveChildKey string `json:"recursive_child_key"` // For recursive tables: FK column used for recursion (e.g., "rid_parentmastertaskitem")
 
 	// Custom SQL JOINs from XFiles - used when preload needs additional joins
 	SqlJoins    []string `json:"sql_joins"`    // Custom SQL JOIN clauses

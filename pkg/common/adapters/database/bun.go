@@ -202,23 +202,15 @@ func (b *BunAdapter) GetUnderlyingDB() interface{} {
 
 // BunSelectQuery implements SelectQuery for Bun
 type BunSelectQuery struct {
-	query            *bun.SelectQuery
-	db               bun.IDB // Store DB connection for count queries
-	hasModel         bool    // Track if Model() was called
-	schema           string  // Separated schema name
-	tableName        string  // Just the table name, without schema
-	tableAlias       string
-	deferredPreloads []deferredPreload // Preloads to execute as separate queries
-	inJoinContext    bool              // Track if we're in a JOIN relation context
-	joinTableAlias   string            // Alias to use for JOIN conditions
-	skipAutoDetect   bool              // Skip auto-detection to prevent circular calls
-}
-
-// deferredPreload represents a preload that will be executed as a separate query
-// to avoid PostgreSQL identifier length limits
-type deferredPreload struct {
-	relation string
-	apply    []func(common.SelectQuery) common.SelectQuery
+	query          *bun.SelectQuery
+	db             bun.IDB // Store DB connection for count queries
+	hasModel       bool    // Track if Model() was called
+	schema         string  // Separated schema name
+	tableName      string  // Just the table name, without schema
+	tableAlias     string
+	inJoinContext  bool   // Track if we're in a JOIN relation context
+	joinTableAlias string // Alias to use for JOIN conditions
+	skipAutoDetect bool   // Skip auto-detection to prevent circular calls
 }
 
 func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {
@@ -487,51 +479,8 @@ func (b *BunSelectQuery) Preload(relation string, conditions ...interface{}) com
 	return b
 }
 
-// // shortenAliasForPostgres shortens a table/relation alias if it would exceed PostgreSQL's 63-char limit
-// // when combined with typical column names
-// func shortenAliasForPostgres(relationPath string) (string, bool) {
-// 	// Convert relation path to the alias format Bun uses: dots become double underscores
-// 	// Also convert to lowercase and use snake_case as Bun does
-// 	parts := strings.Split(relationPath, ".")
-// 	alias := strings.ToLower(strings.Join(parts, "__"))
-
-// 	// PostgreSQL truncates identifiers to 63 chars
-// 	// If the alias + typical column name would exceed this, we need to shorten
-// 	// Reserve at least 30 chars for column names (e.g., "__rid_mastertype_hubtype")
-// 	const maxAliasLength = 30
-
-// 	if len(alias) > maxAliasLength {
-// 		// Create a shortened alias using a hash of the original
-// 		hash := md5.Sum([]byte(alias))
-// 		hashStr := hex.EncodeToString(hash[:])[:8]
-
-// 		// Keep first few chars of original for readability + hash
-// 		prefixLen := maxAliasLength - 9 // 9 = 1 underscore + 8 hash chars
-// 		if prefixLen > len(alias) {
-// 			prefixLen = len(alias)
-// 		}
-
-// 		shortened := alias[:prefixLen] + "_" + hashStr
-// 		logger.Debug("Shortened alias '%s' (%d chars) to '%s' (%d chars) to avoid PostgreSQL 63-char limit",
-// 			alias, len(alias), shortened, len(shortened))
-// 		return shortened, true
-// 	}
-
-// 	return alias, false
-// }
-
-// // estimateColumnAliasLength estimates the length of a column alias in a nested preload
-// // Bun creates aliases like: relationChain__columnName
-// func estimateColumnAliasLength(relationPath string, columnName string) int {
-// 	relationParts := strings.Split(relationPath, ".")
-// 	aliasChain := strings.ToLower(strings.Join(relationParts, "__"))
-// 	// Bun adds "__" between alias and column name
-// 	return len(aliasChain) + 2 + len(columnName)
-// }
-
 func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
 	// Auto-detect relationship type and choose optimal loading strategy
-	// Get the model from the query if available
 	// Skip auto-detection if flag is set (prevents circular calls from JoinRelation)
 	if !b.skipAutoDetect {
 		model := b.query.GetModel()
@@ -554,49 +503,7 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 		}
 	}
 
-	// Check if this relation chain would create problematic long aliases
-	relationParts := strings.Split(relation, ".")
-	aliasChain := strings.ToLower(strings.Join(relationParts, "__"))
-
-	// PostgreSQL's identifier limit is 63 characters
-	const postgresIdentifierLimit = 63
-	const safeAliasLimit = 35 // Leave room for column names
-
-	// If the alias chain is too long, defer this preload to be executed as a separate query
-	if len(relationParts) > 1 && len(aliasChain) > safeAliasLimit {
-		logger.Info("Preload relation '%s' creates long alias chain '%s' (%d chars). "+
-			"Using separate query to avoid PostgreSQL %d-char identifier limit.",
-			relation, aliasChain, len(aliasChain), postgresIdentifierLimit)
-
-		// For nested preloads (e.g., "Parent.Child"), split into separate preloads
-		// This avoids the long concatenated alias
-		if len(relationParts) > 1 {
-			// Load first level normally: "Parent"
-			firstLevel := relationParts[0]
-			remainingPath := strings.Join(relationParts[1:], ".")
-
-			logger.Info("Splitting nested preload: loading '%s' first, then '%s' separately",
-				firstLevel, remainingPath)
-
-			// Apply the first level preload normally
-			b.query = b.query.Relation(firstLevel)
-
-			// Store the remaining nested preload to be executed after the main query
-			b.deferredPreloads = append(b.deferredPreloads, deferredPreload{
-				relation: relation,
-				apply:    apply,
-			})
-
-			return b
-		}
-
-		// Single level but still too long - just warn and continue
-		logger.Warn("Single-level preload '%s' has a very long name (%d chars). "+
-			"Consider renaming the field to avoid potential issues.",
-			relation, len(aliasChain))
-	}
-
-	// Normal preload handling
+	// Use Bun's native Relation() for preloading
 	b.query = b.query.Relation(relation, func(sq *bun.SelectQuery) *bun.SelectQuery {
 		defer func() {
 			if r := recover(); r != nil {
@@ -629,12 +536,7 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 			// Extract table alias if model implements TableAliasProvider
 			if provider, ok := modelValue.(common.TableAliasProvider); ok {
 				wrapper.tableAlias = provider.TableAlias()
-				// Apply the alias to the Bun query so conditions can reference it
-				if wrapper.tableAlias != "" {
-					// Note: Bun's Relation() already sets up the table, but we can add
-					// the alias explicitly if needed
-					logger.Debug("Preload relation '%s' using table alias: %s", relation, wrapper.tableAlias)
-				}
+				logger.Debug("Preload relation '%s' using table alias: %s", relation, wrapper.tableAlias)
 			}
 		}
 
@@ -644,7 +546,6 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 		// Apply each function in sequence
 		for _, fn := range apply {
 			if fn != nil {
-				// Pass &current (pointer to interface variable), fn modifies and returns new interface value
 				modified := fn(current)
 				current = modified
 			}
@@ -734,24 +635,12 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 		return fmt.Errorf("destination cannot be nil")
 	}
 
-	// Execute the main query first
 	err = b.query.Scan(ctx, dest)
 	if err != nil {
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
 		return err
-	}
-
-	// Execute any deferred preloads
-	if len(b.deferredPreloads) > 0 {
-		err = b.executeDeferredPreloads(ctx, dest)
-		if err != nil {
-			logger.Warn("Failed to execute deferred preloads: %v", err)
-			// Don't fail the whole query, just log the warning
-		}
-		// Clear deferred preloads to prevent re-execution
-		b.deferredPreloads = nil
 	}
 
 	return nil
@@ -803,7 +692,6 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 		}
 	}
 
-	// Execute the main query first
 	err = b.query.Scan(ctx)
 	if err != nil {
 		// Log SQL string for debugging
@@ -812,145 +700,7 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 		return err
 	}
 
-	// Execute any deferred preloads
-	if len(b.deferredPreloads) > 0 {
-		model := b.query.GetModel()
-		err = b.executeDeferredPreloads(ctx, model.Value())
-		if err != nil {
-			logger.Warn("Failed to execute deferred preloads: %v", err)
-			// Don't fail the whole query, just log the warning
-		}
-		// Clear deferred preloads to prevent re-execution
-		b.deferredPreloads = nil
-	}
-
 	return nil
-}
-
-// executeDeferredPreloads executes preloads that were deferred to avoid PostgreSQL identifier length limits
-func (b *BunSelectQuery) executeDeferredPreloads(ctx context.Context, dest interface{}) error {
-	if len(b.deferredPreloads) == 0 {
-		return nil
-	}
-
-	for _, dp := range b.deferredPreloads {
-		err := b.executeSingleDeferredPreload(ctx, dest, dp)
-		if err != nil {
-			return fmt.Errorf("failed to execute deferred preload '%s': %w", dp.relation, err)
-		}
-	}
-
-	return nil
-}
-
-// executeSingleDeferredPreload executes a single deferred preload
-// For a relation like "Parent.Child", it:
-// 1. Finds all loaded Parent records in dest
-// 2. Loads Child records for those Parents using a separate query (loading only "Child", not "Parent.Child")
-// 3. Bun automatically assigns the Child records to the appropriate Parent.Child field
-func (b *BunSelectQuery) executeSingleDeferredPreload(ctx context.Context, dest interface{}, dp deferredPreload) error {
-	relationParts := strings.Split(dp.relation, ".")
-	if len(relationParts) < 2 {
-		return fmt.Errorf("deferred preload must be nested (e.g., 'Parent.Child'), got: %s", dp.relation)
-	}
-
-	// The parent relation that was already loaded
-	parentRelation := relationParts[0]
-	// The child relation we need to load
-	childRelation := strings.Join(relationParts[1:], ".")
-
-	logger.Debug("Executing deferred preload: loading '%s' on already-loaded '%s'", childRelation, parentRelation)
-
-	// Use reflection to access the parent relation field(s) in the loaded records
-	// Then load the child relation for those parent records
-	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() == reflect.Ptr {
-		destValue = destValue.Elem()
-	}
-
-	// Handle both slice and single record
-	if destValue.Kind() == reflect.Slice {
-		// Iterate through each record in the slice
-		for i := 0; i < destValue.Len(); i++ {
-			record := destValue.Index(i)
-			if err := b.loadChildRelationForRecord(ctx, record, parentRelation, childRelation, dp.apply); err != nil {
-				logger.Warn("Failed to load child relation '%s' for record %d: %v", childRelation, i, err)
-				// Continue with other records
-			}
-		}
-	} else {
-		// Single record
-		if err := b.loadChildRelationForRecord(ctx, destValue, parentRelation, childRelation, dp.apply); err != nil {
-			return fmt.Errorf("failed to load child relation '%s': %w", childRelation, err)
-		}
-	}
-
-	return nil
-}
-
-// loadChildRelationForRecord loads a child relation for a single parent record
-func (b *BunSelectQuery) loadChildRelationForRecord(ctx context.Context, record reflect.Value, parentRelation, childRelation string, apply []func(common.SelectQuery) common.SelectQuery) error {
-	// Ensure we're working with the actual struct value, not a pointer
-	if record.Kind() == reflect.Ptr {
-		record = record.Elem()
-	}
-
-	// Get the parent relation field
-	parentField := record.FieldByName(parentRelation)
-	if !parentField.IsValid() {
-		// Parent relation field doesn't exist
-		logger.Debug("Parent relation field '%s' not found in record", parentRelation)
-		return nil
-	}
-
-	// Check if the parent field is nil (for pointer fields)
-	if parentField.Kind() == reflect.Ptr && parentField.IsNil() {
-		// Parent relation not loaded or nil, skip
-		logger.Debug("Parent relation field '%s' is nil, skipping child preload", parentRelation)
-		return nil
-	}
-
-	// Get a pointer to the parent field so Bun can modify it
-	// CRITICAL: We need to pass a pointer, not a value, so that when Bun
-	// loads the child records and appends them to the slice, the changes
-	// are reflected in the original struct field.
-	var parentPtr interface{}
-	if parentField.Kind() == reflect.Ptr {
-		// Field is already a pointer (e.g., Parent *Parent), use as-is
-		parentPtr = parentField.Interface()
-	} else {
-		// Field is a value (e.g., Comments []Comment), get its address
-		if parentField.CanAddr() {
-			parentPtr = parentField.Addr().Interface()
-		} else {
-			return fmt.Errorf("cannot get address of field '%s'", parentRelation)
-		}
-	}
-
-	// Load the child relation on the parent record
-	// This uses a shorter alias since we're only loading "Child", not "Parent.Child"
-	// CRITICAL: Use WherePK() to ensure we only load children for THIS specific parent
-	// record, not the first parent in the database table.
-	return b.db.NewSelect().
-		Model(parentPtr).
-		WherePK().
-		Relation(childRelation, func(sq *bun.SelectQuery) *bun.SelectQuery {
-			// Apply any custom query modifications
-			if len(apply) > 0 {
-				wrapper := &BunSelectQuery{query: sq, db: b.db}
-				current := common.SelectQuery(wrapper)
-				for _, fn := range apply {
-					if fn != nil {
-						current = fn(current)
-					}
-				}
-				if finalBun, ok := current.(*BunSelectQuery); ok {
-					return finalBun.query
-				}
-			}
-			return sq
-		}).
-		Scan(ctx)
 }
 
 func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {

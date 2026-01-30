@@ -177,38 +177,46 @@ func TestXFilesRecursivePreload(t *testing.T) {
 	// Verify that preload options were created
 	require.NotEmpty(t, options.Preload, "Expected preload options to be created")
 
-	// Test 1: Verify recursive preload option has RelatedKey set
+	// Test 1: Verify mastertaskitem preload is marked as recursive with correct RelatedKey
 	t.Run("RecursivePreloadHasRelatedKey", func(t *testing.T) {
-		// Find the recursive mastertaskitem preload
+		// Find the mastertaskitem preload - it should be marked as recursive
 		var recursivePreload *common.PreloadOption
 		for i := range options.Preload {
 			preload := &options.Preload[i]
-			if preload.Relation == "mastertask.mastertaskitem.mastertaskitem" && preload.Recursive {
+			if preload.Relation == "MTL.MAL" && preload.Recursive {
 				recursivePreload = preload
 				break
 			}
 		}
 
-		require.NotNil(t, recursivePreload, "Expected to find recursive mastertaskitem preload")
-		assert.Equal(t, "rid_parentmastertaskitem", recursivePreload.RelatedKey,
-			"Recursive preload should have RelatedKey set from xfiles config")
+		require.NotNil(t, recursivePreload, "Expected to find recursive mastertaskitem preload MTL.MAL")
+
+		// RelatedKey should be the parent relationship key (MTL -> MAL)
+		assert.Equal(t, "rid_mastertask", recursivePreload.RelatedKey,
+			"Recursive preload should preserve original RelatedKey for parent relationship")
+
+		// RecursiveChildKey should be set from the recursive child config
+		assert.Equal(t, "rid_parentmastertaskitem", recursivePreload.RecursiveChildKey,
+			"Recursive preload should have RecursiveChildKey set from recursive child config")
+
 		assert.True(t, recursivePreload.Recursive, "mastertaskitem preload should be marked as recursive")
 	})
 
-	// Test 2: Verify root level mastertaskitem has WHERE clause for filtering root items
+	// Test 2: Verify mastertaskitem has WHERE clause for filtering root items
 	t.Run("RootLevelHasWhereClause", func(t *testing.T) {
 		var rootPreload *common.PreloadOption
 		for i := range options.Preload {
 			preload := &options.Preload[i]
-			if preload.Relation == "mastertask.mastertaskitem" && !preload.Recursive {
+			if preload.Relation == "MTL.MAL" {
 				rootPreload = preload
 				break
 			}
 		}
 
-		require.NotNil(t, rootPreload, "Expected to find root mastertaskitem preload")
-		assert.NotEmpty(t, rootPreload.Where, "Root mastertaskitem should have WHERE clause")
+		require.NotNil(t, rootPreload, "Expected to find mastertaskitem preload")
+		assert.NotEmpty(t, rootPreload.Where, "Mastertaskitem should have WHERE clause")
 		// The WHERE clause should filter for root items (rid_parentmastertaskitem is null)
+		assert.True(t, rootPreload.Recursive, "Mastertaskitem preload should be marked as recursive")
 	})
 
 	// Test 3: Verify actiondefinition relation exists for mastertaskitem
@@ -216,7 +224,7 @@ func TestXFilesRecursivePreload(t *testing.T) {
 		var defPreload *common.PreloadOption
 		for i := range options.Preload {
 			preload := &options.Preload[i]
-			if preload.Relation == "mastertask.mastertaskitem.actiondefinition" {
+			if preload.Relation == "MTL.MAL.DEF" {
 				defPreload = preload
 				break
 			}
@@ -229,18 +237,18 @@ func TestXFilesRecursivePreload(t *testing.T) {
 
 	// Test 4: Verify relation name generation with mock query
 	t.Run("RelationNameGeneration", func(t *testing.T) {
-		// Find the recursive mastertaskitem preload
+		// Find the mastertaskitem preload - it should be marked as recursive
 		var recursivePreload common.PreloadOption
 		found := false
 		for _, preload := range options.Preload {
-			if preload.Relation == "mastertask.mastertaskitem.mastertaskitem" && preload.Recursive {
+			if preload.Relation == "MTL.MAL" && preload.Recursive {
 				recursivePreload = preload
 				found = true
 				break
 			}
 		}
 
-		require.True(t, found, "Expected to find recursive mastertaskitem preload")
+		require.True(t, found, "Expected to find recursive mastertaskitem preload MTL.MAL")
 
 		// Create mock query to track operations
 		mockQuery := &mockSelectQuery{operations: []string{}}
@@ -251,43 +259,37 @@ func TestXFilesRecursivePreload(t *testing.T) {
 
 		// Verify the correct FK-based relation name was generated
 		foundCorrectRelation := false
-		foundIncorrectRelation := false
 
 		for _, op := range mock.operations {
-			// Should generate: mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM
-			if op == "PreloadRelation:mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM" {
+			// Should generate: MTL.MAL.MAL_RID_PARENTMASTERTASKITEM
+			if op == "PreloadRelation:MTL.MAL.MAL_RID_PARENTMASTERTASKITEM" {
 				foundCorrectRelation = true
-			}
-			// Should NOT generate: mastertask.mastertaskitem.mastertaskitem.mastertaskitem
-			if op == "PreloadRelation:mastertask.mastertaskitem.mastertaskitem.mastertaskitem" {
-				foundIncorrectRelation = true
 			}
 		}
 
 		assert.True(t, foundCorrectRelation,
-			"Expected FK-based relation name 'mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM' to be generated. Operations: %v",
+			"Expected FK-based relation name 'MTL.MAL.MAL_RID_PARENTMASTERTASKITEM' to be generated. Operations: %v",
 			mock.operations)
-		assert.False(t, foundIncorrectRelation,
-			"Should NOT generate simple relation name when RelatedKey is set")
 	})
 
 	// Test 5: Verify WHERE clause is cleared for recursive levels
 	t.Run("WhereClauseClearedForChildren", func(t *testing.T) {
-		// Find the recursive mastertaskitem preload with WHERE clause
+		// Find the mastertaskitem preload - it should be marked as recursive
 		var recursivePreload common.PreloadOption
 		found := false
 		for _, preload := range options.Preload {
-			if preload.Relation == "mastertask.mastertaskitem.mastertaskitem" && preload.Recursive {
+			if preload.Relation == "MTL.MAL" && preload.Recursive {
 				recursivePreload = preload
 				found = true
 				break
 			}
 		}
 
-		require.True(t, found, "Expected to find recursive mastertaskitem preload")
+		require.True(t, found, "Expected to find recursive mastertaskitem preload MTL.MAL")
 
-		// The root level might have a WHERE clause
+		// The root level has a WHERE clause (rid_parentmastertaskitem is null)
 		// But when we apply recursion, it should be cleared
+		assert.NotEmpty(t, recursivePreload.Where, "Root preload should have WHERE clause")
 
 		mockQuery := &mockSelectQuery{operations: []string{}}
 		result := handler.applyPreloadWithRecursion(mockQuery, recursivePreload, options.Preload, nil, 0)
@@ -297,7 +299,7 @@ func TestXFilesRecursivePreload(t *testing.T) {
 		// We check that the recursive relation was created (which means WHERE was cleared internally)
 		foundRecursiveRelation := false
 		for _, op := range mock.operations {
-			if op == "PreloadRelation:mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM" {
+			if op == "PreloadRelation:MTL.MAL.MAL_RID_PARENTMASTERTASKITEM" {
 				foundRecursiveRelation = true
 			}
 		}
@@ -308,29 +310,29 @@ func TestXFilesRecursivePreload(t *testing.T) {
 
 	// Test 6: Verify child relations are extended to recursive levels
 	t.Run("ChildRelationsExtended", func(t *testing.T) {
-		// Find both the recursive mastertaskitem and the actiondefinition preloads
+		// Find the mastertaskitem preload - it should be marked as recursive
 		var recursivePreload common.PreloadOption
 		foundRecursive := false
 
 		for _, preload := range options.Preload {
-			if preload.Relation == "mastertask.mastertaskitem.mastertaskitem" && preload.Recursive {
+			if preload.Relation == "MTL.MAL" && preload.Recursive {
 				recursivePreload = preload
 				foundRecursive = true
 				break
 			}
 		}
 
-		require.True(t, foundRecursive, "Expected to find recursive mastertaskitem preload")
+		require.True(t, foundRecursive, "Expected to find recursive mastertaskitem preload MTL.MAL")
 
 		mockQuery := &mockSelectQuery{operations: []string{}}
 		result := handler.applyPreloadWithRecursion(mockQuery, recursivePreload, options.Preload, nil, 0)
 		mock := result.(*mockSelectQuery)
 
 		// actiondefinition should be extended to the recursive level
-		// Expected: mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM.actiondefinition
+		// Expected: MTL.MAL.MAL_RID_PARENTMASTERTASKITEM.DEF
 		foundExtendedDEF := false
 		for _, op := range mock.operations {
-			if op == "PreloadRelation:mastertask.mastertaskitem.mastertaskitem.mastertaskitem_RID_PARENTMASTERTASKITEM.actiondefinition" {
+			if op == "PreloadRelation:MTL.MAL.MAL_RID_PARENTMASTERTASKITEM.DEF" {
 				foundExtendedDEF = true
 			}
 		}

@@ -48,7 +48,8 @@ type ExtendedRequestOptions struct {
 	AtomicTransaction bool
 
 	// X-Files configuration - comprehensive query options as a single JSON object
-	XFiles *XFiles
+	XFiles        *XFiles
+	XFilesPresent bool // Flag to indicate if X-Files header was provided
 }
 
 // ExpandOption represents a relation expansion configuration
@@ -274,7 +275,8 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 	}
 
 	// Resolve relation names (convert table names to field names) if model is provided
-	if model != nil {
+	// Skip resolution if X-Files header was provided, as XFiles uses Prefix which already contains the correct field names
+	if model != nil && !options.XFilesPresent {
 		h.resolveRelationNamesInOptions(&options, model)
 	}
 
@@ -693,6 +695,7 @@ func (h *Handler) parseXFiles(options *ExtendedRequestOptions, value string) {
 
 	// Store the original XFiles for reference
 	options.XFiles = &xfiles
+	options.XFilesPresent = true // Mark that X-Files header was provided
 
 	// Map XFiles fields to ExtendedRequestOptions
 
@@ -984,11 +987,33 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		return
 	}
 
-	// Store the table name as-is for now - it will be resolved to field name later
-	// when we have the model instance available
-	relationPath := xfile.TableName
+	// Use the Prefix (e.g., "MAL") as the relation name, which matches the Go struct field name
+	// Fall back to TableName if Prefix is not specified
+	relationName := xfile.Prefix
+	if relationName == "" {
+		relationName = xfile.TableName
+	}
+
+	// SPECIAL CASE: For recursive child tables, generate FK-based relation name
+	// Example: If prefix is "MAL" and relatedkey is "rid_parentmastertaskitem",
+	// the actual struct field is "MAL_RID_PARENTMASTERTASKITEM", not "MAL"
+	if xfile.Recursive && xfile.RelatedKey != "" && basePath != "" {
+		// Check if this is a self-referencing recursive relation (same table as parent)
+		// by comparing the last part of basePath with the current prefix
+		basePathParts := strings.Split(basePath, ".")
+		lastPrefix := basePathParts[len(basePathParts)-1]
+
+		if lastPrefix == relationName {
+			// This is a recursive self-reference, use FK-based name
+			fkUpper := strings.ToUpper(xfile.RelatedKey)
+			relationName = relationName + "_" + fkUpper
+			logger.Debug("X-Files: Generated FK-based relation name for recursive table: %s", relationName)
+		}
+	}
+
+	relationPath := relationName
 	if basePath != "" {
-		relationPath = basePath + "." + xfile.TableName
+		relationPath = basePath + "." + relationName
 	}
 
 	logger.Debug("X-Files: Adding preload for relation: %s", relationPath)
@@ -996,6 +1021,7 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	// Create PreloadOption from XFiles configuration
 	preloadOpt := common.PreloadOption{
 		Relation:    relationPath,
+		TableName:   xfile.TableName, // Store the actual database table name for WHERE clause processing
 		Columns:     xfile.Columns,
 		OmitColumns: xfile.OmitColumns,
 	}
@@ -1038,12 +1064,12 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	// Add WHERE clause if SQL conditions specified
 	whereConditions := make([]string, 0)
 	if len(xfile.SqlAnd) > 0 {
-		// Process each SQL condition: add table prefixes and sanitize
+		// Process each SQL condition
+		// Note: We don't add table prefixes here because they're only needed for JOINs
+		// The handler will add prefixes later if SqlJoins are present
 		for _, sqlCond := range xfile.SqlAnd {
-			// First add table prefixes to unqualified columns
-			prefixedCond := common.AddTablePrefixToColumns(sqlCond, xfile.TableName)
-			// Then sanitize the condition
-			sanitizedCond := common.SanitizeWhereClause(prefixedCond, xfile.TableName)
+			// Sanitize the condition without adding prefixes
+			sanitizedCond := common.SanitizeWhereClause(sqlCond, xfile.TableName)
 			if sanitizedCond != "" {
 				whereConditions = append(whereConditions, sanitizedCond)
 			}
@@ -1114,13 +1140,46 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		logger.Debug("X-Files: Added %d SQL joins to preload %s", len(preloadOpt.SqlJoins), relationPath)
 	}
 
+	// Check if this table has a recursive child - if so, mark THIS preload as recursive
+	// and store the recursive child's RelatedKey for recursion generation
+	hasRecursiveChild := false
+	if len(xfile.ChildTables) > 0 {
+		for _, childTable := range xfile.ChildTables {
+			if childTable.Recursive && childTable.TableName == xfile.TableName {
+				hasRecursiveChild = true
+				preloadOpt.Recursive = true
+				preloadOpt.RecursiveChildKey = childTable.RelatedKey
+				logger.Debug("X-Files: Detected recursive child for %s, marking parent as recursive (recursive FK: %s)",
+					relationPath, childTable.RelatedKey)
+				break
+			}
+		}
+	}
+
+	// Skip adding this preload if it's a recursive child (it will be handled by parent's Recursive flag)
+	if xfile.Recursive && basePath != "" {
+		logger.Debug("X-Files: Skipping recursive child preload: %s (will be handled by parent)", relationPath)
+		// Still process its parent/child tables for relations like DEF
+		h.processXFilesRelations(xfile, options, relationPath)
+		return
+	}
+
 	// Add the preload option
 	options.Preload = append(options.Preload, preloadOpt)
+	logger.Debug("X-Files: Added preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, RecursiveChildKey=%s, Where=%s",
+		len(options.Preload)-1, preloadOpt.Relation, preloadOpt.Recursive, preloadOpt.RelatedKey, preloadOpt.RecursiveChildKey, preloadOpt.Where)
 
 	// Recursively process nested ParentTables and ChildTables
-	if xfile.Recursive {
-		logger.Debug("X-Files: Recursive preload enabled for: %s", relationPath)
-		h.processXFilesRelations(xfile, options, relationPath)
+	// Skip processing child tables if we already detected and handled a recursive child
+	if hasRecursiveChild {
+		logger.Debug("X-Files: Skipping child table processing for %s (recursive child already handled)", relationPath)
+		// But still process parent tables
+		if len(xfile.ParentTables) > 0 {
+			logger.Debug("X-Files: Processing %d parent tables for %s", len(xfile.ParentTables), relationPath)
+			for _, parentTable := range xfile.ParentTables {
+				h.addXFilesPreload(parentTable, options, relationPath)
+			}
+		}
 	} else if len(xfile.ParentTables) > 0 || len(xfile.ChildTables) > 0 {
 		h.processXFilesRelations(xfile, options, relationPath)
 	}

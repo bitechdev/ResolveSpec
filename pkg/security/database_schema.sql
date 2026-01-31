@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at TIMESTAMP,
     -- OAuth2 fields
     remote_id VARCHAR(255), -- Provider's user ID (e.g., Google sub, GitHub id)
-    auth_provider VARCHAR(50) -- 'local', 'google', 'github', 'microsoft', 'facebook', etc.
+    auth_provider VARCHAR(50), -- 'local', 'google', 'github', 'microsoft', 'facebook', etc.
+    -- Two-Factor Authentication fields
+    totp_secret VARCHAR(255), -- Base32 encoded TOTP secret (encrypted recommended)
+    totp_enabled BOOLEAN DEFAULT false,
+    totp_enabled_at TIMESTAMP
 );
 
 -- User sessions table for DatabaseAuthenticator and OAuth2Authenticator
@@ -51,6 +55,19 @@ CREATE TABLE IF NOT EXISTS token_blacklist (
 
 CREATE INDEX IF NOT EXISTS idx_token ON token_blacklist(token);
 CREATE INDEX IF NOT EXISTS idx_blacklist_expires_at ON token_blacklist(expires_at);
+
+-- Two-Factor Authentication backup codes table
+CREATE TABLE IF NOT EXISTS user_totp_backup_codes (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash VARCHAR(64) NOT NULL, -- SHA-256 hash of backup code
+    used BOOLEAN DEFAULT false,
+    used_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_totp_user_id ON user_totp_backup_codes(user_id);
+CREATE INDEX IF NOT EXISTS idx_totp_code_hash ON user_totp_backup_codes(code_hash);
 
 -- Example: Seed admin user (password should be hashed with bcrypt)
 -- INSERT INTO users (username, email, password, user_level, roles, is_active)
@@ -849,3 +866,212 @@ $$ LANGUAGE plpgsql;
 
 -- Test get user
 -- SELECT * FROM resolvespec_oauth_getuser(1);
+
+
+-- ============================================
+-- Stored Procedures for Two-Factor Authentication
+-- ============================================
+
+-- 1. resolvespec_totp_enable - Enable 2FA for a user
+-- Input: p_user_id (integer), p_secret (text), p_backup_codes (jsonb array)
+-- Output: p_success (bool), p_error (text)
+CREATE OR REPLACE FUNCTION resolvespec_totp_enable(
+    p_user_id INTEGER,
+    p_secret TEXT,
+    p_backup_codes jsonb
+)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+DECLARE
+    v_code TEXT;
+    v_code_hash TEXT;
+BEGIN
+    -- Update user record with TOTP secret
+    UPDATE users
+    SET totp_secret = p_secret,
+        totp_enabled = true,
+        totp_enabled_at = CURRENT_TIMESTAMP
+    WHERE id = p_user_id;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'User not found'::text;
+        RETURN;
+    END IF;
+
+    -- Delete old backup codes
+    DELETE FROM user_totp_backup_codes WHERE user_id = p_user_id;
+
+    -- Insert new backup codes
+    FOR i IN 0..jsonb_array_length(p_backup_codes)-1 LOOP
+        v_code_hash := p_backup_codes->>i;
+        INSERT INTO user_totp_backup_codes (user_id, code_hash)
+        VALUES (p_user_id, v_code_hash);
+    END LOOP;
+
+    RETURN QUERY SELECT true, NULL::text;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. resolvespec_totp_disable - Disable 2FA for a user
+-- Input: p_user_id (integer)
+-- Output: p_success (bool), p_error (text)
+CREATE OR REPLACE FUNCTION resolvespec_totp_disable(p_user_id INTEGER)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+BEGIN
+    -- Clear TOTP secret and disable 2FA
+    UPDATE users
+    SET totp_secret = NULL,
+        totp_enabled = false
+    WHERE id = p_user_id;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'User not found'::text;
+        RETURN;
+    END IF;
+
+    -- Delete all backup codes
+    DELETE FROM user_totp_backup_codes WHERE user_id = p_user_id;
+
+    RETURN QUERY SELECT true, NULL::text;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. resolvespec_totp_get_status - Check if user has 2FA enabled
+-- Input: p_user_id (integer)
+-- Output: p_success (bool), p_error (text), p_enabled (bool)
+CREATE OR REPLACE FUNCTION resolvespec_totp_get_status(p_user_id INTEGER)
+RETURNS TABLE(p_success boolean, p_error text, p_enabled boolean) AS $$
+DECLARE
+    v_enabled BOOLEAN;
+BEGIN
+    SELECT totp_enabled
+    INTO v_enabled
+    FROM users
+    WHERE id = p_user_id;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'User not found'::text, false;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT true, NULL::text, COALESCE(v_enabled, false);
+END;
+$$ LANGUAGE plpgsql;
+
+-- 4. resolvespec_totp_get_secret - Get user's TOTP secret
+-- Input: p_user_id (integer)
+-- Output: p_success (bool), p_error (text), p_secret (text)
+CREATE OR REPLACE FUNCTION resolvespec_totp_get_secret(p_user_id INTEGER)
+RETURNS TABLE(p_success boolean, p_error text, p_secret text) AS $$
+DECLARE
+    v_secret TEXT;
+    v_enabled BOOLEAN;
+BEGIN
+    SELECT totp_secret, totp_enabled
+    INTO v_secret, v_enabled
+    FROM users
+    WHERE id = p_user_id;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'User not found'::text, NULL::text;
+        RETURN;
+    END IF;
+
+    IF NOT COALESCE(v_enabled, false) THEN
+        RETURN QUERY SELECT false, 'TOTP not enabled for user'::text, NULL::text;
+        RETURN;
+    END IF;
+
+    RETURN QUERY SELECT true, NULL::text, v_secret;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. resolvespec_totp_regenerate_backup_codes - Generate new backup codes
+-- Input: p_user_id (integer), p_backup_codes (jsonb array of hashed codes)
+-- Output: p_success (bool), p_error (text)
+CREATE OR REPLACE FUNCTION resolvespec_totp_regenerate_backup_codes(
+    p_user_id INTEGER,
+    p_backup_codes jsonb
+)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+DECLARE
+    v_code_hash TEXT;
+BEGIN
+    -- Verify user exists and has 2FA enabled
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id AND totp_enabled = true) THEN
+        RETURN QUERY SELECT false, 'User not found or TOTP not enabled'::text;
+        RETURN;
+    END IF;
+
+    -- Delete old backup codes
+    DELETE FROM user_totp_backup_codes WHERE user_id = p_user_id;
+
+    -- Insert new backup codes
+    FOR i IN 0..jsonb_array_length(p_backup_codes)-1 LOOP
+        v_code_hash := p_backup_codes->>i;
+        INSERT INTO user_totp_backup_codes (user_id, code_hash)
+        VALUES (p_user_id, v_code_hash);
+    END LOOP;
+
+    RETURN QUERY SELECT true, NULL::text;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6. resolvespec_totp_validate_backup_code - Validate and mark backup code as used
+-- Input: p_user_id (integer), p_code_hash (text)
+-- Output: p_success (bool), p_error (text), p_valid (bool)
+CREATE OR REPLACE FUNCTION resolvespec_totp_validate_backup_code(
+    p_user_id INTEGER,
+    p_code_hash TEXT
+)
+RETURNS TABLE(p_success boolean, p_error text, p_valid boolean) AS $$
+DECLARE
+    v_code_id INTEGER;
+    v_used BOOLEAN;
+BEGIN
+    -- Find the backup code
+    SELECT id, used
+    INTO v_code_id, v_used
+    FROM user_totp_backup_codes
+    WHERE user_id = p_user_id AND code_hash = p_code_hash;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT true, NULL::text, false;
+        RETURN;
+    END IF;
+
+    -- Check if already used
+    IF v_used THEN
+        RETURN QUERY SELECT false, 'Backup code already used'::text, false;
+        RETURN;
+    END IF;
+
+    -- Mark as used
+    UPDATE user_totp_backup_codes
+    SET used = true, used_at = CURRENT_TIMESTAMP
+    WHERE id = v_code_id;
+
+    RETURN QUERY SELECT true, NULL::text, true;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- Example: Test TOTP stored procedures
+-- ============================================
+
+-- Enable 2FA
+-- SELECT * FROM resolvespec_totp_enable(1, 'JBSWY3DPEHPK3PXP', '["abc123", "def456"]'::jsonb);
+
+-- Disable 2FA
+-- SELECT * FROM resolvespec_totp_disable(1);
+
+-- Get 2FA status
+-- SELECT * FROM resolvespec_totp_get_status(1);
+
+-- Get TOTP secret
+-- SELECT * FROM resolvespec_totp_get_secret(1);
+
+-- Regenerate backup codes
+-- SELECT * FROM resolvespec_totp_regenerate_backup_codes(1, '["new123", "new456"]'::jsonb);
+
+-- Validate backup code
+-- SELECT * FROM resolvespec_totp_validate_backup_code(1, 'abc123');

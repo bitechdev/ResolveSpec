@@ -7,24 +7,26 @@ import (
 
 // UserContext holds authenticated user information
 type UserContext struct {
-	UserID     int            `json:"user_id"`
-	UserName   string         `json:"user_name"`
-	UserLevel  int            `json:"user_level"`
-	SessionID  string         `json:"session_id"`
-	SessionRID int64          `json:"session_rid"`
-	RemoteID   string         `json:"remote_id"`
-	Roles      []string       `json:"roles"`
-	Email      string         `json:"email"`
-	Claims     map[string]any `json:"claims"`
-	Meta       map[string]any `json:"meta"` // Additional metadata that can hold any JSON-serializable values
+	UserID           int            `json:"user_id"`
+	UserName         string         `json:"user_name"`
+	UserLevel        int            `json:"user_level"`
+	SessionID        string         `json:"session_id"`
+	SessionRID       int64          `json:"session_rid"`
+	RemoteID         string         `json:"remote_id"`
+	Roles            []string       `json:"roles"`
+	Email            string         `json:"email"`
+	Claims           map[string]any `json:"claims"`
+	Meta             map[string]any `json:"meta"`               // Additional metadata that can hold any JSON-serializable values
+	TwoFactorEnabled bool           `json:"two_factor_enabled"` // Indicates if 2FA is enabled for this user
 }
 
 // LoginRequest contains credentials for login
 type LoginRequest struct {
-	Username string         `json:"username"`
-	Password string         `json:"password"`
-	Claims   map[string]any `json:"claims"` // Additional login data
-	Meta     map[string]any `json:"meta"`   // Additional metadata to be set on user context
+	Username      string         `json:"username"`
+	Password      string         `json:"password"`
+	TwoFactorCode string         `json:"two_factor_code,omitempty"` // TOTP or backup code
+	Claims        map[string]any `json:"claims"`                    // Additional login data
+	Meta          map[string]any `json:"meta"`                      // Additional metadata to be set on user context
 }
 
 // RegisterRequest contains information for new user registration
@@ -40,11 +42,13 @@ type RegisterRequest struct {
 
 // LoginResponse contains the result of a login attempt
 type LoginResponse struct {
-	Token        string         `json:"token"`
-	RefreshToken string         `json:"refresh_token"`
-	User         *UserContext   `json:"user"`
-	ExpiresIn    int64          `json:"expires_in"` // Token expiration in seconds
-	Meta         map[string]any `json:"meta"`       // Additional metadata to be set on user context
+	Token              string           `json:"token"`
+	RefreshToken       string           `json:"refresh_token"`
+	User               *UserContext     `json:"user"`
+	ExpiresIn          int64            `json:"expires_in"`                 // Token expiration in seconds
+	Requires2FA        bool             `json:"requires_2fa"`               // True if 2FA code is required
+	TwoFactorSetupData *TwoFactorSecret `json:"two_factor_setup,omitempty"` // Present when setting up 2FA
+	Meta               map[string]any   `json:"meta"`                       // Additional metadata to be set on user context
 }
 
 // LogoutRequest contains information for logout

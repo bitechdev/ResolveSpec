@@ -6,6 +6,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 
 - ✅ **Interface-Based** - Type-safe providers instead of callbacks
 - ✅ **Login/Logout Support** - Built-in authentication lifecycle
+- ✅ **Two-Factor Authentication (2FA)** - Optional TOTP support for enhanced security
 - ✅ **Composable** - Mix and match different providers
 - ✅ **No Global State** - Each handler has its own security configuration
 - ✅ **Testable** - Easy to mock and test
@@ -212,6 +213,23 @@ auth := security.NewJWTAuthenticator("secret-key", db)
 // Note: Requires JWT library installation for token signing/verification
 ```
 
+**TwoFactorAuthenticator** - Wraps any authenticator with TOTP 2FA:
+```go
+baseAuth := security.NewDatabaseAuthenticator(db)
+
+// Use in-memory provider (for testing)
+tfaProvider := security.NewMemoryTwoFactorProvider(nil)
+
+// Or use database provider (for production)
+tfaProvider := security.NewDatabaseTwoFactorProvider(db, nil)
+// Requires: users table with totp fields, user_totp_backup_codes table
+// Requires: resolvespec_totp_* stored procedures (see totp_database_schema.sql)
+
+auth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+// Supports: TOTP codes, backup codes, QR code generation
+// Compatible with Google Authenticator, Microsoft Authenticator, Authy, etc.
+```
+
 ### Column Security Providers
 
 **DatabaseColumnSecurityProvider** - Loads rules from database:
@@ -334,7 +352,182 @@ func handleRefresh(securityList *security.SecurityList) http.HandlerFunc {
             if err != nil {
                 http.Error(w, err.Error(), http.StatusUnauthorized)
                 return
-            }
+}
+```
+
+## Two-Factor Authentication (2FA)
+
+### Overview
+
+- **Optional per-user** - Enable/disable 2FA individually
+- **TOTP standard** - Compatible with Google Authenticator, Microsoft Authenticator, Authy, 1Password, etc.
+- **Configurable** - SHA1/SHA256/SHA512, 6/8 digits, custom time periods
+- **Backup codes** - One-time recovery codes with secure hashing
+- **Clock skew** - Handles time differences between client/server
+
+### Setup
+
+```go
+// 1. Wrap existing authenticator with 2FA support
+baseAuth := security.NewDatabaseAuthenticator(db)
+tfaProvider := security.NewMemoryTwoFactorProvider(nil) // Use custom DB implementation in production
+tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+
+// 2. Use as normal authenticator
+provider := security.NewCompositeSecurityProvider(tfaAuth, colSec, rowSec)
+securityList := security.NewSecurityList(provider)
+```
+
+### Enable 2FA for User
+
+```go
+// 1. Initiate 2FA setup
+secret, err := tfaAuth.Setup2FA(userID, "MyApp", "user@example.com")
+// Returns: secret.Secret, secret.QRCodeURL, secret.BackupCodes
+
+// 2. User scans QR code with authenticator app
+// Display secret.QRCodeURL as QR code image
+
+// 3. User enters verification code from app
+code := "123456" // From authenticator app
+err = tfaAuth.Enable2FA(userID, secret.Secret, code)
+// 2FA is now enabled for this user
+
+// 4. Store backup codes securely and show to user once
+// Display: secret.BackupCodes (10 codes)
+```
+
+### Login Flow with 2FA
+
+```go
+// 1. User provides credentials
+req := security.LoginRequest{
+    Username: "user@example.com",
+    Password: "password",
+}
+
+resp, err := tfaAuth.Login(ctx, req)
+
+// 2. Check if 2FA required
+if resp.Requires2FA {
+    // Prompt user for 2FA code
+    code := getUserInput() // From authenticator app or backup code
+    
+    // 3. Login again with 2FA code
+    req.TwoFactorCode = code
+    resp, err = tfaAuth.Login(ctx, req)
+    
+    // 4. Success - token is returned
+    token := resp.Token
+}
+```
+
+### Manage 2FA
+
+```go
+// Disable 2FA
+err := tfaAuth.Disable2FA(userID)
+
+// Regenerate backup codes
+newCodes, err := tfaAuth.RegenerateBackupCodes(userID, 10)
+
+// Check status
+has2FA, err := tfaProvider.Get2FAStatus(userID)
+```
+
+### Custom 2FA Storage
+
+**Option 1: Use DatabaseTwoFactorProvider (Recommended)**
+
+```go
+// Uses PostgreSQL stored procedures for all operations
+db := setupDatabase()
+
+// Run migrations from totp_database_schema.sql
+// - Add totp_secret, totp_enabled, totp_enabled_at to users table
+// - Create user_totp_backup_codes table
+// - Create resolvespec_totp_* stored procedures
+
+tfaProvider := security.NewDatabaseTwoFactorProvider(db, nil)
+tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+```
+
+**Option 2: Implement Custom Provider**
+
+Implement `TwoFactorAuthProvider` for custom storage:
+
+```go
+type DBTwoFactorProvider struct {
+    db *gorm.DB
+}
+
+func (p *DBTwoFactorProvider) Enable2FA(userID int, secret string, backupCodes []string) error {
+    // Store secret and hashed backup codes in database
+    return p.db.Exec("UPDATE users SET totp_secret = ?, backup_codes = ? WHERE id = ?", 
+        secret, hashCodes(backupCodes), userID).Error
+}
+
+func (p *DBTwoFactorProvider) Get2FASecret(userID int) (string, error) {
+    var secret string
+    err := p.db.Raw("SELECT totp_secret FROM users WHERE id = ?", userID).Scan(&secret).Error
+    return secret, err
+}
+
+// Implement remaining methods: Generate2FASecret, Validate2FACode, Disable2FA,
+// Get2FAStatus, GenerateBackupCodes, ValidateBackupCode
+```
+
+### Configuration
+
+```go
+config := &security.TwoFactorConfig{
+    Algorithm:  "SHA256",  // SHA1, SHA256, SHA512
+    Digits:     8,         // 6 or 8
+    Period:     30,        // Seconds per code
+    SkewWindow: 2,         // Accept codes ±2 periods
+}
+
+totp := security.NewTOTPGenerator(config)
+tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, config)
+```
+
+### API Response Structure
+
+```go
+// LoginResponse with 2FA
+type LoginResponse struct {
+    Token              string              `json:"token"`
+    Requires2FA        bool                `json:"requires_2fa"`
+    TwoFactorSetupData *TwoFactorSecret    `json:"two_factor_setup,omitempty"`
+    User               *UserContext        `json:"user"`
+}
+
+// TwoFactorSecret for setup
+type TwoFactorSecret struct {
+    Secret      string   `json:"secret"`         // Base32 encoded
+    QRCodeURL   string   `json:"qr_code_url"`    // otpauth://totp/...
+    BackupCodes []string `json:"backup_codes"`   // 10 recovery codes
+}
+
+// UserContext includes 2FA status
+type UserContext struct {
+    UserID           int    `json:"user_id"`
+    TwoFactorEnabled bool   `json:"two_factor_enabled"`
+    // ... other fields
+}
+```
+
+### Security Best Practices
+
+- **Store secrets encrypted** - Never store TOTP secrets in plain text
+- **Hash backup codes** - Use SHA-256 before storing
+- **Rate limit** - Limit 2FA verification attempts
+- **Require password** - Always verify password before disabling 2FA
+- **Show backup codes once** - Display only during setup/regeneration
+- **Log 2FA events** - Track enable/disable/failed attempts
+- **Mark codes as used** - Backup codes are single-use only
+
+
             json.NewEncoder(w).Encode(resp)
         } else {
             http.Error(w, "Refresh not supported", http.StatusNotImplemented)

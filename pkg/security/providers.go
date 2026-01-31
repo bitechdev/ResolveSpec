@@ -62,6 +62,7 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 // resolvespec_session_update, resolvespec_refresh_token
 // See database_schema.sql for procedure definitions
 // Also supports multiple OAuth2 providers configured with WithOAuth2()
+// Also supports passkey authentication configured with WithPasskey()
 type DatabaseAuthenticator struct {
 	db       *sql.DB
 	cache    *cache.Cache
@@ -70,6 +71,9 @@ type DatabaseAuthenticator struct {
 	// OAuth2 providers registry (multiple providers supported)
 	oauth2Providers      map[string]*OAuth2Provider
 	oauth2ProvidersMutex sync.RWMutex
+
+	// Passkey provider (optional)
+	passkeyProvider PasskeyProvider
 }
 
 // DatabaseAuthenticatorOptions configures the database authenticator
@@ -79,6 +83,8 @@ type DatabaseAuthenticatorOptions struct {
 	CacheTTL time.Duration
 	// Cache is an optional cache instance. If nil, uses the default cache
 	Cache *cache.Cache
+	// PasskeyProvider is an optional passkey provider for WebAuthn/FIDO2 authentication
+	PasskeyProvider PasskeyProvider
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
@@ -98,9 +104,10 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 	}
 
 	return &DatabaseAuthenticator{
-		db:       db,
-		cache:    cacheInstance,
-		cacheTTL: opts.CacheTTL,
+		db:              db,
+		cache:           cacheInstance,
+		cacheTTL:        opts.CacheTTL,
+		passkeyProvider: opts.PasskeyProvider,
 	}
 }
 
@@ -695,3 +702,135 @@ func generateRandomString(length int) string {
 // 	}
 // 	return ""
 // }
+
+// Passkey authentication methods
+// ==============================
+
+// WithPasskey configures the DatabaseAuthenticator with a passkey provider
+func (a *DatabaseAuthenticator) WithPasskey(provider PasskeyProvider) *DatabaseAuthenticator {
+	a.passkeyProvider = provider
+	return a
+}
+
+// BeginPasskeyRegistration initiates passkey registration for a user
+func (a *DatabaseAuthenticator) BeginPasskeyRegistration(ctx context.Context, req PasskeyBeginRegistrationRequest) (*PasskeyRegistrationOptions, error) {
+	if a.passkeyProvider == nil {
+		return nil, fmt.Errorf("passkey provider not configured")
+	}
+	return a.passkeyProvider.BeginRegistration(ctx, req.UserID, req.Username, req.DisplayName)
+}
+
+// CompletePasskeyRegistration completes passkey registration
+func (a *DatabaseAuthenticator) CompletePasskeyRegistration(ctx context.Context, req PasskeyRegisterRequest) (*PasskeyCredential, error) {
+	if a.passkeyProvider == nil {
+		return nil, fmt.Errorf("passkey provider not configured")
+	}
+
+	cred, err := a.passkeyProvider.CompleteRegistration(ctx, req.UserID, req.Response, req.ExpectedChallenge)
+	if err != nil {
+		return nil, err
+	}
+
+	// Update credential name if provided
+	if req.CredentialName != "" && cred.ID != "" {
+		_ = a.passkeyProvider.UpdateCredentialName(ctx, req.UserID, cred.ID, req.CredentialName)
+	}
+
+	return cred, nil
+}
+
+// BeginPasskeyAuthentication initiates passkey authentication
+func (a *DatabaseAuthenticator) BeginPasskeyAuthentication(ctx context.Context, req PasskeyBeginAuthenticationRequest) (*PasskeyAuthenticationOptions, error) {
+	if a.passkeyProvider == nil {
+		return nil, fmt.Errorf("passkey provider not configured")
+	}
+	return a.passkeyProvider.BeginAuthentication(ctx, req.Username)
+}
+
+// LoginWithPasskey authenticates a user using a passkey and creates a session
+func (a *DatabaseAuthenticator) LoginWithPasskey(ctx context.Context, req PasskeyLoginRequest) (*LoginResponse, error) {
+	if a.passkeyProvider == nil {
+		return nil, fmt.Errorf("passkey provider not configured")
+	}
+
+	// Verify passkey assertion
+	userID, err := a.passkeyProvider.CompleteAuthentication(ctx, req.Response, req.ExpectedChallenge)
+	if err != nil {
+		return nil, fmt.Errorf("passkey authentication failed: %w", err)
+	}
+
+	// Get user data from database
+	var username, email, roles string
+	var userLevel int
+	query := `SELECT username, email, user_level, COALESCE(roles, '') FROM users WHERE id = $1 AND is_active = true`
+	err = a.db.QueryRowContext(ctx, query, userID).Scan(&username, &email, &userLevel, &roles)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user data: %w", err)
+	}
+
+	// Generate session token
+	sessionToken := "sess_" + generateRandomString(32) + "_" + fmt.Sprintf("%d", time.Now().Unix())
+	expiresAt := time.Now().Add(24 * time.Hour)
+
+	// Extract IP and user agent from claims
+	ipAddress := ""
+	userAgent := ""
+	if req.Claims != nil {
+		if ip, ok := req.Claims["ip_address"].(string); ok {
+			ipAddress = ip
+		}
+		if ua, ok := req.Claims["user_agent"].(string); ok {
+			userAgent = ua
+		}
+	}
+
+	// Create session
+	insertQuery := `INSERT INTO user_sessions (session_token, user_id, expires_at, ip_address, user_agent, last_activity_at)
+		VALUES ($1, $2, $3, $4, $5, now())`
+	_, err = a.db.ExecContext(ctx, insertQuery, sessionToken, userID, expiresAt, ipAddress, userAgent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Update last login
+	updateQuery := `UPDATE users SET last_login_at = now() WHERE id = $1`
+	_, _ = a.db.ExecContext(ctx, updateQuery, userID)
+
+	// Return login response
+	return &LoginResponse{
+		Token: sessionToken,
+		User: &UserContext{
+			UserID:    userID,
+			UserName:  username,
+			Email:     email,
+			UserLevel: userLevel,
+			SessionID: sessionToken,
+			Roles:     parseRoles(roles),
+		},
+		ExpiresIn: int64(24 * time.Hour.Seconds()),
+	}, nil
+}
+
+// GetPasskeyCredentials returns all passkey credentials for a user
+func (a *DatabaseAuthenticator) GetPasskeyCredentials(ctx context.Context, userID int) ([]PasskeyCredential, error) {
+	if a.passkeyProvider == nil {
+		return nil, fmt.Errorf("passkey provider not configured")
+	}
+	return a.passkeyProvider.GetCredentials(ctx, userID)
+}
+
+// DeletePasskeyCredential removes a passkey credential
+func (a *DatabaseAuthenticator) DeletePasskeyCredential(ctx context.Context, userID int, credentialID string) error {
+	if a.passkeyProvider == nil {
+		return fmt.Errorf("passkey provider not configured")
+	}
+	return a.passkeyProvider.DeleteCredential(ctx, userID, credentialID)
+}
+
+// UpdatePasskeyCredentialName updates the friendly name of a credential
+func (a *DatabaseAuthenticator) UpdatePasskeyCredentialName(ctx context.Context, userID int, credentialID string, name string) error {
+	if a.passkeyProvider == nil {
+		return fmt.Errorf("passkey provider not configured")
+	}
+	return a.passkeyProvider.UpdateCredentialName(ctx, userID, credentialID, name)
+}

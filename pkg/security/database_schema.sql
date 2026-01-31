@@ -1075,3 +1075,325 @@ $$ LANGUAGE plpgsql;
 
 -- Validate backup code
 -- SELECT * FROM resolvespec_totp_validate_backup_code(1, 'abc123');
+
+-- ============================================
+-- Passkey/WebAuthn Credentials Table
+-- ============================================
+
+-- Passkey credentials table for WebAuthn/FIDO2 authentication
+CREATE TABLE IF NOT EXISTS user_passkey_credentials (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    credential_id BYTEA NOT NULL UNIQUE, -- Raw credential ID from authenticator
+    public_key BYTEA NOT NULL, -- COSE public key
+    attestation_type VARCHAR(50) DEFAULT 'none', -- none, indirect, direct
+    aaguid BYTEA, -- Authenticator AAGUID
+    sign_count INTEGER DEFAULT 0, -- Signature counter for clone detection
+    clone_warning BOOLEAN DEFAULT false, -- True if cloning detected
+    transports TEXT[], -- Array of transports: usb, nfc, ble, internal
+    backup_eligible BOOLEAN DEFAULT false, -- Credential can be backed up
+    backup_state BOOLEAN DEFAULT false, -- Credential is currently backed up
+    name VARCHAR(255), -- User-friendly name for the credential
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_passkey_user_id ON user_passkey_credentials(user_id);
+CREATE INDEX IF NOT EXISTS idx_passkey_credential_id ON user_passkey_credentials(credential_id);
+
+-- ============================================
+-- Stored Procedures for Passkey Authentication
+-- ============================================
+
+-- 1. resolvespec_passkey_store_credential - Store a new passkey credential
+-- Input: p_credential (jsonb) {user_id: int, credential_id: bytea, public_key: bytea, attestation_type: string, aaguid: bytea, sign_count: int, transports: array, backup_eligible: bool, backup_state: bool, name: string}
+-- Output: p_success (bool), p_error (text), p_credential_id (int)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_store_credential(p_credential jsonb)
+RETURNS TABLE(p_success boolean, p_error text, p_credential_id integer) AS $$
+DECLARE
+    v_credential_id INTEGER;
+    v_user_id INTEGER;
+    v_cred_id BYTEA;
+    v_public_key BYTEA;
+    v_attestation_type TEXT;
+    v_aaguid BYTEA;
+    v_sign_count INTEGER;
+    v_transports TEXT[];
+    v_backup_eligible BOOLEAN;
+    v_backup_state BOOLEAN;
+    v_name TEXT;
+BEGIN
+    -- Extract credential data
+    v_user_id := (p_credential->>'user_id')::integer;
+    v_cred_id := decode(p_credential->>'credential_id', 'base64');
+    v_public_key := decode(p_credential->>'public_key', 'base64');
+    v_attestation_type := COALESCE(p_credential->>'attestation_type', 'none');
+    v_aaguid := decode(COALESCE(p_credential->>'aaguid', ''), 'base64');
+    v_sign_count := COALESCE((p_credential->>'sign_count')::integer, 0);
+    v_backup_eligible := COALESCE((p_credential->>'backup_eligible')::boolean, false);
+    v_backup_state := COALESCE((p_credential->>'backup_state')::boolean, false);
+    v_name := p_credential->>'name';
+
+    -- Convert transports array
+    IF p_credential->'transports' IS NOT NULL THEN
+        SELECT ARRAY(SELECT jsonb_array_elements_text(p_credential->'transports'))
+        INTO v_transports;
+    END IF;
+
+    -- Check if user exists
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = v_user_id) THEN
+        RETURN QUERY SELECT false, 'User not found'::text, NULL::integer;
+        RETURN;
+    END IF;
+
+    -- Insert credential
+    INSERT INTO user_passkey_credentials (
+        user_id, credential_id, public_key, attestation_type, aaguid,
+        sign_count, transports, backup_eligible, backup_state, name, created_at, last_used_at
+    )
+    VALUES (
+        v_user_id, v_cred_id, v_public_key, v_attestation_type, v_aaguid,
+        v_sign_count, v_transports, v_backup_eligible, v_backup_state, v_name, now(), now()
+    )
+    RETURNING id INTO v_credential_id;
+
+    RETURN QUERY SELECT true, NULL::text, v_credential_id;
+EXCEPTION
+    WHEN unique_violation THEN
+        RETURN QUERY SELECT false, 'Credential already exists'::text, NULL::integer;
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, NULL::integer;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. resolvespec_passkey_get_credential - Get credential by credential_id
+-- Input: p_credential_id (bytea)
+-- Output: p_success (bool), p_error (text), p_credential (jsonb)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_get_credential(p_credential_id bytea)
+RETURNS TABLE(p_success boolean, p_error text, p_credential jsonb) AS $$
+DECLARE
+    v_credential jsonb;
+BEGIN
+    SELECT jsonb_build_object(
+        'id', id,
+        'user_id', user_id,
+        'credential_id', encode(credential_id, 'base64'),
+        'public_key', encode(public_key, 'base64'),
+        'attestation_type', attestation_type,
+        'aaguid', encode(COALESCE(aaguid, ''::bytea), 'base64'),
+        'sign_count', sign_count,
+        'clone_warning', clone_warning,
+        'transports', COALESCE(to_jsonb(transports), '[]'::jsonb),
+        'backup_eligible', backup_eligible,
+        'backup_state', backup_state,
+        'name', name,
+        'created_at', created_at,
+        'last_used_at', last_used_at
+    )
+    INTO v_credential
+    FROM user_passkey_credentials
+    WHERE credential_id = p_credential_id;
+
+    IF v_credential IS NULL THEN
+        RETURN QUERY SELECT false, 'Credential not found'::text, NULL::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, NULL::text, v_credential;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. resolvespec_passkey_get_user_credentials - Get all credentials for a user
+-- Input: p_user_id (integer)
+-- Output: p_success (bool), p_error (text), p_credentials (jsonb array)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_get_user_credentials(p_user_id integer)
+RETURNS TABLE(p_success boolean, p_error text, p_credentials jsonb) AS $$
+DECLARE
+    v_credentials jsonb;
+BEGIN
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', id,
+            'user_id', user_id,
+            'credential_id', encode(credential_id, 'base64'),
+            'public_key', encode(public_key, 'base64'),
+            'attestation_type', attestation_type,
+            'aaguid', encode(COALESCE(aaguid, ''::bytea), 'base64'),
+            'sign_count', sign_count,
+            'clone_warning', clone_warning,
+            'transports', COALESCE(to_jsonb(transports), '[]'::jsonb),
+            'backup_eligible', backup_eligible,
+            'backup_state', backup_state,
+            'name', name,
+            'created_at', created_at,
+            'last_used_at', last_used_at
+        )
+    ), '[]'::jsonb)
+    INTO v_credentials
+    FROM user_passkey_credentials
+    WHERE user_id = p_user_id
+    ORDER BY created_at DESC;
+
+    RETURN QUERY SELECT true, NULL::text, v_credentials;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, '[]'::jsonb;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 4. resolvespec_passkey_update_counter - Update sign counter and check for cloning
+-- Input: p_credential_id (bytea), p_new_counter (integer)
+-- Output: p_success (bool), p_error (text), p_clone_warning (bool)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_update_counter(
+    p_credential_id bytea,
+    p_new_counter integer
+)
+RETURNS TABLE(p_success boolean, p_error text, p_clone_warning boolean) AS $$
+DECLARE
+    v_old_counter INTEGER;
+    v_clone_warning BOOLEAN := false;
+BEGIN
+    -- Get current counter
+    SELECT sign_count INTO v_old_counter
+    FROM user_passkey_credentials
+    WHERE credential_id = p_credential_id;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'Credential not found'::text, false;
+        RETURN;
+    END IF;
+
+    -- Check for cloning (counter should always increase)
+    IF p_new_counter <= v_old_counter THEN
+        v_clone_warning := true;
+        
+        -- Update clone warning flag
+        UPDATE user_passkey_credentials
+        SET clone_warning = true
+        WHERE credential_id = p_credential_id;
+    ELSE
+        -- Normal counter update
+        UPDATE user_passkey_credentials
+        SET sign_count = p_new_counter,
+            last_used_at = now()
+        WHERE credential_id = p_credential_id;
+    END IF;
+
+    RETURN QUERY SELECT true, NULL::text, v_clone_warning;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, false;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. resolvespec_passkey_delete_credential - Delete a passkey credential
+-- Input: p_user_id (integer), p_credential_id (bytea)
+-- Output: p_success (bool), p_error (text)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_delete_credential(
+    p_user_id integer,
+    p_credential_id bytea
+)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+DECLARE
+    v_deleted INTEGER;
+BEGIN
+    DELETE FROM user_passkey_credentials
+    WHERE user_id = p_user_id AND credential_id = p_credential_id;
+
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+
+    IF v_deleted = 0 THEN
+        RETURN QUERY SELECT false, 'Credential not found'::text;
+    ELSE
+        RETURN QUERY SELECT true, NULL::text;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 6. resolvespec_passkey_update_name - Update credential friendly name
+-- Input: p_user_id (integer), p_credential_id (bytea), p_name (text)
+-- Output: p_success (bool), p_error (text)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_update_name(
+    p_user_id integer,
+    p_credential_id bytea,
+    p_name text
+)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+DECLARE
+    v_updated INTEGER;
+BEGIN
+    UPDATE user_passkey_credentials
+    SET name = p_name
+    WHERE user_id = p_user_id AND credential_id = p_credential_id;
+
+    GET DIAGNOSTICS v_updated = ROW_COUNT;
+
+    IF v_updated = 0 THEN
+        RETURN QUERY SELECT false, 'Credential not found'::text;
+    ELSE
+        RETURN QUERY SELECT true, NULL::text;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 7. resolvespec_passkey_get_credentials_by_username - Get credentials for passkey authentication
+-- Input: p_username (text)
+-- Output: p_success (bool), p_error (text), p_user_id (int), p_credentials (jsonb array)
+CREATE OR REPLACE FUNCTION resolvespec_passkey_get_credentials_by_username(p_username text)
+RETURNS TABLE(p_success boolean, p_error text, p_user_id integer, p_credentials jsonb) AS $$
+DECLARE
+    v_user_id INTEGER;
+    v_credentials jsonb;
+BEGIN
+    -- Get user ID
+    SELECT id INTO v_user_id
+    FROM users
+    WHERE username = p_username AND is_active = true;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'User not found'::text, NULL::integer, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    -- Get user's credentials
+    SELECT COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'id', id,
+            'credential_id', encode(credential_id, 'base64'),
+            'transports', COALESCE(to_jsonb(transports), '[]'::jsonb)
+        )
+    ), '[]'::jsonb)
+    INTO v_credentials
+    FROM user_passkey_credentials
+    WHERE user_id = v_user_id;
+
+    RETURN QUERY SELECT true, NULL::text, v_user_id, v_credentials;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, NULL::integer, NULL::jsonb;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ============================================
+-- Example: Test Passkey stored procedures
+-- ============================================
+
+-- Store credential
+-- SELECT * FROM resolvespec_passkey_store_credential('{"user_id": 1, "credential_id": "YWJjZGVmMTIzNDU2", "public_key": "MIIBIjAN...", "attestation_type": "none", "sign_count": 0, "transports": ["internal"], "backup_eligible": true, "backup_state": false, "name": "My Phone"}'::jsonb);
+
+-- Get credential
+-- SELECT * FROM resolvespec_passkey_get_credential(decode('YWJjZGVmMTIzNDU2', 'base64'));
+
+-- Get user credentials
+-- SELECT * FROM resolvespec_passkey_get_user_credentials(1);
+
+-- Update counter
+-- SELECT * FROM resolvespec_passkey_update_counter(decode('YWJjZGVmMTIzNDU2', 'base64'), 1);
+
+-- Delete credential
+-- SELECT * FROM resolvespec_passkey_delete_credential(1, decode('YWJjZGVmMTIzNDU2', 'base64'));
+
+-- Update name
+-- SELECT * FROM resolvespec_passkey_update_name(1, decode('YWJjZGVmMTIzNDU2', 'base64'), 'New Name');
+
+-- Get credentials by username
+-- SELECT * FROM resolvespec_passkey_get_credentials_by_username('admin');

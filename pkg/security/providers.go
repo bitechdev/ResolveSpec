@@ -132,6 +132,41 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 	return &response, nil
 }
 
+// Register implements Registrable interface
+func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterRequest) (*LoginResponse, error) {
+	// Convert RegisterRequest to JSON
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal register request: %w", err)
+	}
+
+	// Call resolvespec_register stored procedure
+	var success bool
+	var errorMsg sql.NullString
+	var dataJSON sql.NullString
+
+	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_register($1::jsonb)`
+	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	if err != nil {
+		return nil, fmt.Errorf("register query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("registration failed")
+	}
+
+	// Parse response
+	var response LoginResponse
+	if err := json.Unmarshal([]byte(dataJSON.String), &response); err != nil {
+		return nil, fmt.Errorf("failed to parse register response: %w", err)
+	}
+
+	return &response, nil
+}
+
 func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
 	// Convert LogoutRequest to JSON
 	reqJSON, err := json.Marshal(req)

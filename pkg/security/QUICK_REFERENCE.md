@@ -30,6 +30,7 @@ router.Use(security.SetSecurityMiddleware(securityList))
 ```go
 // DatabaseAuthenticator uses these stored procedures:
 resolvespec_login(jsonb)              // Login with credentials
+resolvespec_register(jsonb)           // Register new user
 resolvespec_logout(jsonb)             // Invalidate session
 resolvespec_session(text, text)       // Validate session token
 resolvespec_session_update(text, jsonb) // Update activity timestamp
@@ -502,10 +503,31 @@ func (p *MyProvider) GetColumnSecurity(ctx context.Context, userID int, schema, 
 
 ---
 
-## Login/Logout Endpoints
+## Login/Logout/Register Endpoints
 
 ```go
 func SetupAuthRoutes(router *mux.Router, securityList *security.SecurityList) {
+    // Register
+    router.HandleFunc("/auth/register", func(w http.ResponseWriter, r *http.Request) {
+        var req security.RegisterRequest
+        json.NewDecoder(r.Body).Decode(&req)
+
+        // Check if provider supports registration
+        registrable, ok := securityList.Provider().(security.Registrable)
+        if !ok {
+            http.Error(w, "Registration not supported", http.StatusNotImplemented)
+            return
+        }
+
+        resp, err := registrable.Register(r.Context(), req)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusBadRequest)
+            return
+        }
+
+        json.NewEncoder(w).Encode(resp)
+    }).Methods("POST")
+
     // Login
     router.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
         var req security.LoginRequest

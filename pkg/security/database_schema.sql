@@ -396,9 +396,112 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 10. resolvespec_register - Registers a new user and creates session
+-- Input: RegisterRequest as jsonb {username: string, password: string, email: string, user_level: int, roles: array, claims: object, meta: object}
+-- Output: p_success (bool), p_error (text), p_data (LoginResponse as jsonb)
+CREATE OR REPLACE FUNCTION resolvespec_register(p_request jsonb)
+RETURNS TABLE(p_success boolean, p_error text, p_data jsonb) AS $$
+DECLARE
+    v_user_id INTEGER;
+    v_username TEXT;
+    v_email TEXT;
+    v_password TEXT;
+    v_user_level INTEGER;
+    v_roles TEXT;
+    v_session_token TEXT;
+    v_expires_at TIMESTAMP;
+    v_ip_address TEXT;
+    v_user_agent TEXT;
+    v_roles_array TEXT[];
+BEGIN
+    -- Extract registration request fields
+    v_username := p_request->>'username';
+    v_email := p_request->>'email';
+    v_password := p_request->>'password';
+    v_user_level := COALESCE((p_request->>'user_level')::integer, 0);
+    v_ip_address := p_request->'claims'->>'ip_address';
+    v_user_agent := p_request->'claims'->>'user_agent';
+    
+    -- Convert roles array from JSON to comma-separated string
+    SELECT array_to_string(ARRAY(SELECT jsonb_array_elements_text(p_request->'roles')), ',')
+    INTO v_roles;
+
+    -- Validate required fields
+    IF v_username IS NULL OR v_username = '' THEN
+        RETURN QUERY SELECT false, 'Username is required'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    IF v_email IS NULL OR v_email = '' THEN
+        RETURN QUERY SELECT false, 'Email is required'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    IF v_password IS NULL OR v_password = '' THEN
+        RETURN QUERY SELECT false, 'Password is required'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    -- Check if username already exists
+    IF EXISTS (SELECT 1 FROM users WHERE username = v_username) THEN
+        RETURN QUERY SELECT false, 'Username already exists'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    -- Check if email already exists
+    IF EXISTS (SELECT 1 FROM users WHERE email = v_email) THEN
+        RETURN QUERY SELECT false, 'Email already exists'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    -- TODO: Hash password using pgcrypto extension
+    -- Enable pgcrypto: CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    -- v_password := crypt(v_password, gen_salt('bf'));
+
+    -- Create new user
+    INSERT INTO users (username, email, password, user_level, roles, is_active, created_at, updated_at)
+    VALUES (v_username, v_email, v_password, v_user_level, v_roles, true, now(), now())
+    RETURNING id INTO v_user_id;
+
+    -- Generate session token
+    v_session_token := 'sess_' || encode(gen_random_bytes(32), 'hex') || '_' || extract(epoch from now())::bigint::text;
+    v_expires_at := now() + interval '24 hours';
+
+    -- Create session
+    INSERT INTO user_sessions (session_token, user_id, expires_at, ip_address, user_agent, last_activity_at)
+    VALUES (v_session_token, v_user_id, v_expires_at, v_ip_address, v_user_agent, now());
+
+    -- Update last login time
+    UPDATE users SET last_login_at = now() WHERE id = v_user_id;
+
+    -- Return success with LoginResponse
+    RETURN QUERY SELECT
+        true,
+        NULL::text,
+        jsonb_build_object(
+            'token', v_session_token,
+            'user', jsonb_build_object(
+                'user_id', v_user_id,
+                'user_name', v_username,
+                'email', v_email,
+                'user_level', v_user_level,
+                'roles', string_to_array(COALESCE(v_roles, ''), ','),
+                'session_id', v_session_token
+            ),
+            'expires_in', 86400 -- 24 hours in seconds
+        );
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, NULL::jsonb;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ============================================
 -- Example: Test stored procedures
 -- ============================================
+
+-- Test register
+-- SELECT * FROM resolvespec_register('{"username": "newuser", "password": "test123", "email": "newuser@example.com", "user_level": 1, "roles": ["user"], "claims": {"ip_address": "127.0.0.1", "user_agent": "test"}}'::jsonb);
 
 -- Test login
 -- SELECT * FROM resolvespec_login('{"username": "admin", "password": "test123", "claims": {"ip_address": "127.0.0.1", "user_agent": "test"}}'::jsonb);

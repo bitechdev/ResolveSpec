@@ -635,6 +635,94 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			t.Errorf("unfulfilled expectations: %v", err)
 		}
 	})
+
+	t.Run("successful registration", func(t *testing.T) {
+		ctx := context.Background()
+		req := RegisterRequest{
+			Username:  "newuser",
+			Password:  "password123",
+			Email:     "newuser@example.com",
+			UserLevel: 1,
+			Roles:     []string{"user"},
+		}
+
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(true, nil, `{"token":"abc123","user":{"user_id":1,"user_name":"newuser","email":"newuser@example.com"},"expires_in":86400}`)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_register`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(rows)
+
+		resp, err := auth.Register(ctx, req)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+
+		if resp.Token != "abc123" {
+			t.Errorf("expected token abc123, got %s", resp.Token)
+		}
+		if resp.User.UserName != "newuser" {
+			t.Errorf("expected username newuser, got %s", resp.User.UserName)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("registration with duplicate username", func(t *testing.T) {
+		ctx := context.Background()
+		req := RegisterRequest{
+			Username:  "existinguser",
+			Password:  "password123",
+			Email:     "new@example.com",
+			UserLevel: 1,
+			Roles:     []string{"user"},
+		}
+
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(false, "Username already exists", nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_register`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(rows)
+
+		_, err := auth.Register(ctx, req)
+		if err == nil {
+			t.Fatal("expected error for duplicate username")
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+
+	t.Run("registration with duplicate email", func(t *testing.T) {
+		ctx := context.Background()
+		req := RegisterRequest{
+			Username:  "newuser2",
+			Password:  "password123",
+			Email:     "existing@example.com",
+			UserLevel: 1,
+			Roles:     []string{"user"},
+		}
+
+		rows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(false, "Email already exists", nil)
+
+		mock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_register`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(rows)
+
+		_, err := auth.Register(ctx, req)
+		if err == nil {
+			t.Fatal("expected error for duplicate email")
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
 }
 
 // Test DatabaseAuthenticator RefreshToken

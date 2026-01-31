@@ -27,6 +27,17 @@ type LoginRequest struct {
 	Meta     map[string]any `json:"meta"`   // Additional metadata to be set on user context
 }
 
+// RegisterRequest contains information for new user registration
+type RegisterRequest struct {
+	Username  string         `json:"username"`
+	Password  string         `json:"password"`
+	Email     string         `json:"email"`
+	UserLevel int            `json:"user_level"`
+	Roles     []string       `json:"roles"`
+	Claims    map[string]any `json:"claims"` // Additional registration data
+	Meta      map[string]any `json:"meta"`   // Additional metadata
+}
+
 // LoginResponse contains the result of a login attempt
 type LoginResponse struct {
 	Token        string         `json:"token"`
@@ -53,6 +64,12 @@ type Authenticator interface {
 	// Authenticate extracts and validates user from HTTP request
 	// Returns UserContext or error if authentication fails
 	Authenticate(r *http.Request) (*UserContext, error)
+}
+
+// Registrable allows providers to support user registration
+type Registrable interface {
+	// Register creates a new user account
+	Register(ctx context.Context, req RegisterRequest) (*LoginResponse, error)
 }
 
 // ColumnSecurityProvider handles column-level security (masking/hiding)

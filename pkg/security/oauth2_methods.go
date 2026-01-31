@@ -570,6 +570,7 @@ func NewFacebookAuthenticator(clientID, clientSecret, redirectURL string, db *sq
 func NewMultiProviderAuthenticator(db *sql.DB, configs map[string]OAuth2Config) *DatabaseAuthenticator {
 	auth := NewDatabaseAuthenticator(db)
 
+	//nolint:gocritic // OAuth2Config is copied but kept for API simplicity
 	for _, cfg := range configs {
 		auth.WithOAuth2(cfg)
 	}

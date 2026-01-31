@@ -61,11 +61,11 @@ func (p *DatabasePasskeyProvider) BeginRegistration(ctx context.Context, userID 
 	}
 
 	excludeCredentials := make([]PasskeyCredentialDescriptor, 0, len(credentials))
-	for _, cred := range credentials {
+	for i := range credentials {
 		excludeCredentials = append(excludeCredentials, PasskeyCredentialDescriptor{
 			Type:       "public-key",
-			ID:         cred.CredentialID,
-			Transports: cred.Transports,
+			ID:         credentials[i].CredentialID,
+			Transports: credentials[i].Transports,
 		})
 	}
 
@@ -319,7 +319,8 @@ func (p *DatabasePasskeyProvider) GetCredentials(ctx context.Context, userID int
 	}
 
 	credentials := make([]PasskeyCredential, 0, len(rawCreds))
-	for _, raw := range rawCreds {
+	for i := range rawCreds {
+		raw := rawCreds[i]
 		credID, err := base64.StdEncoding.DecodeString(raw.CredentialID)
 		if err != nil {
 			continue

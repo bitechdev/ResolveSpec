@@ -54,10 +54,10 @@ func ExampleOAuth2Google() {
 		})
 
 		// Return user info as JSON
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: OAuth2 Authentication with GitHub
@@ -89,10 +89,10 @@ func ExampleOAuth2GitHub() {
 			return
 		}
 
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: Custom OAuth2 Provider
@@ -142,10 +142,10 @@ func ExampleOAuth2Custom() {
 			return
 		}
 
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: Multi-Provider OAuth2 with Security Integration
@@ -240,10 +240,10 @@ func ExampleOAuth2MultiProvider() {
 
 	protectedRouter.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
 		userCtx, _ := GetUserContext(r.Context())
-		json.NewEncoder(w).Encode(userCtx)
+		_ = json.NewEncoder(w).Encode(userCtx)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: OAuth2 with Token Refresh
@@ -294,10 +294,10 @@ func ExampleOAuth2TokenRefresh() {
 			SameSite: http.SameSiteLaxMode,
 		})
 
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: OAuth2 Logout
@@ -326,7 +326,7 @@ func ExampleOAuth2Logout() {
 			// Get user ID from session
 			userCtx, err := oauth2Auth.Authenticate(r)
 			if err == nil {
-				oauth2Auth.Logout(r.Context(), LogoutRequest{
+				_ = oauth2Auth.Logout(r.Context(), LogoutRequest{
 					Token:  token,
 					UserID: userCtx.UserID,
 				})
@@ -343,10 +343,10 @@ func ExampleOAuth2Logout() {
 		})
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Logged out successfully"))
+		_, _ = w.Write([]byte("Logged out successfully"))
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 // Example: Complete OAuth2 Integration with Database Setup
@@ -374,7 +374,7 @@ func ExampleOAuth2Complete() {
 
 	// Public routes
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome! <a href='/auth/google/login'>Login with Google</a>"))
+		_, _ = w.Write([]byte("Welcome! <a href='/auth/google/login'>Login with Google</a>"))
 	})
 
 	router.HandleFunc("/auth/google/login", func(w http.ResponseWriter, r *http.Request) {
@@ -411,17 +411,17 @@ func ExampleOAuth2Complete() {
 
 	protectedRouter.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		userCtx, _ := GetUserContext(r.Context())
-		w.Write([]byte(fmt.Sprintf("Welcome, %s! Your email: %s", userCtx.UserName, userCtx.Email)))
+		_, _ = fmt.Fprintf(w, "Welcome, %s! Your email: %s", userCtx.UserName, userCtx.Email)
 	})
 
 	protectedRouter.HandleFunc("/api/profile", func(w http.ResponseWriter, r *http.Request) {
 		userCtx, _ := GetUserContext(r.Context())
-		json.NewEncoder(w).Encode(userCtx)
+		_ = json.NewEncoder(w).Encode(userCtx)
 	})
 
 	protectedRouter.HandleFunc("/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		userCtx, _ := GetUserContext(r.Context())
-		oauth2Auth.Logout(r.Context(), LogoutRequest{
+		_ = oauth2Auth.Logout(r.Context(), LogoutRequest{
 			Token:  userCtx.SessionID,
 			UserID: userCtx.UserID,
 		})
@@ -437,7 +437,7 @@ func ExampleOAuth2Complete() {
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }
 
 func setupOAuth2Tables(db *sql.DB) {
@@ -446,7 +446,7 @@ func setupOAuth2Tables(db *sql.DB) {
 	ctx := context.Background()
 
 	// Create users table if not exists
-	db.ExecContext(ctx, `
+	_, _ = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS users (
 			id SERIAL PRIMARY KEY,
 			username VARCHAR(255) NOT NULL UNIQUE,
@@ -464,7 +464,7 @@ func setupOAuth2Tables(db *sql.DB) {
 	`)
 
 	// Create user_sessions table (used for both regular and OAuth2 sessions)
-	db.ExecContext(ctx, `
+	_, _ = db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS user_sessions (
 			id SERIAL PRIMARY KEY,
 			session_token VARCHAR(500) NOT NULL UNIQUE,
@@ -547,7 +547,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
 	// GitHub routes
@@ -562,7 +562,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
 	// Microsoft routes
@@ -577,7 +577,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
 	// Facebook routes
@@ -592,7 +592,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp)
 	})
 
 	// Create security list for protected routes
@@ -608,8 +608,8 @@ func ExampleOAuth2AllProviders() {
 
 	protectedRouter.HandleFunc("/profile", func(w http.ResponseWriter, r *http.Request) {
 		userCtx, _ := GetUserContext(r.Context())
-		json.NewEncoder(w).Encode(userCtx)
+		_ = json.NewEncoder(w).Encode(userCtx)
 	})
 
-	http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router)
 }

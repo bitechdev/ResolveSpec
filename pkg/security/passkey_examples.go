@@ -22,12 +22,13 @@ func PasskeyAuthenticationExample() {
 	})
 
 	// Create authenticator with passkey support
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{
+	// Option 1: Pass during creation
+	_ = NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{
 		PasskeyProvider: passkeyProvider,
 	})
 
-	// Or use WithPasskey method
-	auth = NewDatabaseAuthenticator(db).WithPasskey(passkeyProvider)
+	// Option 2: Use WithPasskey method
+	auth := NewDatabaseAuthenticator(db).WithPasskey(passkeyProvider)
 
 	ctx := context.Background()
 
@@ -106,9 +107,9 @@ func PasskeyAuthenticationExample() {
 
 	// Get all credentials for a user
 	credentials, _ := auth.GetPasskeyCredentials(ctx, 1)
-	for _, cred := range credentials {
+	for i := range credentials {
 		fmt.Printf("Credential: %s (created: %s, last used: %s)\n",
-			cred.Name, cred.CreatedAt, cred.LastUsedAt)
+			credentials[i].Name, credentials[i].CreatedAt, credentials[i].LastUsedAt)
 	}
 
 	// Update credential name
@@ -130,7 +131,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 			Username    string `json:"username"`
 			DisplayName string `json:"display_name"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		options, err := auth.BeginPasskeyRegistration(r.Context(), PasskeyBeginRegistrationRequest{
 			UserID:      req.UserID,
@@ -147,7 +148,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		challenges[sessionID] = options.Challenge
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(options)
+		_ = json.NewEncoder(w).Encode(options)
 	})
 
 	// Complete registration endpoint
@@ -157,7 +158,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 			Response       PasskeyRegistrationResponse `json:"response"`
 			CredentialName string                      `json:"credential_name"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		// Get stored challenge (from session in production)
 		sessionID := "session-123"
@@ -176,7 +177,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(credential)
+		_ = json.NewEncoder(w).Encode(credential)
 	})
 
 	// Begin authentication endpoint
@@ -184,7 +185,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		var req struct {
 			Username string `json:"username"` // Optional
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		options, err := auth.BeginPasskeyAuthentication(r.Context(), PasskeyBeginAuthenticationRequest{
 			Username: req.Username,
@@ -199,7 +200,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		challenges[sessionID] = options.Challenge
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(options)
+		_ = json.NewEncoder(w).Encode(options)
 	})
 
 	// Complete authentication endpoint
@@ -207,7 +208,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		var req struct {
 			Response PasskeyAuthenticationResponse `json:"response"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		// Get stored challenge (from session in production)
 		sessionID := "session-456"
@@ -238,7 +239,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		})
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(loginResponse)
+		_ = json.NewEncoder(w).Encode(loginResponse)
 	})
 
 	// List credentials endpoint
@@ -257,7 +258,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(credentials)
+		_ = json.NewEncoder(w).Encode(credentials)
 	})
 
 	// Delete credential endpoint
@@ -271,7 +272,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		var req struct {
 			CredentialID string `json:"credential_id"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		err = auth.DeletePasskeyCredential(r.Context(), userCtx.UserID, req.CredentialID)
 		if err != nil {

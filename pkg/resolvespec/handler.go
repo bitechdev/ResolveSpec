@@ -318,6 +318,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		if cursorFilter != "" {
 			logger.Debug("Applying cursor filter: %s", cursorFilter)
 			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options)
+			// Ensure outer parentheses to prevent OR logic from escaping
+			sanitizedCursor = common.EnsureOuterParentheses(sanitizedCursor)
 			if sanitizedCursor != "" {
 				query = query.Where(sanitizedCursor)
 			}
@@ -698,37 +700,133 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard processing without nested relations
-		query := h.db.NewUpdate().Table(tableName).SetMap(updates)
+		// Get the primary key name
+		pkName := reflection.GetPrimaryKeyName(model)
 
-		// Apply conditions
-		if urlID != "" {
-			logger.Debug("Updating by URL ID: %s", urlID)
-			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), urlID)
-		} else if reqID != nil {
-			switch id := reqID.(type) {
-			case string:
-				logger.Debug("Updating by request ID: %s", id)
-				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
-			case []string:
-				logger.Debug("Updating by multiple IDs: %v", id)
-				query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), id)
+		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
+		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			// First, read the existing record from the database
+			existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+			selectQuery := tx.NewSelect().Model(existingRecord).Column("*")
+
+			// Apply conditions to select
+			if urlID != "" {
+				logger.Debug("Updating by URL ID: %s", urlID)
+				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					logger.Debug("Updating by request ID: %s", id)
+					selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					if len(id) > 0 {
+						logger.Debug("Updating by multiple IDs: %v", id)
+						selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+					}
+				}
 			}
-		}
 
-		result, err := query.Exec(ctx)
+			if err := selectQuery.ScanModel(ctx); err != nil {
+				if err == sql.ErrNoRows {
+					return fmt.Errorf("no records found to update")
+				}
+				return fmt.Errorf("error fetching existing record: %w", err)
+			}
+
+			// Convert existing record to map
+			existingMap := make(map[string]interface{})
+			jsonData, err := json.Marshal(existingRecord)
+			if err != nil {
+				return fmt.Errorf("error marshaling existing record: %w", err)
+			}
+			if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+				return fmt.Errorf("error unmarshaling existing record: %w", err)
+			}
+
+			// Execute BeforeUpdate hooks inside transaction
+			hookCtx := &HookContext{
+				Context: ctx,
+				Handler: h,
+				Schema:  schema,
+				Entity:  entity,
+				Model:   model,
+				Options: options,
+				ID:      urlID,
+				Data:    updates,
+				Writer:  w,
+				Tx:      tx,
+			}
+
+			if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+				return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+			}
+
+			// Use potentially modified data from hook context
+			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+				updates = modifiedData
+			}
+
+			// Merge only non-null and non-empty values from the incoming request into the existing record
+			for key, newValue := range updates {
+				// Skip if the value is nil
+				if newValue == nil {
+					continue
+				}
+
+				// Skip if the value is an empty string
+				if strVal, ok := newValue.(string); ok && strVal == "" {
+					continue
+				}
+
+				// Update the existing map with the new value
+				existingMap[key] = newValue
+			}
+
+			// Build update query with merged data
+			query := tx.NewUpdate().Table(tableName).SetMap(existingMap)
+
+			// Apply conditions
+			if urlID != "" {
+				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+				}
+			}
+
+			result, err := query.Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("error updating record(s): %w", err)
+			}
+
+			if result.RowsAffected() == 0 {
+				return fmt.Errorf("no records found to update")
+			}
+
+			// Execute AfterUpdate hooks inside transaction
+			hookCtx.Result = updates
+			hookCtx.Error = nil
+			if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+				return fmt.Errorf("AfterUpdate hook failed: %w", err)
+			}
+
+			return nil
+		})
+
 		if err != nil {
 			logger.Error("Update error: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "update_error", "Error updating record(s)", err)
+			if err.Error() == "no records found to update" {
+				h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", err)
+			} else {
+				h.sendError(w, http.StatusInternalServerError, "update_error", "Error updating record(s)", err)
+			}
 			return
 		}
 
-		if result.RowsAffected() == 0 {
-			logger.Warn("No records found to update")
-			h.sendError(w, http.StatusNotFound, "not_found", "No records found to update", nil)
-			return
-		}
-
-		logger.Info("Successfully updated %d records", result.RowsAffected())
+		logger.Info("Successfully updated record(s)")
 		// Invalidate cache for this table
 		cacheTags := buildCacheTags(schema, tableName)
 		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
@@ -782,13 +880,76 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard batch update without nested relations
+		pkName := reflection.GetPrimaryKeyName(model)
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
+					itemIDStr := fmt.Sprintf("%v", itemID)
 
-					txQuery := tx.NewUpdate().Table(tableName).SetMap(item).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
+					// First, read the existing record
+					existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+					selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					if err := selectQuery.ScanModel(ctx); err != nil {
+						if err == sql.ErrNoRows {
+							continue // Skip if record not found
+						}
+						return fmt.Errorf("failed to fetch existing record: %w", err)
+					}
+
+					// Convert existing record to map
+					existingMap := make(map[string]interface{})
+					jsonData, err := json.Marshal(existingRecord)
+					if err != nil {
+						return fmt.Errorf("failed to marshal existing record: %w", err)
+					}
+					if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+						return fmt.Errorf("failed to unmarshal existing record: %w", err)
+					}
+
+					// Execute BeforeUpdate hooks inside transaction
+					hookCtx := &HookContext{
+						Context: ctx,
+						Handler: h,
+						Schema:  schema,
+						Entity:  entity,
+						Model:   model,
+						Options: options,
+						ID:      itemIDStr,
+						Data:    item,
+						Writer:  w,
+						Tx:      tx,
+					}
+
+					if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+						return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
+					}
+
+					// Use potentially modified data from hook context
+					if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+						item = modifiedData
+					}
+
+					// Merge only non-null and non-empty values
+					for key, newValue := range item {
+						if newValue == nil {
+							continue
+						}
+						if strVal, ok := newValue.(string); ok && strVal == "" {
+							continue
+						}
+						existingMap[key] = newValue
+					}
+
+					txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
+					}
+
+					// Execute AfterUpdate hooks inside transaction
+					hookCtx.Result = item
+					hookCtx.Error = nil
+					if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+						return fmt.Errorf("AfterUpdate hook failed for ID %v: %w", itemID, err)
 					}
 				}
 			}
@@ -857,16 +1018,80 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Standard batch update without nested relations
+		pkName := reflection.GetPrimaryKeyName(model)
 		list := make([]interface{}, 0)
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range updates {
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
+						itemIDStr := fmt.Sprintf("%v", itemID)
 
-						txQuery := tx.NewUpdate().Table(tableName).SetMap(itemMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
+						// First, read the existing record
+						existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+						selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						if err := selectQuery.ScanModel(ctx); err != nil {
+							if err == sql.ErrNoRows {
+								continue // Skip if record not found
+							}
+							return fmt.Errorf("failed to fetch existing record: %w", err)
+						}
+
+						// Convert existing record to map
+						existingMap := make(map[string]interface{})
+						jsonData, err := json.Marshal(existingRecord)
+						if err != nil {
+							return fmt.Errorf("failed to marshal existing record: %w", err)
+						}
+						if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+							return fmt.Errorf("failed to unmarshal existing record: %w", err)
+						}
+
+						// Execute BeforeUpdate hooks inside transaction
+						hookCtx := &HookContext{
+							Context: ctx,
+							Handler: h,
+							Schema:  schema,
+							Entity:  entity,
+							Model:   model,
+							Options: options,
+							ID:      itemIDStr,
+							Data:    itemMap,
+							Writer:  w,
+							Tx:      tx,
+						}
+
+						if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+							return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
+						}
+
+						// Use potentially modified data from hook context
+						if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+							itemMap = modifiedData
+						}
+
+						// Merge only non-null and non-empty values
+						for key, newValue := range itemMap {
+							if newValue == nil {
+								continue
+							}
+							if strVal, ok := newValue.(string); ok && strVal == "" {
+								continue
+							}
+							existingMap[key] = newValue
+						}
+
+						txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if _, err := txQuery.Exec(ctx); err != nil {
 							return err
 						}
+
+						// Execute AfterUpdate hooks inside transaction
+						hookCtx.Result = itemMap
+						hookCtx.Error = nil
+						if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+							return fmt.Errorf("AfterUpdate hook failed for ID %v: %w", itemID, err)
+						}
+
 						list = append(list, item)
 					}
 				}
@@ -1328,30 +1553,7 @@ func isNullable(field reflect.StructField) bool {
 
 // GetRelationshipInfo implements common.RelationshipInfoProvider interface
 func (h *Handler) GetRelationshipInfo(modelType reflect.Type, relationName string) *common.RelationshipInfo {
-	info := h.getRelationshipInfo(modelType, relationName)
-	if info == nil {
-		return nil
-	}
-	// Convert internal type to common type
-	return &common.RelationshipInfo{
-		FieldName:    info.fieldName,
-		JSONName:     info.jsonName,
-		RelationType: info.relationType,
-		ForeignKey:   info.foreignKey,
-		References:   info.references,
-		JoinTable:    info.joinTable,
-		RelatedModel: info.relatedModel,
-	}
-}
-
-type relationshipInfo struct {
-	fieldName    string
-	jsonName     string
-	relationType string // "belongsTo", "hasMany", "hasOne", "many2many"
-	foreignKey   string
-	references   string
-	joinTable    string
-	relatedModel interface{}
+	return common.GetRelationshipInfo(modelType, relationName)
 }
 
 func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, preloads []common.PreloadOption) (common.SelectQuery, error) {
@@ -1371,7 +1573,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 	for idx := range preloads {
 		preload := preloads[idx]
 		logger.Debug("Processing preload for relation: %s", preload.Relation)
-		relInfo := h.getRelationshipInfo(modelType, preload.Relation)
+		relInfo := common.GetRelationshipInfo(modelType, preload.Relation)
 		if relInfo == nil {
 			logger.Warn("Relation %s not found in model", preload.Relation)
 			continue
@@ -1379,7 +1581,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 
 		// Use the field name (capitalized) for ORM preloading
 		// ORMs like GORM and Bun expect the struct field name, not the JSON name
-		relationFieldName := relInfo.fieldName
+		relationFieldName := relInfo.FieldName
 
 		// Validate and fix WHERE clause to ensure it contains the relation prefix
 		if len(preload.Where) > 0 {
@@ -1422,13 +1624,13 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 				copy(columns, preload.Columns)
 
 				// Add foreign key if not already present
-				if relInfo.foreignKey != "" {
+				if relInfo.ForeignKey != "" {
 					// Convert struct field name (e.g., DepartmentID) to snake_case (e.g., department_id)
-					foreignKeyColumn := toSnakeCase(relInfo.foreignKey)
+					foreignKeyColumn := toSnakeCase(relInfo.ForeignKey)
 
 					hasForeignKey := false
 					for _, col := range columns {
-						if col == foreignKeyColumn || col == relInfo.foreignKey {
+						if col == foreignKeyColumn || col == relInfo.ForeignKey {
 							hasForeignKey = true
 							break
 						}
@@ -1456,6 +1658,8 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 				// Build RequestOptions with all preloads to allow references to sibling relations
 				preloadOpts := &common.RequestOptions{Preload: preloads}
 				sanitizedWhere := common.SanitizeWhereClause(preload.Where, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
+				// Ensure outer parentheses to prevent OR logic from escaping
+				sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
 				if len(sanitizedWhere) > 0 {
 					sq = sq.Where(sanitizedWhere)
 				}
@@ -1472,58 +1676,6 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 	}
 
 	return query, nil
-}
-
-func (h *Handler) getRelationshipInfo(modelType reflect.Type, relationName string) *relationshipInfo {
-	// Ensure we have a struct type
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		logger.Warn("Cannot get relationship info from non-struct type: %v", modelType)
-		return nil
-	}
-
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		jsonTag := field.Tag.Get("json")
-		jsonName := strings.Split(jsonTag, ",")[0]
-
-		if jsonName == relationName {
-			gormTag := field.Tag.Get("gorm")
-			info := &relationshipInfo{
-				fieldName: field.Name,
-				jsonName:  jsonName,
-			}
-
-			// Parse GORM tag to determine relationship type and keys
-			if strings.Contains(gormTag, "foreignKey") {
-				info.foreignKey = h.extractTagValue(gormTag, "foreignKey")
-				info.references = h.extractTagValue(gormTag, "references")
-
-				// Determine if it's belongsTo or hasMany/hasOne
-				if field.Type.Kind() == reflect.Slice {
-					info.relationType = "hasMany"
-				} else if field.Type.Kind() == reflect.Ptr || field.Type.Kind() == reflect.Struct {
-					info.relationType = "belongsTo"
-				}
-			} else if strings.Contains(gormTag, "many2many") {
-				info.relationType = "many2many"
-				info.joinTable = h.extractTagValue(gormTag, "many2many")
-			}
-
-			return info
-		}
-	}
-	return nil
-}
-
-func (h *Handler) extractTagValue(tag, key string) string {
-	parts := strings.Split(tag, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, key+":") {
-			return strings.TrimPrefix(part, key+":")
-		}
-	}
-	return ""
 }
 
 // toSnakeCase converts a PascalCase or camelCase string to snake_case

@@ -20,17 +20,6 @@ type RelationshipInfoProvider interface {
 	GetRelationshipInfo(modelType reflect.Type, relationName string) *RelationshipInfo
 }
 
-// RelationshipInfo contains information about a model relationship
-type RelationshipInfo struct {
-	FieldName    string
-	JSONName     string
-	RelationType string // "belongsTo", "hasMany", "hasOne", "many2many"
-	ForeignKey   string
-	References   string
-	JoinTable    string
-	RelatedModel interface{}
-}
-
 // NestedCUDProcessor handles recursive processing of nested object graphs
 type NestedCUDProcessor struct {
 	db                 Database
@@ -85,6 +74,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 	}
 
 	if modelType == nil || modelType.Kind() != reflect.Struct {
+		logger.Error("Invalid model type: operation=%s, table=%s, modelType=%v, expected struct", operation, tableName, modelType)
 		return nil, fmt.Errorf("model must be a struct type, got %v", modelType)
 	}
 
@@ -108,50 +98,74 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		}
 	}
 
+	// Filter regularData to only include fields that exist in the model
+	// Use MapToStruct to validate and filter fields
+	regularData = p.filterValidFields(regularData, model)
+
 	// Inject parent IDs for foreign key resolution
 	p.injectForeignKeys(regularData, modelType, parentIDs)
 
 	// Get the primary key name for this model
 	pkName := reflection.GetPrimaryKeyName(model)
 
+	// Check if we have any data to process (besides _request)
+	hasData := len(regularData) > 0
+
 	// Process based on operation
 	switch strings.ToLower(operation) {
 	case "insert", "create":
-		id, err := p.processInsert(ctx, regularData, tableName)
-		if err != nil {
-			return nil, fmt.Errorf("insert failed: %w", err)
-		}
-		result.ID = id
-		result.AffectedRows = 1
-		result.Data = regularData
+		// Only perform insert if we have data to insert
+		if hasData {
+			id, err := p.processInsert(ctx, regularData, tableName)
+			if err != nil {
+				logger.Error("Insert failed for table=%s, data=%+v, error=%v", tableName, regularData, err)
+				return nil, fmt.Errorf("insert failed: %w", err)
+			}
+			result.ID = id
+			result.AffectedRows = 1
+			result.Data = regularData
 
-		// Process child relations after parent insert (to get parent ID)
-		if err := p.processChildRelations(ctx, "insert", id, relationFields, result.RelationData, modelType); err != nil {
-			return nil, fmt.Errorf("failed to process child relations: %w", err)
+			// Process child relations after parent insert (to get parent ID)
+			if err := p.processChildRelations(ctx, "insert", id, relationFields, result.RelationData, modelType, parentIDs); err != nil {
+				logger.Error("Failed to process child relations after insert: table=%s, parentID=%v, relations=%+v, error=%v", tableName, id, relationFields, err)
+				return nil, fmt.Errorf("failed to process child relations: %w", err)
+			}
+		} else {
+			logger.Debug("Skipping insert for %s - no data columns besides _request", tableName)
 		}
 
 	case "update":
-		rows, err := p.processUpdate(ctx, regularData, tableName, data[pkName])
-		if err != nil {
-			return nil, fmt.Errorf("update failed: %w", err)
-		}
-		result.ID = data[pkName]
-		result.AffectedRows = rows
-		result.Data = regularData
+		// Only perform update if we have data to update
+		if hasData {
+			rows, err := p.processUpdate(ctx, regularData, tableName, data[pkName])
+			if err != nil {
+				logger.Error("Update failed for table=%s, id=%v, data=%+v, error=%v", tableName, data[pkName], regularData, err)
+				return nil, fmt.Errorf("update failed: %w", err)
+			}
+			result.ID = data[pkName]
+			result.AffectedRows = rows
+			result.Data = regularData
 
-		// Process child relations for update
-		if err := p.processChildRelations(ctx, "update", data[pkName], relationFields, result.RelationData, modelType); err != nil {
-			return nil, fmt.Errorf("failed to process child relations: %w", err)
+			// Process child relations for update
+			if err := p.processChildRelations(ctx, "update", data[pkName], relationFields, result.RelationData, modelType, parentIDs); err != nil {
+				logger.Error("Failed to process child relations after update: table=%s, parentID=%v, relations=%+v, error=%v", tableName, data[pkName], relationFields, err)
+				return nil, fmt.Errorf("failed to process child relations: %w", err)
+			}
+		} else {
+			logger.Debug("Skipping update for %s - no data columns besides _request", tableName)
+			result.ID = data[pkName]
 		}
 
 	case "delete":
 		// Process child relations first (for referential integrity)
-		if err := p.processChildRelations(ctx, "delete", data[pkName], relationFields, result.RelationData, modelType); err != nil {
+		if err := p.processChildRelations(ctx, "delete", data[pkName], relationFields, result.RelationData, modelType, parentIDs); err != nil {
+			logger.Error("Failed to process child relations before delete: table=%s, id=%v, relations=%+v, error=%v", tableName, data[pkName], relationFields, err)
 			return nil, fmt.Errorf("failed to process child relations before delete: %w", err)
 		}
 
 		rows, err := p.processDelete(ctx, tableName, data[pkName])
 		if err != nil {
+			logger.Error("Delete failed for table=%s, id=%v, error=%v", tableName, data[pkName], err)
 			return nil, fmt.Errorf("delete failed: %w", err)
 		}
 		result.ID = data[pkName]
@@ -159,6 +173,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		result.Data = regularData
 
 	default:
+		logger.Error("Unsupported operation: %s for table=%s", operation, tableName)
 		return nil, fmt.Errorf("unsupported operation: %s", operation)
 	}
 
@@ -174,6 +189,115 @@ func (p *NestedCUDProcessor) extractCRUDRequest(data map[string]interface{}) str
 		}
 	}
 	return ""
+}
+
+// filterValidFields filters input data to only include fields that exist in the model
+// Uses reflection.MapToStruct to validate fields and extract only those that match the model
+func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, model interface{}) map[string]interface{} {
+	if len(data) == 0 {
+		return data
+	}
+
+	// Create a new instance of the model to use with MapToStruct
+	modelType := reflect.TypeOf(model)
+	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return data
+	}
+
+	// Create a new instance of the model
+	tempModel := reflect.New(modelType).Interface()
+
+	// Use MapToStruct to map the data - this will only map valid fields
+	err := reflection.MapToStruct(data, tempModel)
+	if err != nil {
+		logger.Debug("Error mapping data to model: %v", err)
+		return data
+	}
+
+	// Extract the mapped fields back into a map
+	// This effectively filters out any fields that don't exist in the model
+	filteredData := make(map[string]interface{})
+	tempModelValue := reflect.ValueOf(tempModel).Elem()
+
+	for key, value := range data {
+		// Check if the field was successfully mapped
+		if fieldWasMapped(tempModelValue, modelType, key) {
+			filteredData[key] = value
+		} else {
+			logger.Debug("Skipping invalid field '%s' - not found in model %v", key, modelType)
+		}
+	}
+
+	return filteredData
+}
+
+// fieldWasMapped checks if a field with the given key was mapped to the model
+func fieldWasMapped(modelValue reflect.Value, modelType reflect.Type, key string) bool {
+	// Look for the field by JSON tag or field name
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Check JSON tag
+		jsonTag := field.Tag.Get("json")
+		if jsonTag != "" && jsonTag != "-" {
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] == key {
+				return true
+			}
+		}
+
+		// Check bun tag
+		bunTag := field.Tag.Get("bun")
+		if bunTag != "" && bunTag != "-" {
+			if colName := reflection.ExtractColumnFromBunTag(bunTag); colName == key {
+				return true
+			}
+		}
+
+		// Check gorm tag
+		gormTag := field.Tag.Get("gorm")
+		if gormTag != "" && gormTag != "-" {
+			if colName := reflection.ExtractColumnFromGormTag(gormTag); colName == key {
+				return true
+			}
+		}
+
+		// Check lowercase field name
+		if strings.EqualFold(field.Name, key) {
+			return true
+		}
+
+		// Handle embedded structs recursively
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				embeddedValue := modelValue.Field(i)
+				if embeddedValue.Kind() == reflect.Ptr {
+					if embeddedValue.IsNil() {
+						continue
+					}
+					embeddedValue = embeddedValue.Elem()
+				}
+				if fieldWasMapped(embeddedValue, fieldType, key) {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // injectForeignKeys injects parent IDs into data for foreign key fields
@@ -218,12 +342,13 @@ func (p *NestedCUDProcessor) processInsert(
 	for key, value := range data {
 		query = query.Value(key, value)
 	}
-
+	pkName := reflection.GetPrimaryKeyName(tableName)
 	// Add RETURNING clause to get the inserted ID
-	query = query.Returning("id")
+	query = query.Returning(pkName)
 
 	result, err := query.Exec(ctx)
 	if err != nil {
+		logger.Error("Insert execution failed: table=%s, data=%+v, error=%v", tableName, data, err)
 		return nil, fmt.Errorf("insert exec failed: %w", err)
 	}
 
@@ -231,8 +356,8 @@ func (p *NestedCUDProcessor) processInsert(
 	var id interface{}
 	if lastID, err := result.LastInsertId(); err == nil && lastID > 0 {
 		id = lastID
-	} else if data["id"] != nil {
-		id = data["id"]
+	} else if data[pkName] != nil {
+		id = data[pkName]
 	}
 
 	logger.Debug("Insert successful, ID: %v, rows affected: %d", id, result.RowsAffected())
@@ -247,6 +372,7 @@ func (p *NestedCUDProcessor) processUpdate(
 	id interface{},
 ) (int64, error) {
 	if id == nil {
+		logger.Error("Update requires an ID: table=%s, data=%+v", tableName, data)
 		return 0, fmt.Errorf("update requires an ID")
 	}
 
@@ -256,6 +382,7 @@ func (p *NestedCUDProcessor) processUpdate(
 
 	result, err := query.Exec(ctx)
 	if err != nil {
+		logger.Error("Update execution failed: table=%s, id=%v, data=%+v, error=%v", tableName, id, data, err)
 		return 0, fmt.Errorf("update exec failed: %w", err)
 	}
 
@@ -267,6 +394,7 @@ func (p *NestedCUDProcessor) processUpdate(
 // processDelete handles delete operation
 func (p *NestedCUDProcessor) processDelete(ctx context.Context, tableName string, id interface{}) (int64, error) {
 	if id == nil {
+		logger.Error("Delete requires an ID: table=%s", tableName)
 		return 0, fmt.Errorf("delete requires an ID")
 	}
 
@@ -276,6 +404,7 @@ func (p *NestedCUDProcessor) processDelete(ctx context.Context, tableName string
 
 	result, err := query.Exec(ctx)
 	if err != nil {
+		logger.Error("Delete execution failed: table=%s, id=%v, error=%v", tableName, id, err)
 		return 0, fmt.Errorf("delete exec failed: %w", err)
 	}
 
@@ -292,6 +421,7 @@ func (p *NestedCUDProcessor) processChildRelations(
 	relationFields map[string]*RelationshipInfo,
 	relationData map[string]interface{},
 	parentModelType reflect.Type,
+	incomingParentIDs map[string]interface{}, // IDs from all ancestors
 ) error {
 	for relationName, relInfo := range relationFields {
 		relationValue, exists := relationData[relationName]
@@ -304,7 +434,7 @@ func (p *NestedCUDProcessor) processChildRelations(
 		// Get the related model
 		field, found := parentModelType.FieldByName(relInfo.FieldName)
 		if !found {
-			logger.Warn("Field %s not found in model", relInfo.FieldName)
+			logger.Error("Field %s not found in model type %v for relation %s", relInfo.FieldName, parentModelType, relationName)
 			continue
 		}
 
@@ -324,20 +454,89 @@ func (p *NestedCUDProcessor) processChildRelations(
 		relatedTableName := p.getTableNameForModel(relatedModel, relInfo.JSONName)
 
 		// Prepare parent IDs for foreign key injection
+		// Start by copying all incoming parent IDs (from ancestors)
 		parentIDs := make(map[string]interface{})
-		if relInfo.ForeignKey != "" {
+		for k, v := range incomingParentIDs {
+			parentIDs[k] = v
+		}
+		logger.Debug("Inherited %d parent IDs from ancestors: %+v", len(incomingParentIDs), incomingParentIDs)
+
+		// Add the current parent's primary key to the parentIDs map
+		// This ensures nested children have access to all ancestor IDs
+		if parentID != nil && parentModelType != nil {
+			// Get the parent model's primary key field name
+			parentPKFieldName := reflection.GetPrimaryKeyName(parentModelType)
+			if parentPKFieldName != "" {
+				// Get the JSON name for the primary key field
+				parentPKJSONName := reflection.GetJSONNameForField(parentModelType, parentPKFieldName)
+				baseName := ""
+				if len(parentPKJSONName) > 1 {
+					baseName = parentPKJSONName
+				} else {
+					// Add parent's PK to the map using the base model name
+					baseName = strings.TrimSuffix(parentPKFieldName, "ID")
+					baseName = strings.TrimSuffix(strings.ToLower(baseName), "_id")
+					if baseName == "" {
+						baseName = "parent"
+					}
+				}
+
+				parentIDs[baseName] = parentID
+				logger.Debug("Added current parent PK to parentIDs map: %s=%v (from field %s)", baseName, parentID, parentPKFieldName)
+			}
+		}
+
+		// Also add the foreign key reference if specified
+		if relInfo.ForeignKey != "" && parentID != nil {
 			// Extract the base name from foreign key (e.g., "DepartmentID" -> "Department")
 			baseName := strings.TrimSuffix(relInfo.ForeignKey, "ID")
 			baseName = strings.TrimSuffix(strings.ToLower(baseName), "_id")
-			parentIDs[baseName] = parentID
+			// Only add if different from what we already added
+			if _, exists := parentIDs[baseName]; !exists {
+				parentIDs[baseName] = parentID
+				logger.Debug("Added foreign key to parentIDs map: %s=%v (from FK %s)", baseName, parentID, relInfo.ForeignKey)
+			}
 		}
+
+		logger.Debug("Final parentIDs map for relation %s: %+v", relationName, parentIDs)
+
+		// Determine which field name to use for setting parent ID in child data
+		// Priority: Use foreign key field name if specified
+		var foreignKeyFieldName string
+		if relInfo.ForeignKey != "" {
+			// Get the JSON name for the foreign key field in the child model
+			foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, relInfo.ForeignKey)
+			if foreignKeyFieldName == "" {
+				// Fallback to lowercase field name
+				foreignKeyFieldName = strings.ToLower(relInfo.ForeignKey)
+			}
+			logger.Debug("Using foreign key field for direct assignment: %s (from FK %s)", foreignKeyFieldName, relInfo.ForeignKey)
+		}
+
+		// Get the primary key name for the child model to avoid overwriting it in recursive relationships
+		childPKName := reflection.GetPrimaryKeyName(relatedModel)
+		childPKFieldName := reflection.GetJSONNameForField(relatedModelType, childPKName)
+		if childPKFieldName == "" {
+			childPKFieldName = strings.ToLower(childPKName)
+		}
+
+		logger.Debug("Processing relation with foreignKeyField=%s, childPK=%s", foreignKeyFieldName, childPKFieldName)
 
 		// Process based on relation type and data structure
 		switch v := relationValue.(type) {
 		case map[string]interface{}:
-			// Single related object
+			// Single related object - directly set foreign key if specified
+			// IMPORTANT: In recursive relationships, don't overwrite the primary key
+			if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+				v[foreignKeyFieldName] = parentID
+				logger.Debug("Set foreign key in single relation: %s=%v", foreignKeyFieldName, parentID)
+			} else if foreignKeyFieldName == childPKFieldName {
+				logger.Debug("Skipping foreign key assignment - same as primary key (recursive relationship): %s", foreignKeyFieldName)
+			}
 			_, err := p.ProcessNestedCUD(ctx, operation, v, relatedModel, parentIDs, relatedTableName)
 			if err != nil {
+				logger.Error("Failed to process single relation: name=%s, table=%s, operation=%s, parentID=%v, data=%+v, error=%v",
+					relationName, relatedTableName, operation, parentID, v, err)
 				return fmt.Errorf("failed to process relation %s: %w", relationName, err)
 			}
 
@@ -345,24 +544,46 @@ func (p *NestedCUDProcessor) processChildRelations(
 			// Multiple related objects
 			for i, item := range v {
 				if itemMap, ok := item.(map[string]interface{}); ok {
+					// Directly set foreign key if specified
+					// IMPORTANT: In recursive relationships, don't overwrite the primary key
+					if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+						itemMap[foreignKeyFieldName] = parentID
+						logger.Debug("Set foreign key in relation array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+					} else if foreignKeyFieldName == childPKFieldName {
+						logger.Debug("Skipping foreign key assignment in array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
+					}
 					_, err := p.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 					if err != nil {
+						logger.Error("Failed to process relation array item: name=%s[%d], table=%s, operation=%s, parentID=%v, data=%+v, error=%v",
+							relationName, i, relatedTableName, operation, parentID, itemMap, err)
 						return fmt.Errorf("failed to process relation %s[%d]: %w", relationName, i, err)
 					}
+				} else {
+					logger.Warn("Relation array item is not a map: name=%s[%d], type=%T", relationName, i, item)
 				}
 			}
 
 		case []map[string]interface{}:
 			// Multiple related objects (typed slice)
 			for i, itemMap := range v {
+				// Directly set foreign key if specified
+				// IMPORTANT: In recursive relationships, don't overwrite the primary key
+				if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+					itemMap[foreignKeyFieldName] = parentID
+					logger.Debug("Set foreign key in relation typed array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+				} else if foreignKeyFieldName == childPKFieldName {
+					logger.Debug("Skipping foreign key assignment in typed array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
+				}
 				_, err := p.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 				if err != nil {
+					logger.Error("Failed to process relation typed array item: name=%s[%d], table=%s, operation=%s, parentID=%v, data=%+v, error=%v",
+						relationName, i, relatedTableName, operation, parentID, itemMap, err)
 					return fmt.Errorf("failed to process relation %s[%d]: %w", relationName, i, err)
 				}
 			}
 
 		default:
-			logger.Warn("Unsupported relation data type for %s: %T", relationName, relationValue)
+			logger.Error("Unsupported relation data type: name=%s, type=%T, value=%+v", relationName, relationValue, relationValue)
 		}
 	}
 

@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"os"
+	"strings"
 )
 
 // ApplyGlobalDefaults applies global server defaults to this instance
@@ -104,4 +107,43 @@ func (sc *ServersConfig) GetDefault() (*ServerInstanceConfig, error) {
 	}
 
 	return &instance, nil
+}
+
+// GetIPs - GetIP for pc
+func GetIPs() (hostname string, ipList string, ipNetList []net.IP) {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("Recovered in GetIPs", err)
+		}
+	}()
+	hostname, _ = os.Hostname()
+	ipaddrlist := make([]net.IP, 0)
+	iplist := ""
+	addrs, err := net.LookupIP(hostname)
+	if err != nil {
+		return hostname, iplist, ipaddrlist
+	}
+
+	for _, a := range addrs {
+		// cfg.LogInfo("\nFound IP Host Address: %s", a)
+		if strings.Contains(a.String(), "127.0.0.1") {
+			continue
+		}
+		iplist = fmt.Sprintf("%s,%s", iplist, a)
+		ipaddrlist = append(ipaddrlist, a)
+	}
+	if iplist == "" {
+		iff, _ := net.InterfaceAddrs()
+		for _, a := range iff {
+			// cfg.LogInfo("\nFound IP Address: %s", a)
+			if strings.Contains(a.String(), "127.0.0.1") {
+				continue
+			}
+			iplist = fmt.Sprintf("%s,%s", iplist, a)
+
+		}
+
+	}
+	iplist = strings.TrimLeft(iplist, ",")
+	return hostname, iplist, ipaddrlist
 }

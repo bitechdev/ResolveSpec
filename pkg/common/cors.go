@@ -3,6 +3,8 @@ package common
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bitechdev/ResolveSpec/pkg/config"
 )
 
 // CORSConfig holds CORS configuration
@@ -15,8 +17,30 @@ type CORSConfig struct {
 
 // DefaultCORSConfig returns a default CORS configuration suitable for HeadSpec
 func DefaultCORSConfig() CORSConfig {
+	configManager := config.GetConfigManager()
+	cfg, _ := configManager.GetConfig()
+	hosts := make([]string, 0)
+	// hosts = append(hosts, "*")
+
+	_, _, ipsList := config.GetIPs()
+
+	for i := range cfg.Servers.Instances {
+		server := cfg.Servers.Instances[i]
+		if server.Port == 0 {
+			continue
+		}
+		hosts = append(hosts, server.ExternalURLs...)
+		hosts = append(hosts, fmt.Sprintf("http://%s:%d", server.Host, server.Port))
+		hosts = append(hosts, fmt.Sprintf("https://%s:%d", server.Host, server.Port))
+		hosts = append(hosts, fmt.Sprintf("http://%s:%d", "localhost", server.Port))
+		for _, ip := range ipsList {
+			hosts = append(hosts, fmt.Sprintf("http://%s:%d", ip.String(), server.Port))
+			hosts = append(hosts, fmt.Sprintf("https://%s:%d", ip.String(), server.Port))
+		}
+	}
+
 	return CORSConfig{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins: hosts,
 		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: GetHeadSpecHeaders(),
 		MaxAge:         86400, // 24 hours
@@ -90,11 +114,14 @@ func GetHeadSpecHeaders() []string {
 }
 
 // SetCORSHeaders sets CORS headers on a response writer
-func SetCORSHeaders(w ResponseWriter, config CORSConfig) {
+func SetCORSHeaders(w ResponseWriter, r Request, config CORSConfig) {
 	// Set allowed origins
-	if len(config.AllowedOrigins) > 0 {
-		w.SetHeader("Access-Control-Allow-Origin", strings.Join(config.AllowedOrigins, ", "))
-	}
+	// if len(config.AllowedOrigins) > 0 {
+	// 	w.SetHeader("Access-Control-Allow-Origin", strings.Join(config.AllowedOrigins, ", "))
+	// }
+
+	// Todo origin list parsing
+	w.SetHeader("Access-Control-Allow-Origin", "*")
 
 	// Set allowed methods
 	if len(config.AllowedMethods) > 0 {
@@ -102,9 +129,10 @@ func SetCORSHeaders(w ResponseWriter, config CORSConfig) {
 	}
 
 	// Set allowed headers
-	if len(config.AllowedHeaders) > 0 {
-		w.SetHeader("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
-	}
+	// if len(config.AllowedHeaders) > 0 {
+	// 	w.SetHeader("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
+	// }
+	w.SetHeader("Access-Control-Allow-Headers", "*")
 
 	// Set max age
 	if config.MaxAge > 0 {
@@ -115,5 +143,7 @@ func SetCORSHeaders(w ResponseWriter, config CORSConfig) {
 	w.SetHeader("Access-Control-Allow-Credentials", "true")
 
 	// Expose headers that clients can read
-	w.SetHeader("Access-Control-Expose-Headers", "Content-Range, X-Api-Range-Total, X-Api-Range-Size")
+	exposeHeaders := config.AllowedHeaders
+	exposeHeaders = append(exposeHeaders, "Content-Range", "X-Api-Range-Total", "X-Api-Range-Size")
+	w.SetHeader("Access-Control-Expose-Headers", strings.Join(exposeHeaders, ", "))
 }

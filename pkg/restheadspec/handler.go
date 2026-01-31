@@ -435,9 +435,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Apply preloading
+	logger.Debug("Total preloads to apply: %d", len(options.Preload))
 	for idx := range options.Preload {
 		preload := options.Preload[idx]
-		logger.Debug("Applying preload: %s", preload.Relation)
+		logger.Debug("Applying preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, Where=%s",
+			idx, preload.Relation, preload.Recursive, preload.RelatedKey, preload.Where)
 
 		// Validate and fix WHERE clause to ensure it contains the relation prefix
 		if len(preload.Where) > 0 {
@@ -463,7 +465,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Apply filters - validate and adjust for column types first
-	for i := range options.Filters {
+	// Group consecutive OR filters together to prevent OR logic from escaping
+	for i := 0; i < len(options.Filters); {
 		filter := &options.Filters[i]
 
 		// Validate and adjust filter based on column type
@@ -475,8 +478,39 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			logicOp = "AND"
 		}
 
-		logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
-		query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+		// Check if this is the start of an OR group
+		if logicOp == "OR" {
+			// Collect all consecutive OR filters
+			orFilters := []*common.FilterOption{filter}
+			orCastInfo := []ColumnCastInfo{castInfo}
+
+			j := i + 1
+			for j < len(options.Filters) {
+				nextFilter := &options.Filters[j]
+				nextLogicOp := nextFilter.LogicOperator
+				if nextLogicOp == "" {
+					nextLogicOp = "AND"
+				}
+				if nextLogicOp == "OR" {
+					nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
+					orFilters = append(orFilters, nextFilter)
+					orCastInfo = append(orCastInfo, nextCastInfo)
+					j++
+				} else {
+					break
+				}
+			}
+
+			// Apply the OR group as a single grouped condition
+			logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
+			query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName)
+			i = j
+		} else {
+			// Single AND filter - apply normally
+			logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
+			query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+			i++
+		}
 	}
 
 	// Apply custom SQL WHERE clause (AND condition)
@@ -486,6 +520,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
 		// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
 		sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// Ensure outer parentheses to prevent OR logic from escaping
+		sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
 		if sanitizedWhere != "" {
 			query = query.Where(sanitizedWhere)
 		}
@@ -497,8 +533,19 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
 		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
 		sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+		// Ensure outer parentheses to prevent OR logic from escaping
+		sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
 		if sanitizedOr != "" {
 			query = query.WhereOr(sanitizedOr)
+		}
+	}
+
+	// Apply custom SQL JOIN clauses
+	if len(options.CustomSQLJoin) > 0 {
+		for _, joinClause := range options.CustomSQLJoin {
+			logger.Debug("Applying custom SQL JOIN: %s", joinClause)
+			// Joins are already sanitized during parsing, so we can apply them directly
+			query = query.Join(joinClause)
 		}
 	}
 
@@ -552,6 +599,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				options.Sort,
 				options.CustomSQLWhere,
 				options.CustomSQLOr,
+				options.CustomSQLJoin,
 				expandOpts,
 				options.Distinct,
 				options.CursorForward,
@@ -766,7 +814,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 			// Apply ComputedQL fields if any
 			if len(preload.ComputedQL) > 0 {
 				// Get the base table name from the related model
-				baseTableName := getTableNameFromModel(relatedModel)
+				baseTableName := common.GetTableNameFromModel(relatedModel)
 
 				// Convert the preload relation path to the appropriate alias format
 				// This is ORM-specific. Currently we only support Bun's format.
@@ -777,7 +825,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 					underlyingType := fmt.Sprintf("%T", h.db.GetUnderlyingDB())
 					if strings.Contains(underlyingType, "bun.DB") {
 						// Use Bun's alias format: lowercase with double underscores
-						preloadAlias = relationPathToBunAlias(preload.Relation)
+						preloadAlias = common.RelationPathToBunAlias(preload.Relation)
 					}
 					// For GORM: GORM doesn't use the same alias format, and this fix
 					// may not be needed since GORM handles preloads differently
@@ -792,7 +840,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 					// levels of recursive/nested preloads
 					adjustedExpr := colExpr
 					if baseTableName != "" && preloadAlias != "" {
-						adjustedExpr = replaceTableReferencesInSQL(colExpr, baseTableName, preloadAlias)
+						adjustedExpr = common.ReplaceTableReferencesInSQL(colExpr, baseTableName, preloadAlias)
 						if adjustedExpr != colExpr {
 							logger.Debug("Adjusted computed column expression for %s: '%s' -> '%s'",
 								colName, colExpr, adjustedExpr)
@@ -836,6 +884,15 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 			}
 		}
 
+		// Apply custom SQL joins from XFiles
+		if len(preload.SqlJoins) > 0 {
+			logger.Debug("Applying %d SQL joins to preload %s", len(preload.SqlJoins), preload.Relation)
+			for _, joinClause := range preload.SqlJoins {
+				sq = sq.Join(joinClause)
+				logger.Debug("Applied SQL join to preload %s: %s", preload.Relation, joinClause)
+			}
+		}
+
 		// Apply filters
 		if len(preload.Filters) > 0 {
 			for _, filter := range preload.Filters {
@@ -861,10 +918,25 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		if len(preload.Where) > 0 {
 			// Build RequestOptions with all preloads to allow references to sibling relations
 			preloadOpts := &common.RequestOptions{Preload: allPreloads}
-			// First add table prefixes to unqualified columns
-			prefixedWhere := common.AddTablePrefixToColumns(preload.Where, reflection.ExtractTableNameOnly(preload.Relation))
-			// Then sanitize and allow preload table prefixes
-			sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(preload.Relation), preloadOpts)
+
+			// Determine the table name to use for WHERE clause processing
+			// Prefer the explicit TableName field (set by XFiles), otherwise extract from relation name
+			tableName := preload.TableName
+			if tableName == "" {
+				tableName = reflection.ExtractTableNameOnly(preload.Relation)
+			}
+
+			// In Bun's Relation context, table prefixes are only needed when there are JOINs
+			// Without JOINs, Bun already knows which table is being queried
+			whereClause := preload.Where
+			if len(preload.SqlJoins) > 0 {
+				// Has JOINs: add table prefixes to disambiguate columns
+				whereClause = common.AddTablePrefixToColumns(preload.Where, tableName)
+				logger.Debug("Added table prefix for preload with joins: '%s' -> '%s'", preload.Where, whereClause)
+			}
+
+			// Sanitize the WHERE clause and allow preload table prefixes
+			sanitizedWhere := common.SanitizeWhereClause(whereClause, tableName, preloadOpts)
 			if len(sanitizedWhere) > 0 {
 				sq = sq.Where(sanitizedWhere)
 			}
@@ -883,91 +955,85 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 	})
 
 	// Handle recursive preloading
-	if preload.Recursive && depth < 5 {
+	if preload.Recursive && depth < 8 {
 		logger.Debug("Applying recursive preload for %s at depth %d", preload.Relation, depth+1)
 
-		// For recursive relationships, we need to get the last part of the relation path
-		// e.g., "MastertaskItems" -> "MastertaskItems.MastertaskItems"
 		relationParts := strings.Split(preload.Relation, ".")
 		lastRelationName := relationParts[len(relationParts)-1]
 
-		// Create a recursive preload with the same configuration
-		// but with the relation path extended
+		// Generate FK-based relation name for children
+		// Use RecursiveChildKey if available, otherwise fall back to RelatedKey
+		recursiveFK := preload.RecursiveChildKey
+		if recursiveFK == "" {
+			recursiveFK = preload.RelatedKey
+		}
+
+		recursiveRelationName := lastRelationName
+		if recursiveFK != "" {
+			// Check if the last relation name already contains the FK suffix
+			// (this happens when XFiles already generated the FK-based name)
+			fkUpper := strings.ToUpper(recursiveFK)
+			expectedSuffix := "_" + fkUpper
+
+			if strings.HasSuffix(lastRelationName, expectedSuffix) {
+				// Already has FK suffix, just reuse the same name
+				recursiveRelationName = lastRelationName
+				logger.Debug("Reusing FK-based relation name for recursion: %s", recursiveRelationName)
+			} else {
+				// Generate FK-based name
+				recursiveRelationName = lastRelationName + expectedSuffix
+				keySource := "RelatedKey"
+				if preload.RecursiveChildKey != "" {
+					keySource = "RecursiveChildKey"
+				}
+				logger.Debug("Generated recursive relation name from %s: %s (from %s)",
+					keySource, recursiveRelationName, recursiveFK)
+			}
+		} else {
+			logger.Warn("Recursive preload for %s has no RecursiveChildKey or RelatedKey, falling back to %s.%s",
+				preload.Relation, preload.Relation, lastRelationName)
+		}
+
+		// Create recursive preload
 		recursivePreload := preload
-		recursivePreload.Relation = preload.Relation + "." + lastRelationName
+		recursivePreload.Relation = preload.Relation + "." + recursiveRelationName
+		recursivePreload.Recursive = false // Prevent infinite recursion at this level
 
-		// Recursively apply preload until we reach depth 5
+		// Use the recursive FK for child relations, not the parent's RelatedKey
+		if preload.RecursiveChildKey != "" {
+			recursivePreload.RelatedKey = preload.RecursiveChildKey
+		}
+
+		// CRITICAL: Clear parent's WHERE clause - let Bun use FK traversal
+		recursivePreload.Where = ""
+		recursivePreload.Filters = []common.FilterOption{}
+		logger.Debug("Cleared WHERE clause for recursive preload %s at depth %d",
+			recursivePreload.Relation, depth+1)
+
+		// Apply recursively up to depth 8
 		query = h.applyPreloadWithRecursion(query, recursivePreload, allPreloads, model, depth+1)
-	}
 
-	return query
-}
+		// ALSO: Extend any child relations (like DEF) to recursive levels
+		baseRelation := preload.Relation + "."
+		for i := range allPreloads {
+			relatedPreload := allPreloads[i]
+			if strings.HasPrefix(relatedPreload.Relation, baseRelation) &&
+				!strings.Contains(strings.TrimPrefix(relatedPreload.Relation, baseRelation), ".") {
+				childRelationName := strings.TrimPrefix(relatedPreload.Relation, baseRelation)
 
-// relationPathToBunAlias converts a relation path like "MAL.MAL.DEF" to the Bun alias format "mal__mal__def"
-// Bun generates aliases for nested relations by lowercasing and replacing dots with double underscores
-func relationPathToBunAlias(relationPath string) string {
-	if relationPath == "" {
-		return ""
-	}
-	// Convert to lowercase and replace dots with double underscores
-	alias := strings.ToLower(relationPath)
-	alias = strings.ReplaceAll(alias, ".", "__")
-	return alias
-}
+				extendedChildPreload := relatedPreload
+				extendedChildPreload.Relation = recursivePreload.Relation + "." + childRelationName
+				extendedChildPreload.Recursive = false
 
-// replaceTableReferencesInSQL replaces references to a base table name in a SQL expression
-// with the appropriate alias for the current preload level
-// For example, if baseTableName is "mastertaskitem" and targetAlias is "mal__mal",
-// it will replace "mastertaskitem.rid_mastertaskitem" with "mal__mal.rid_mastertaskitem"
-func replaceTableReferencesInSQL(sqlExpr, baseTableName, targetAlias string) string {
-	if sqlExpr == "" || baseTableName == "" || targetAlias == "" {
-		return sqlExpr
-	}
+				logger.Debug("Extending related preload '%s' to '%s' at recursive depth %d",
+					relatedPreload.Relation, extendedChildPreload.Relation, depth+1)
 
-	// Replace both quoted and unquoted table references
-	// Handle patterns like: tablename.column, "tablename".column, tablename."column", "tablename"."column"
-
-	// Pattern 1: tablename.column (unquoted)
-	result := strings.ReplaceAll(sqlExpr, baseTableName+".", targetAlias+".")
-
-	// Pattern 2: "tablename".column or "tablename"."column" (quoted table name)
-	result = strings.ReplaceAll(result, "\""+baseTableName+"\".", "\""+targetAlias+"\".")
-
-	return result
-}
-
-// getTableNameFromModel extracts the table name from a model
-// It checks the bun tag first, then falls back to converting the struct name to snake_case
-func getTableNameFromModel(model interface{}) string {
-	if model == nil {
-		return ""
-	}
-
-	modelType := reflect.TypeOf(model)
-
-	// Unwrap pointers
-	for modelType != nil && modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
-	}
-
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		return ""
-	}
-
-	// Look for bun tag on embedded BaseModel
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		if field.Anonymous {
-			bunTag := field.Tag.Get("bun")
-			if strings.HasPrefix(bunTag, "table:") {
-				return strings.TrimPrefix(bunTag, "table:")
+				query = h.applyPreloadWithRecursion(query, extendedChildPreload, allPreloads, model, depth+1)
 			}
 		}
 	}
 
-	// Fallback: convert struct name to lowercase (simple heuristic)
-	// This handles cases like "MasterTaskItem" -> "mastertaskitem"
-	return strings.ToLower(modelType.Name())
+	return query
 }
 
 func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, data interface{}, options ExtendedRequestOptions) {
@@ -1177,30 +1243,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 	logger.Info("Updating record in %s.%s", schema, entity)
 
-	// Execute BeforeUpdate hooks
-	hookCtx := &HookContext{
-		Context:   ctx,
-		Handler:   h,
-		Schema:    schema,
-		Entity:    entity,
-		TableName: tableName,
-		Tx:        h.db,
-		Model:     model,
-		Options:   options,
-		ID:        id,
-		Data:      data,
-		Writer:    w,
-	}
-
-	if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
-		logger.Error("BeforeUpdate hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
-	}
-
-	// Use potentially modified data from hook context
-	data = hookCtx.Data
-
 	// Convert data to map
 	dataMap, ok := data.(map[string]interface{})
 	if !ok {
@@ -1234,10 +1276,33 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Variable to store the updated record
 	var updatedRecord interface{}
 
+	// Declare hook context to be used inside and outside transaction
+	var hookCtx *HookContext
+
 	// Process nested relations if present
 	err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
+
+		// First, read the existing record from the database
+		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+		selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		if err := selectQuery.ScanModel(ctx); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("record not found with ID: %v", targetID)
+			}
+			return fmt.Errorf("failed to fetch existing record: %w", err)
+		}
+
+		// Convert existing record to map
+		existingMap := make(map[string]interface{})
+		jsonData, err := json.Marshal(existingRecord)
+		if err != nil {
+			return fmt.Errorf("failed to marshal existing record: %w", err)
+		}
+		if err := json.Unmarshal(jsonData, &existingMap); err != nil {
+			return fmt.Errorf("failed to unmarshal existing record: %w", err)
+		}
 
 		// Extract nested relations if present (but don't process them yet)
 		var nestedRelations map[string]interface{}
@@ -1251,15 +1316,54 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			nestedRelations = relations
 		}
 
+		// Execute BeforeUpdate hooks inside transaction
+		hookCtx = &HookContext{
+			Context:   ctx,
+			Handler:   h,
+			Schema:    schema,
+			Entity:    entity,
+			TableName: tableName,
+			Tx:        tx,
+			Model:     model,
+			Options:   options,
+			ID:        id,
+			Data:      dataMap,
+			Writer:    w,
+		}
+
+		if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+		}
+
+		// Use potentially modified data from hook context
+		if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+			dataMap = modifiedData
+		}
+
+		// Merge only non-null and non-empty values from the incoming request into the existing record
+		for key, newValue := range dataMap {
+			// Skip if the value is nil
+			if newValue == nil {
+				continue
+			}
+
+			// Skip if the value is an empty string
+			if strVal, ok := newValue.(string); ok && strVal == "" {
+				continue
+			}
+
+			// Update the existing map with the new value
+			existingMap[key] = newValue
+		}
+
 		// Ensure ID is in the data map for the update
-		dataMap[pkName] = targetID
+		existingMap[pkName] = targetID
+		dataMap = existingMap
 
 		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
 		// Get the type of the model, handling both pointer and non-pointer types
 		modelType := reflect.TypeOf(model)
-		if modelType.Kind() == reflect.Ptr {
-			modelType = modelType.Elem()
-		}
+		modelType = reflection.GetPointerElement(modelType)
 		modelInstance := reflect.New(modelType).Interface()
 		if err := reflection.MapToStruct(dataMap, modelInstance); err != nil {
 			return fmt.Errorf("failed to populate model from data: %w", err)
@@ -1297,7 +1401,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Fetch the updated record to return the new values
 		modelValue := reflect.New(reflect.TypeOf(model)).Interface()
-		selectQuery := tx.NewSelect().Model(modelValue).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery = tx.NewSelect().Model(modelValue).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			return fmt.Errorf("failed to fetch updated record: %w", err)
 		}
@@ -1563,9 +1667,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
-	}
+	modelType = reflection.GetPointerElement(modelType)
 	recordToDelete := reflect.New(modelType).Interface()
 
 	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
@@ -1825,10 +1927,46 @@ func (h *Handler) processChildRelationsForField(
 		parentIDs[baseName] = parentID
 	}
 
+	// Determine which field name to use for setting parent ID in child data
+	// Priority: Use foreign key field name if specified, otherwise use parent's PK name
+	var foreignKeyFieldName string
+	if relInfo.ForeignKey != "" {
+		// Get the JSON name for the foreign key field in the child model
+		foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, relInfo.ForeignKey)
+		if foreignKeyFieldName == "" {
+			// Fallback to lowercase field name
+			foreignKeyFieldName = strings.ToLower(relInfo.ForeignKey)
+		}
+	} else {
+		// Fallback: use parent's primary key name
+		parentPKName := reflection.GetPrimaryKeyName(parentModelType)
+		foreignKeyFieldName = reflection.GetJSONNameForField(parentModelType, parentPKName)
+		if foreignKeyFieldName == "" {
+			foreignKeyFieldName = strings.ToLower(parentPKName)
+		}
+	}
+
+	// Get the primary key name for the child model to avoid overwriting it in recursive relationships
+	childPKName := reflection.GetPrimaryKeyName(relatedModel)
+	childPKFieldName := reflection.GetJSONNameForField(relatedModelType, childPKName)
+	if childPKFieldName == "" {
+		childPKFieldName = strings.ToLower(childPKName)
+	}
+
+	logger.Debug("Setting parent ID in child data: foreignKeyField=%s, parentID=%v, relForeignKey=%s, childPK=%s",
+		foreignKeyFieldName, parentID, relInfo.ForeignKey, childPKFieldName)
+
 	// Process based on relation type and data structure
 	switch v := relationValue.(type) {
 	case map[string]interface{}:
-		// Single related object
+		// Single related object - add parent ID to foreign key field
+		// IMPORTANT: In recursive relationships, don't overwrite the primary key
+		if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+			v[foreignKeyFieldName] = parentID
+			logger.Debug("Set foreign key in single relation: %s=%v", foreignKeyFieldName, parentID)
+		} else if foreignKeyFieldName == childPKFieldName {
+			logger.Debug("Skipping foreign key assignment - same as primary key (recursive relationship): %s", foreignKeyFieldName)
+		}
 		_, err := processor.ProcessNestedCUD(ctx, operation, v, relatedModel, parentIDs, relatedTableName)
 		if err != nil {
 			return fmt.Errorf("failed to process single relation: %w", err)
@@ -1838,6 +1976,14 @@ func (h *Handler) processChildRelationsForField(
 		// Multiple related objects
 		for i, item := range v {
 			if itemMap, ok := item.(map[string]interface{}); ok {
+				// Add parent ID to foreign key field
+				// IMPORTANT: In recursive relationships, don't overwrite the primary key
+				if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+					itemMap[foreignKeyFieldName] = parentID
+					logger.Debug("Set foreign key in relation array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+				} else if foreignKeyFieldName == childPKFieldName {
+					logger.Debug("Skipping foreign key assignment in array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
+				}
 				_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 				if err != nil {
 					return fmt.Errorf("failed to process relation item %d: %w", i, err)
@@ -1848,6 +1994,14 @@ func (h *Handler) processChildRelationsForField(
 	case []map[string]interface{}:
 		// Multiple related objects (typed slice)
 		for i, itemMap := range v {
+			// Add parent ID to foreign key field
+			// IMPORTANT: In recursive relationships, don't overwrite the primary key
+			if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
+				itemMap[foreignKeyFieldName] = parentID
+				logger.Debug("Set foreign key in relation typed array[%d]: %s=%v", i, foreignKeyFieldName, parentID)
+			} else if foreignKeyFieldName == childPKFieldName {
+				logger.Debug("Skipping foreign key assignment in typed array[%d] - same as primary key (recursive relationship): %s", i, foreignKeyFieldName)
+			}
 			_, err := processor.ProcessNestedCUD(ctx, operation, itemMap, relatedModel, parentIDs, relatedTableName)
 			if err != nil {
 				return fmt.Errorf("failed to process relation item %d: %w", i, err)
@@ -1962,6 +2116,99 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 	default:
 		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
 		return applyWhere(fmt.Sprintf("%s = ?", qualifiedColumn), filter.Value)
+	}
+}
+
+// applyOrFilterGroup applies a group of OR filters as a single grouped condition
+// This ensures OR conditions are properly grouped with parentheses to prevent OR logic from escaping
+func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common.FilterOption, castInfo []ColumnCastInfo, tableName string) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	// Build individual filter conditions
+	conditions := []string{}
+	args := []interface{}{}
+
+	for i, filter := range filters {
+		// Qualify the column name with table name if not already qualified
+		qualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+
+		// Apply casting to text if needed for non-numeric columns or non-numeric values
+		if castInfo[i].NeedsCast {
+			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", qualifiedColumn)
+		}
+
+		// Build the condition based on operator
+		condition, filterArgs := h.buildFilterCondition(qualifiedColumn, filter, tableName)
+		if condition != "" {
+			conditions = append(conditions, condition)
+			args = append(args, filterArgs...)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return query
+	}
+
+	// Join all conditions with OR and wrap in parentheses
+	groupedCondition := "(" + strings.Join(conditions, " OR ") + ")"
+	logger.Debug("Applying grouped OR conditions: %s", groupedCondition)
+
+	// Apply as AND condition (the OR is already inside the parentheses)
+	return query.Where(groupedCondition, args...)
+}
+
+// buildFilterCondition builds a single filter condition and returns the condition string and args
+func (h *Handler) buildFilterCondition(qualifiedColumn string, filter *common.FilterOption, tableName string) (filterStr string, filterInterface []interface{}) {
+	switch strings.ToLower(filter.Operator) {
+	case "eq", "equals":
+		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
+	case "neq", "not_equals", "ne":
+		return fmt.Sprintf("%s != ?", qualifiedColumn), []interface{}{filter.Value}
+	case "gt", "greater_than":
+		return fmt.Sprintf("%s > ?", qualifiedColumn), []interface{}{filter.Value}
+	case "gte", "greater_than_equals", "ge":
+		return fmt.Sprintf("%s >= ?", qualifiedColumn), []interface{}{filter.Value}
+	case "lt", "less_than":
+		return fmt.Sprintf("%s < ?", qualifiedColumn), []interface{}{filter.Value}
+	case "lte", "less_than_equals", "le":
+		return fmt.Sprintf("%s <= ?", qualifiedColumn), []interface{}{filter.Value}
+	case "like":
+		return fmt.Sprintf("%s LIKE ?", qualifiedColumn), []interface{}{filter.Value}
+	case "ilike":
+		return fmt.Sprintf("%s ILIKE ?", qualifiedColumn), []interface{}{filter.Value}
+	case "in":
+		return fmt.Sprintf("%s IN (?)", qualifiedColumn), []interface{}{filter.Value}
+	case "between":
+		// Handle between operator - exclusive (> val1 AND < val2)
+		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s > ? AND %s < ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		} else if values, ok := filter.Value.([]string); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s > ? AND %s < ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		}
+		logger.Warn("Invalid BETWEEN filter value format")
+		return "", nil
+	case "between_inclusive":
+		// Handle between inclusive operator - inclusive (>= val1 AND <= val2)
+		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s >= ? AND %s <= ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		} else if values, ok := filter.Value.([]string); ok && len(values) == 2 {
+			return fmt.Sprintf("(%s >= ? AND %s <= ?)", qualifiedColumn, qualifiedColumn), []interface{}{values[0], values[1]}
+		}
+		logger.Warn("Invalid BETWEEN INCLUSIVE filter value format")
+		return "", nil
+	case "is_null", "isnull":
+		// Check for NULL values - don't use cast for NULL checks
+		colName := h.qualifyColumnName(filter.Column, tableName)
+		return fmt.Sprintf("(%s IS NULL OR %s = '')", colName, colName), nil
+	case "is_not_null", "isnotnull":
+		// Check for NOT NULL values - don't use cast for NULL checks
+		colName := h.qualifyColumnName(filter.Column, tableName)
+		return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", colName, colName), nil
+	default:
+		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
+		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
 	}
 }
 
@@ -2537,10 +2784,10 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 		filteredExpand := expand
 
 		// Get the relationship info for this expand relation
-		relInfo := h.getRelationshipInfo(modelType, expand.Relation)
-		if relInfo != nil && relInfo.relatedModel != nil {
+		relInfo := common.GetRelationshipInfo(modelType, expand.Relation)
+		if relInfo != nil && relInfo.RelatedModel != nil {
 			// Create a validator for the related model
-			expandValidator := common.NewColumnValidator(relInfo.relatedModel)
+			expandValidator := common.NewColumnValidator(relInfo.RelatedModel)
 			// Filter columns using the related model's validator
 			filteredExpand.Columns = expandValidator.FilterValidColumns(expand.Columns)
 
@@ -2617,110 +2864,7 @@ func (h *Handler) shouldUseNestedProcessor(data map[string]interface{}, model in
 
 // GetRelationshipInfo implements common.RelationshipInfoProvider interface
 func (h *Handler) GetRelationshipInfo(modelType reflect.Type, relationName string) *common.RelationshipInfo {
-	info := h.getRelationshipInfo(modelType, relationName)
-	if info == nil {
-		return nil
-	}
-	// Convert internal type to common type
-	return &common.RelationshipInfo{
-		FieldName:    info.fieldName,
-		JSONName:     info.jsonName,
-		RelationType: info.relationType,
-		ForeignKey:   info.foreignKey,
-		References:   info.references,
-		JoinTable:    info.joinTable,
-		RelatedModel: info.relatedModel,
-	}
-}
-
-type relationshipInfo struct {
-	fieldName    string
-	jsonName     string
-	relationType string // "belongsTo", "hasMany", "hasOne", "many2many"
-	foreignKey   string
-	references   string
-	joinTable    string
-	relatedModel interface{}
-}
-
-func (h *Handler) getRelationshipInfo(modelType reflect.Type, relationName string) *relationshipInfo {
-	// Ensure we have a struct type
-	if modelType == nil || modelType.Kind() != reflect.Struct {
-		logger.Warn("Cannot get relationship info from non-struct type: %v", modelType)
-		return nil
-	}
-
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		jsonTag := field.Tag.Get("json")
-		jsonName := strings.Split(jsonTag, ",")[0]
-
-		if jsonName == relationName {
-			gormTag := field.Tag.Get("gorm")
-			info := &relationshipInfo{
-				fieldName: field.Name,
-				jsonName:  jsonName,
-			}
-
-			// Parse GORM tag to determine relationship type and keys
-			if strings.Contains(gormTag, "foreignKey") {
-				info.foreignKey = h.extractTagValue(gormTag, "foreignKey")
-				info.references = h.extractTagValue(gormTag, "references")
-
-				// Determine if it's belongsTo or hasMany/hasOne
-				if field.Type.Kind() == reflect.Slice {
-					info.relationType = "hasMany"
-					// Get the element type for slice
-					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				} else if field.Type.Kind() == reflect.Ptr || field.Type.Kind() == reflect.Struct {
-					info.relationType = "belongsTo"
-					elemType := field.Type
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				}
-			} else if strings.Contains(gormTag, "many2many") {
-				info.relationType = "many2many"
-				info.joinTable = h.extractTagValue(gormTag, "many2many")
-				// Get the element type for many2many (always slice)
-				if field.Type.Kind() == reflect.Slice {
-					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
-						elemType = elemType.Elem()
-					}
-					if elemType.Kind() == reflect.Struct {
-						info.relatedModel = reflect.New(elemType).Elem().Interface()
-					}
-				}
-			} else {
-				// Field has no GORM relationship tags, so it's not a relation
-				return nil
-			}
-
-			return info
-		}
-	}
-	return nil
-}
-
-func (h *Handler) extractTagValue(tag, key string) string {
-	parts := strings.Split(tag, ";")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, key+":") {
-			return strings.TrimPrefix(part, key+":")
-		}
-	}
-	return ""
+	return common.GetRelationshipInfo(modelType, relationName)
 }
 
 // HandleOpenAPI generates and returns the OpenAPI specification

@@ -301,6 +301,163 @@ func TestParseOptionsFromQueryParams(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "Parse custom SQL JOIN from query params",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = employees.department_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) == 0 {
+					t.Error("Expected CustomSQLJoin to be set")
+					return
+				}
+				if len(options.CustomSQLJoin) != 1 {
+					t.Errorf("Expected 1 custom SQL join, got %d", len(options.CustomSQLJoin))
+					return
+				}
+				expected := `LEFT JOIN departments d ON d.id = employees.department_id`
+				if options.CustomSQLJoin[0] != expected {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected, options.CustomSQLJoin[0])
+				}
+			},
+		},
+		{
+			name: "Parse multiple custom SQL JOINs from query params",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles r ON r.id = e.role_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) != 2 {
+					t.Errorf("Expected 2 custom SQL joins, got %d", len(options.CustomSQLJoin))
+					return
+				}
+				expected1 := `LEFT JOIN departments d ON d.id = e.dept_id`
+				expected2 := `INNER JOIN roles r ON r.id = e.role_id`
+				if options.CustomSQLJoin[0] != expected1 {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected1, options.CustomSQLJoin[0])
+				}
+				if options.CustomSQLJoin[1] != expected2 {
+					t.Errorf("Expected CustomSQLJoin[1]=%q, got %q", expected2, options.CustomSQLJoin[1])
+				}
+			},
+		},
+		{
+			name: "Parse custom SQL JOIN from headers",
+			headers: map[string]string{
+				"X-Custom-SQL-Join": `LEFT JOIN users u ON u.id = posts.user_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.CustomSQLJoin) == 0 {
+					t.Error("Expected CustomSQLJoin to be set from header")
+					return
+				}
+				expected := `LEFT JOIN users u ON u.id = posts.user_id`
+				if options.CustomSQLJoin[0] != expected {
+					t.Errorf("Expected CustomSQLJoin[0]=%q, got %q", expected, options.CustomSQLJoin[0])
+				}
+			},
+		},
+		{
+			name: "Extract aliases from custom SQL JOIN",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = employees.department_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.JoinAliases) == 0 {
+					t.Error("Expected JoinAliases to be extracted")
+					return
+				}
+				if len(options.JoinAliases) != 1 {
+					t.Errorf("Expected 1 join alias, got %d", len(options.JoinAliases))
+					return
+				}
+				if options.JoinAliases[0] != "d" {
+					t.Errorf("Expected join alias 'd', got %q", options.JoinAliases[0])
+				}
+				// Also check that it's in the embedded RequestOptions
+				if len(options.RequestOptions.JoinAliases) != 1 || options.RequestOptions.JoinAliases[0] != "d" {
+					t.Error("Expected join alias to also be in RequestOptions.JoinAliases")
+				}
+			},
+		},
+		{
+			name: "Extract multiple aliases from multiple custom SQL JOINs",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles AS r ON r.id = e.role_id`,
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				if len(options.JoinAliases) != 2 {
+					t.Errorf("Expected 2 join aliases, got %d", len(options.JoinAliases))
+					return
+				}
+				expectedAliases := []string{"d", "r"}
+				for i, expected := range expectedAliases {
+					if options.JoinAliases[i] != expected {
+						t.Errorf("Expected join alias[%d]=%q, got %q", i, expected, options.JoinAliases[i])
+					}
+				}
+			},
+		},
+		{
+			name: "Custom JOIN with sort on joined table",
+			queryParams: map[string]string{
+				"x-custom-sql-join": `LEFT JOIN departments d ON d.id = employees.department_id`,
+				"x-sort":            "d.name,employees.id",
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				// Verify join was added
+				if len(options.CustomSQLJoin) != 1 {
+					t.Errorf("Expected 1 custom SQL join, got %d", len(options.CustomSQLJoin))
+					return
+				}
+				// Verify alias was extracted
+				if len(options.JoinAliases) != 1 || options.JoinAliases[0] != "d" {
+					t.Error("Expected join alias 'd' to be extracted")
+					return
+				}
+				// Verify sort was parsed
+				if len(options.Sort) != 2 {
+					t.Errorf("Expected 2 sort options, got %d", len(options.Sort))
+					return
+				}
+				if options.Sort[0].Column != "d.name" {
+					t.Errorf("Expected first sort column 'd.name', got %q", options.Sort[0].Column)
+				}
+				if options.Sort[1].Column != "employees.id" {
+					t.Errorf("Expected second sort column 'employees.id', got %q", options.Sort[1].Column)
+				}
+			},
+		},
+		{
+			name: "Custom JOIN with filter on joined table",
+			queryParams: map[string]string{
+				"x-custom-sql-join":    `LEFT JOIN departments d ON d.id = employees.department_id`,
+				"x-searchop-eq-d.name": "Engineering",
+			},
+			validate: func(t *testing.T, options ExtendedRequestOptions) {
+				// Verify join was added
+				if len(options.CustomSQLJoin) != 1 {
+					t.Error("Expected 1 custom SQL join")
+					return
+				}
+				// Verify alias was extracted
+				if len(options.JoinAliases) != 1 || options.JoinAliases[0] != "d" {
+					t.Error("Expected join alias 'd' to be extracted")
+					return
+				}
+				// Verify filter was parsed
+				if len(options.Filters) != 1 {
+					t.Errorf("Expected 1 filter, got %d", len(options.Filters))
+					return
+				}
+				if options.Filters[0].Column != "d.name" {
+					t.Errorf("Expected filter column 'd.name', got %q", options.Filters[0].Column)
+				}
+				if options.Filters[0].Operator != "eq" {
+					t.Errorf("Expected filter operator 'eq', got %q", options.Filters[0].Operator)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -392,6 +549,55 @@ func TestHeadersAndQueryParamsCombined(t *testing.T) {
 		t.Error("Expected limit to be set from query param")
 	} else if *options.Limit != 100 {
 		t.Errorf("Expected limit=100 from query param (overriding header), got %d", *options.Limit)
+	}
+}
+
+// TestCustomJoinAliasExtraction tests the extractJoinAlias helper function
+func TestCustomJoinAliasExtraction(t *testing.T) {
+	tests := []struct {
+		name     string
+		join     string
+		expected string
+	}{
+		{
+			name:     "LEFT JOIN with alias",
+			join:     "LEFT JOIN departments d ON d.id = employees.department_id",
+			expected: "d",
+		},
+		{
+			name:     "INNER JOIN with AS keyword",
+			join:     "INNER JOIN users AS u ON u.id = posts.user_id",
+			expected: "u",
+		},
+		{
+			name:     "Simple JOIN with alias",
+			join:     "JOIN roles r ON r.id = user_roles.role_id",
+			expected: "r",
+		},
+		{
+			name:     "JOIN without alias (just table name)",
+			join:     "JOIN departments ON departments.id = employees.dept_id",
+			expected: "",
+		},
+		{
+			name:     "RIGHT JOIN with alias",
+			join:     "RIGHT JOIN orders o ON o.customer_id = customers.id",
+			expected: "o",
+		},
+		{
+			name:     "FULL OUTER JOIN with AS",
+			join:     "FULL OUTER JOIN products AS p ON p.id = order_items.product_id",
+			expected: "p",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractJoinAlias(tt.join)
+			if result != tt.expected {
+				t.Errorf("extractJoinAlias(%q) = %q, want %q", tt.join, result, tt.expected)
+			}
+		})
 	}
 }
 

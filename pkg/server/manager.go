@@ -411,7 +411,9 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		return nil, fmt.Errorf("handler cannot be nil")
 	}
 
-	// Set default timeouts
+	// Set default timeouts with minimum of 10 minutes for connection timeouts
+	minConnectionTimeout := 10 * time.Minute
+
 	if cfg.ShutdownTimeout == 0 {
 		cfg.ShutdownTimeout = 30 * time.Second
 	}
@@ -419,13 +421,22 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		cfg.DrainTimeout = 25 * time.Second
 	}
 	if cfg.ReadTimeout == 0 {
-		cfg.ReadTimeout = 15 * time.Second
+		cfg.ReadTimeout = minConnectionTimeout
+	} else if cfg.ReadTimeout < minConnectionTimeout {
+		// Enforce minimum of 10 minutes
+		cfg.ReadTimeout = minConnectionTimeout
 	}
 	if cfg.WriteTimeout == 0 {
-		cfg.WriteTimeout = 15 * time.Second
+		cfg.WriteTimeout = minConnectionTimeout
+	} else if cfg.WriteTimeout < minConnectionTimeout {
+		// Enforce minimum of 10 minutes
+		cfg.WriteTimeout = minConnectionTimeout
 	}
 	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = 60 * time.Second
+		cfg.IdleTimeout = minConnectionTimeout
+	} else if cfg.IdleTimeout < minConnectionTimeout {
+		// Enforce minimum of 10 minutes
+		cfg.IdleTimeout = minConnectionTimeout
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)

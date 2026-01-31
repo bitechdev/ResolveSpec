@@ -12,6 +12,16 @@ type Manager struct {
 	v *viper.Viper
 }
 
+var configInstance *Manager
+
+// GetConfigManager returns a singleton configuration manager instance
+func GetConfigManager() *Manager {
+	if configInstance == nil {
+		configInstance = NewManager()
+	}
+	return configInstance
+}
+
 // NewManager creates a new configuration manager with defaults
 func NewManager() *Manager {
 	v := viper.New()
@@ -32,7 +42,8 @@ func NewManager() *Manager {
 	// Set default values
 	setDefaults(v)
 
-	return &Manager{v: v}
+	configInstance = &Manager{v: v}
+	return configInstance
 }
 
 // NewManagerWithOptions creates a new configuration manager with custom options

@@ -26,6 +26,7 @@ type queryCacheKey struct {
 	Sort           []common.SortOption   `json:"sort"`
 	CustomSQLWhere string                `json:"custom_sql_where,omitempty"`
 	CustomSQLOr    string                `json:"custom_sql_or,omitempty"`
+	CustomSQLJoin  []string              `json:"custom_sql_join,omitempty"`
 	Expand         []expandOptionKey     `json:"expand,omitempty"`
 	Distinct       bool                  `json:"distinct,omitempty"`
 	CursorForward  string                `json:"cursor_forward,omitempty"`
@@ -40,7 +41,7 @@ type cachedTotal struct {
 // buildExtendedQueryCacheKey builds a cache key for extended query options (restheadspec)
 // Includes expand, distinct, and cursor pagination options
 func buildExtendedQueryCacheKey(tableName string, filters []common.FilterOption, sort []common.SortOption,
-	customWhere, customOr string, expandOpts []interface{}, distinct bool, cursorFwd, cursorBwd string) string {
+	customWhere, customOr string, customJoin []string, expandOpts []interface{}, distinct bool, cursorFwd, cursorBwd string) string {
 
 	key := queryCacheKey{
 		TableName:      tableName,
@@ -48,6 +49,7 @@ func buildExtendedQueryCacheKey(tableName string, filters []common.FilterOption,
 		Sort:           sort,
 		CustomSQLWhere: customWhere,
 		CustomSQLOr:    customOr,
+		CustomSQLJoin:  customJoin,
 		Distinct:       distinct,
 		CursorForward:  cursorFwd,
 		CursorBackward: cursorBwd,
@@ -75,8 +77,8 @@ func buildExtendedQueryCacheKey(tableName string, filters []common.FilterOption,
 	jsonData, err := json.Marshal(key)
 	if err != nil {
 		// Fallback to simple string concatenation if JSON fails
-		return hashString(fmt.Sprintf("%s_%v_%v_%s_%s_%v_%v_%s_%s",
-			tableName, filters, sort, customWhere, customOr, expandOpts, distinct, cursorFwd, cursorBwd))
+		return hashString(fmt.Sprintf("%s_%v_%v_%s_%s_%v_%v_%v_%s_%s",
+			tableName, filters, sort, customWhere, customOr, customJoin, expandOpts, distinct, cursorFwd, cursorBwd))
 	}
 
 	return hashString(string(jsonData))

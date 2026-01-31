@@ -584,11 +584,23 @@ func ExtractSourceColumn(colName string) string {
 }
 
 // ToSnakeCase converts a string from CamelCase to snake_case
+// Handles consecutive uppercase letters (acronyms) correctly:
+// "HTTPServer" -> "http_server", "UserID" -> "user_id", "MyHTTPServer" -> "my_http_server"
 func ToSnakeCase(s string) string {
 	var result strings.Builder
-	for i, r := range s {
+	runes := []rune(s)
+
+	for i, r := range runes {
 		if i > 0 && r >= 'A' && r <= 'Z' {
-			result.WriteRune('_')
+			// Add underscore if:
+			// 1. Previous character is lowercase, OR
+			// 2. Next character is lowercase (transition from acronym to word)
+			prevIsLower := runes[i-1] >= 'a' && runes[i-1] <= 'z'
+			nextIsLower := i+1 < len(runes) && runes[i+1] >= 'a' && runes[i+1] <= 'z'
+
+			if prevIsLower || nextIsLower {
+				result.WriteRune('_')
+			}
 		}
 		result.WriteRune(r)
 	}
@@ -936,32 +948,38 @@ func MapToStruct(dataMap map[string]interface{}, target interface{}) error {
 		// Build list of possible column names for this field
 		var columnNames []string
 
-		// 1. Bun tag
-		if bunTag := field.Tag.Get("bun"); bunTag != "" && bunTag != "-" {
-			if colName := ExtractColumnFromBunTag(bunTag); colName != "" {
-				columnNames = append(columnNames, colName)
-			}
-		}
-
-		// 2. Gorm tag
-		if gormTag := field.Tag.Get("gorm"); gormTag != "" && gormTag != "-" {
-			if colName := ExtractColumnFromGormTag(gormTag); colName != "" {
-				columnNames = append(columnNames, colName)
-			}
-		}
-
-		// 3. JSON tag
+		// 1. JSON tag (primary - most common)
+		jsonFound := false
 		if jsonTag := field.Tag.Get("json"); jsonTag != "" && jsonTag != "-" {
 			parts := strings.Split(jsonTag, ",")
 			if len(parts) > 0 && parts[0] != "" {
 				columnNames = append(columnNames, parts[0])
+				jsonFound = true
 			}
 		}
 
-		// 4. Field name variations
+		// 2. Bun tag (fallback if no JSON tag)
+		if !jsonFound {
+			if bunTag := field.Tag.Get("bun"); bunTag != "" && bunTag != "-" {
+				if colName := ExtractColumnFromBunTag(bunTag); colName != "" {
+					columnNames = append(columnNames, colName)
+				}
+			}
+		}
+
+		// 3. Gorm tag (fallback if no JSON tag)
+		if !jsonFound {
+			if gormTag := field.Tag.Get("gorm"); gormTag != "" && gormTag != "-" {
+				if colName := ExtractColumnFromGormTag(gormTag); colName != "" {
+					columnNames = append(columnNames, colName)
+				}
+			}
+		}
+
+		// 4. Field name variations (last resort)
 		columnNames = append(columnNames, field.Name)
 		columnNames = append(columnNames, strings.ToLower(field.Name))
-		columnNames = append(columnNames, ToSnakeCase(field.Name))
+		// columnNames = append(columnNames, ToSnakeCase(field.Name))
 
 		// Map all column name variations to this field index
 		for _, colName := range columnNames {
@@ -1067,7 +1085,7 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 			case string:
 				field.SetBytes([]byte(v))
 				return nil
-			case map[string]interface{}, []interface{}:
+			case map[string]interface{}, []interface{}, []*any, map[string]*any:
 				// Marshal complex types to JSON for SqlJSONB fields
 				jsonBytes, err := json.Marshal(v)
 				if err != nil {
@@ -1077,6 +1095,17 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 				return nil
 			}
 		}
+
+		// Handle slice-to-slice conversions (e.g., []interface{} to []*SomeModel)
+		if valueReflect.Kind() == reflect.Slice {
+			return convertSlice(field, valueReflect)
+		}
+	}
+
+	// If we can convert the type, do it
+	if valueReflect.Type().ConvertibleTo(field.Type()) {
+		field.Set(valueReflect.Convert(field.Type()))
+		return nil
 	}
 
 	// Handle struct types (like SqlTimeStamp, SqlDate, SqlTime which wrap SqlNull[time.Time])
@@ -1090,9 +1119,9 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 				// Call the Scan method with the value
 				results := scanMethod.Call([]reflect.Value{reflect.ValueOf(value)})
 				if len(results) > 0 {
-					// Check if there was an error
-					if err, ok := results[0].Interface().(error); ok && err != nil {
-						return err
+					// The Scan method returns error - check if it's nil
+					if !results[0].IsNil() {
+						return results[0].Interface().(error)
 					}
 					return nil
 				}
@@ -1147,13 +1176,93 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 
 	}
 
-	// If we can convert the type, do it
-	if valueReflect.Type().ConvertibleTo(field.Type()) {
-		field.Set(valueReflect.Convert(field.Type()))
-		return nil
+	return fmt.Errorf("cannot convert %v to %v", valueReflect.Type(), field.Type())
+}
+
+// convertSlice converts a source slice to a target slice type, handling element-wise conversions
+// Supports converting []interface{} to slices of structs or pointers to structs
+func convertSlice(targetSlice reflect.Value, sourceSlice reflect.Value) error {
+	if sourceSlice.Kind() != reflect.Slice || targetSlice.Kind() != reflect.Slice {
+		return fmt.Errorf("both source and target must be slices")
 	}
 
-	return fmt.Errorf("cannot convert %v to %v", valueReflect.Type(), field.Type())
+	// Get the element type of the target slice
+	targetElemType := targetSlice.Type().Elem()
+	sourceLen := sourceSlice.Len()
+
+	// Create a new slice with the same length as the source
+	newSlice := reflect.MakeSlice(targetSlice.Type(), sourceLen, sourceLen)
+
+	// Convert each element
+	for i := 0; i < sourceLen; i++ {
+		sourceElem := sourceSlice.Index(i)
+		targetElem := newSlice.Index(i)
+
+		// Get the actual value from the source element
+		var sourceValue interface{}
+		if sourceElem.CanInterface() {
+			sourceValue = sourceElem.Interface()
+		} else {
+			continue
+		}
+
+		// Handle nil elements
+		if sourceValue == nil {
+			// For pointer types, nil is valid
+			if targetElemType.Kind() == reflect.Ptr {
+				targetElem.Set(reflect.Zero(targetElemType))
+			}
+			continue
+		}
+
+		// If target element type is a pointer to struct, we need to create new instances
+		if targetElemType.Kind() == reflect.Ptr {
+			// Create a new instance of the pointed-to type
+			newElemPtr := reflect.New(targetElemType.Elem())
+
+			// Convert the source value to the struct
+			switch sv := sourceValue.(type) {
+			case map[string]interface{}:
+				// Source is a map, use MapToStruct to populate the new instance
+				if err := MapToStruct(sv, newElemPtr.Interface()); err != nil {
+					return fmt.Errorf("failed to convert element %d: %w", i, err)
+				}
+			default:
+				// Try direct conversion or setFieldValue
+				if err := setFieldValue(newElemPtr.Elem(), sourceValue); err != nil {
+					return fmt.Errorf("failed to convert element %d: %w", i, err)
+				}
+			}
+
+			targetElem.Set(newElemPtr)
+		} else if targetElemType.Kind() == reflect.Struct {
+			// Target element is a struct (not a pointer)
+			switch sv := sourceValue.(type) {
+			case map[string]interface{}:
+				// Use MapToStruct to populate the element
+				elemPtr := targetElem.Addr()
+				if elemPtr.CanInterface() {
+					if err := MapToStruct(sv, elemPtr.Interface()); err != nil {
+						return fmt.Errorf("failed to convert element %d: %w", i, err)
+					}
+				}
+			default:
+				// Try direct conversion
+				if err := setFieldValue(targetElem, sourceValue); err != nil {
+					return fmt.Errorf("failed to convert element %d: %w", i, err)
+				}
+			}
+		} else {
+			// For other types, use setFieldValue
+			if err := setFieldValue(targetElem, sourceValue); err != nil {
+				return fmt.Errorf("failed to convert element %d: %w", i, err)
+			}
+		}
+	}
+
+	// Set the converted slice to the target field
+	targetSlice.Set(newSlice)
+	return nil
 }
 
 // convertToInt64 attempts to convert various types to int64
@@ -1259,6 +1368,63 @@ func convertToFloat64(value interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// GetValidJSONFieldNames returns a map of valid JSON field names for a model
+// This can be used to validate input data against a model's structure
+// The map keys are the JSON field names (from json tags) that exist in the model
+func GetValidJSONFieldNames(modelType reflect.Type) map[string]bool {
+	validFields := make(map[string]bool)
+
+	// Unwrap pointers to get to the base struct type
+	for modelType != nil && modelType.Kind() == reflect.Pointer {
+		modelType = modelType.Elem()
+	}
+
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return validFields
+	}
+
+	collectValidFieldNames(modelType, validFields)
+	return validFields
+}
+
+// collectValidFieldNames recursively collects valid JSON field names from a struct type
+func collectValidFieldNames(typ reflect.Type, validFields map[string]bool) {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Check for embedded structs
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				// Recursively add fields from embedded struct
+				collectValidFieldNames(fieldType, validFields)
+				continue
+			}
+		}
+
+		// Get the JSON tag name for this field (same logic as MapToStruct)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag != "" && jsonTag != "-" {
+			// Extract the field name from the JSON tag (before any options like omitempty)
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] != "" {
+				validFields[parts[0]] = true
+			}
+		} else {
+			// If no JSON tag, use the field name in lowercase as a fallback
+			validFields[strings.ToLower(field.Name)] = true
+		}
+	}
 }
 
 // getRelationModelSingleLevel gets the model type for a single level field (non-recursive)

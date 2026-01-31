@@ -23,6 +23,10 @@ type RequestOptions struct {
 	CursorForward  string  `json:"cursor_forward"`
 	CursorBackward string  `json:"cursor_backward"`
 	FetchRowNumber *string `json:"fetch_row_number"`
+
+	// Join table aliases (used for validation of prefixed columns in filters/sorts)
+	// Not serialized to JSON as it's internal validation state
+	JoinAliases []string `json:"-"`
 }
 
 type Parameter struct {
@@ -33,6 +37,7 @@ type Parameter struct {
 
 type PreloadOption struct {
 	Relation    string            `json:"relation"`
+	TableName   string            `json:"table_name"` // Actual database table name (e.g., "mastertaskitem")
 	Columns     []string          `json:"columns"`
 	OmitColumns []string          `json:"omit_columns"`
 	Sort        []SortOption      `json:"sort"`
@@ -45,9 +50,14 @@ type PreloadOption struct {
 	Recursive   bool              `json:"recursive"`   // if true, preload recursively up to 5 levels
 
 	// Relationship keys from XFiles - used to build proper foreign key filters
-	PrimaryKey string `json:"primary_key"` // Primary key of the related table
-	RelatedKey string `json:"related_key"` // For child tables: column in child that references parent
-	ForeignKey string `json:"foreign_key"` // For parent tables: column in current table that references parent
+	PrimaryKey        string `json:"primary_key"`         // Primary key of the related table
+	RelatedKey        string `json:"related_key"`         // For child tables: column in child that references parent
+	ForeignKey        string `json:"foreign_key"`         // For parent tables: column in current table that references parent
+	RecursiveChildKey string `json:"recursive_child_key"` // For recursive tables: FK column used for recursion (e.g., "rid_parentmastertaskitem")
+
+	// Custom SQL JOINs from XFiles - used when preload needs additional joins
+	SqlJoins    []string `json:"sql_joins"`    // Custom SQL JOIN clauses
+	JoinAliases []string `json:"join_aliases"` // Extracted table aliases from SqlJoins for validation
 }
 
 type FilterOption struct {
@@ -110,4 +120,15 @@ type TableMetadata struct {
 	Table     string   `json:"table"`
 	Columns   []Column `json:"columns"`
 	Relations []string `json:"relations"`
+}
+
+// RelationshipInfo contains information about a model relationship
+type RelationshipInfo struct {
+	FieldName    string      `json:"field_name"`
+	JSONName     string      `json:"json_name"`
+	RelationType string      `json:"relation_type"` // "belongsTo", "hasMany", "hasOne", "many2many"
+	ForeignKey   string      `json:"foreign_key"`
+	References   string      `json:"references"`
+	JoinTable    string      `json:"join_table"`
+	RelatedModel interface{} `json:"related_model"`
 }

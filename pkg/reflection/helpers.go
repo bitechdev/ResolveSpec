@@ -1,6 +1,9 @@
 package reflection
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 func Len(v any) int {
 	val := reflect.ValueOf(v)
@@ -46,4 +49,59 @@ func ExtractTableNameOnly(fullName string) string {
 	}
 
 	return fullName[startIndex:]
+}
+
+// GetPointerElement returns the element type if the provided reflect.Type is a pointer.
+// If the type is a slice of pointers, it returns the element type of the pointer within the slice.
+// If neither condition is met, it returns the original type.
+func GetPointerElement(v reflect.Type) reflect.Type {
+	if v.Kind() == reflect.Ptr {
+		return v.Elem()
+	}
+	if v.Kind() == reflect.Slice && v.Elem().Kind() == reflect.Ptr {
+		subElem := v.Elem()
+		if subElem.Elem().Kind() == reflect.Ptr {
+			return subElem.Elem().Elem()
+		}
+		return v.Elem()
+	}
+	return v
+}
+
+// GetJSONNameForField gets the JSON tag name for a struct field.
+// Returns the JSON field name from the json struct tag, or an empty string if not found.
+// Handles the "json" tag format: "name", "name,omitempty", etc.
+func GetJSONNameForField(modelType reflect.Type, fieldName string) string {
+	if modelType == nil {
+		return ""
+	}
+
+	// Handle pointer types
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType.Kind() != reflect.Struct {
+		return ""
+	}
+
+	// Find the field
+	field, found := modelType.FieldByName(fieldName)
+	if !found {
+		return ""
+	}
+
+	// Get the JSON tag
+	jsonTag := field.Tag.Get("json")
+	if jsonTag == "" {
+		return ""
+	}
+
+	// Parse the tag (format: "name,omitempty" or just "name")
+	parts := strings.Split(jsonTag, ",")
+	if len(parts) > 0 && parts[0] != "" && parts[0] != "-" {
+		return parts[0]
+	}
+
+	return ""
 }

@@ -73,6 +73,9 @@ type ServerInstanceConfig struct {
 
 	// Tags for organization and filtering
 	Tags map[string]string `mapstructure:"tags"`
+
+	// ExternalURLs are additional URLs that this server instance is accessible from (for CORS) for proxy setups
+	ExternalURLs []string `mapstructure:"external_urls"`
 }
 
 // TracingConfig holds OpenTelemetry tracing configuration

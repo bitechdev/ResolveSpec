@@ -362,6 +362,29 @@ func TestFilterRequestOptions(t *testing.T) {
 	}
 }
 
+func TestFilterRequestOptions_ClearsJoinAliases(t *testing.T) {
+	model := TestModel{}
+	validator := NewColumnValidator(model)
+
+	options := RequestOptions{
+		Columns: []string{"id", "name"},
+		// Set JoinAliases - this should be cleared by FilterRequestOptions
+		JoinAliases: []string{"d", "u", "r"},
+	}
+
+	filtered := validator.FilterRequestOptions(options)
+
+	// Verify that JoinAliases was cleared (internal field should not persist)
+	if filtered.JoinAliases != nil {
+		t.Errorf("Expected JoinAliases to be nil after filtering, got %v", filtered.JoinAliases)
+	}
+
+	// Verify that other fields are still properly filtered
+	if len(filtered.Columns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(filtered.Columns))
+	}
+}
+
 func TestIsSafeSortExpression(t *testing.T) {
 	tests := []struct {
 		name       string

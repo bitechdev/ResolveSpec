@@ -26,7 +26,9 @@ type ExtendedRequestOptions struct {
 	CustomSQLOr    string
 
 	// Joins
-	Expand []ExpandOption
+	Expand        []ExpandOption
+	CustomSQLJoin []string // Custom SQL JOIN clauses
+	JoinAliases   []string // Extracted table aliases from CustomSQLJoin for validation
 
 	// Advanced features
 	AdvancedSQL map[string]string // Column -> SQL expression
@@ -46,7 +48,8 @@ type ExtendedRequestOptions struct {
 	AtomicTransaction bool
 
 	// X-Files configuration - comprehensive query options as a single JSON object
-	XFiles *XFiles
+	XFiles        *XFiles
+	XFilesPresent bool // Flag to indicate if X-Files header was provided
 }
 
 // ExpandOption represents a relation expansion configuration
@@ -111,6 +114,7 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		AdvancedSQL:          make(map[string]string),
 		ComputedQL:           make(map[string]string),
 		Expand:               make([]ExpandOption, 0),
+		CustomSQLJoin:        make([]string, 0),
 		ResponseFormat:       "simple", // Default response format
 		SingleRecordAsObject: true,     // Default: normalize single-element arrays to objects
 	}
@@ -185,8 +189,7 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		case strings.HasPrefix(key, "x-expand"):
 			h.parseExpand(&options, decodedValue)
 		case strings.HasPrefix(key, "x-custom-sql-join"):
-			// TODO: Implement custom SQL join
-			logger.Debug("Custom SQL join not yet implemented: %s", decodedValue)
+			h.parseCustomSQLJoin(&options, decodedValue)
 
 		// Sorting & Pagination
 		case strings.HasPrefix(key, "x-sort"):
@@ -272,7 +275,8 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 	}
 
 	// Resolve relation names (convert table names to field names) if model is provided
-	if model != nil {
+	// Skip resolution if X-Files header was provided, as XFiles uses Prefix which already contains the correct field names
+	if model != nil && !options.XFilesPresent {
 		h.resolveRelationNamesInOptions(&options, model)
 	}
 
@@ -353,6 +357,12 @@ func (h *Handler) parseSearchOp(options *ExtendedRequestOptions, headerKey, valu
 
 	operator := parts[0]
 	colName := parts[1]
+
+	if strings.HasPrefix(colName, "cql") {
+		// Computed column - Will not filter on it
+		logger.Warn("Search operators on computed columns are not supported: %s", colName)
+		return
+	}
 
 	// Map operator names to filter operators
 	filterOp := h.mapSearchOperator(colName, operator, value)
@@ -489,6 +499,101 @@ func (h *Handler) parseExpand(options *ExtendedRequestOptions, value string) {
 	}
 }
 
+// parseCustomSQLJoin parses x-custom-sql-join header
+// Format: Single JOIN clause or multiple JOIN clauses separated by |
+// Example: "LEFT JOIN departments d ON d.id = employees.department_id"
+// Example: "LEFT JOIN departments d ON d.id = e.dept_id | INNER JOIN roles r ON r.id = e.role_id"
+func (h *Handler) parseCustomSQLJoin(options *ExtendedRequestOptions, value string) {
+	if value == "" {
+		return
+	}
+
+	// Split by | for multiple joins
+	joins := strings.Split(value, "|")
+	for _, joinStr := range joins {
+		joinStr = strings.TrimSpace(joinStr)
+		if joinStr == "" {
+			continue
+		}
+
+		// Basic validation: should contain "JOIN" keyword
+		upperJoin := strings.ToUpper(joinStr)
+		if !strings.Contains(upperJoin, "JOIN") {
+			logger.Warn("Invalid custom SQL join (missing JOIN keyword): %s", joinStr)
+			continue
+		}
+
+		// Sanitize the join clause using common.SanitizeWhereClause
+		// Note: This is basic sanitization - in production you may want stricter validation
+		sanitizedJoin := common.SanitizeWhereClause(joinStr, "", nil)
+		if sanitizedJoin == "" {
+			logger.Warn("Custom SQL join failed sanitization: %s", joinStr)
+			continue
+		}
+
+		// Extract table alias from the JOIN clause
+		alias := extractJoinAlias(sanitizedJoin)
+		if alias != "" {
+			options.JoinAliases = append(options.JoinAliases, alias)
+			// Also add to the embedded RequestOptions for validation
+			options.RequestOptions.JoinAliases = append(options.RequestOptions.JoinAliases, alias)
+			logger.Debug("Extracted join alias: %s", alias)
+		}
+
+		logger.Debug("Adding custom SQL join: %s", sanitizedJoin)
+		options.CustomSQLJoin = append(options.CustomSQLJoin, sanitizedJoin)
+	}
+}
+
+// extractJoinAlias extracts the table alias from a JOIN clause
+// Examples:
+//   - "LEFT JOIN departments d ON ..." -> "d"
+//   - "INNER JOIN users AS u ON ..." -> "u"
+//   - "JOIN roles r ON ..." -> "r"
+func extractJoinAlias(joinClause string) string {
+	// Pattern: JOIN table_name [AS] alias ON ...
+	// We need to extract the alias (word before ON)
+
+	upperJoin := strings.ToUpper(joinClause)
+
+	// Find the "JOIN" keyword position
+	joinIdx := strings.Index(upperJoin, "JOIN")
+	if joinIdx == -1 {
+		return ""
+	}
+
+	// Find the "ON" keyword position
+	onIdx := strings.Index(upperJoin, " ON ")
+	if onIdx == -1 {
+		return ""
+	}
+
+	// Extract the part between JOIN and ON
+	betweenJoinAndOn := strings.TrimSpace(joinClause[joinIdx+4 : onIdx])
+
+	// Split by spaces to get words
+	words := strings.Fields(betweenJoinAndOn)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// If there's an AS keyword, the alias is after it
+	for i, word := range words {
+		if strings.EqualFold(word, "AS") && i+1 < len(words) {
+			return words[i+1]
+		}
+	}
+
+	// Otherwise, the alias is the last word (if there are 2+ words)
+	// Format: "table_name alias" or just "table_name"
+	if len(words) >= 2 {
+		return words[len(words)-1]
+	}
+
+	// Only one word means it's just the table name, no alias
+	return ""
+}
+
 // parseSorting parses x-sort header
 // Format: +field1,-field2,field3 (+ for ASC, - for DESC, default ASC)
 func (h *Handler) parseSorting(options *ExtendedRequestOptions, value string) {
@@ -590,6 +695,7 @@ func (h *Handler) parseXFiles(options *ExtendedRequestOptions, value string) {
 
 	// Store the original XFiles for reference
 	options.XFiles = &xfiles
+	options.XFilesPresent = true // Mark that X-Files header was provided
 
 	// Map XFiles fields to ExtendedRequestOptions
 
@@ -881,11 +987,33 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		return
 	}
 
-	// Store the table name as-is for now - it will be resolved to field name later
-	// when we have the model instance available
-	relationPath := xfile.TableName
+	// Use the Prefix (e.g., "MAL") as the relation name, which matches the Go struct field name
+	// Fall back to TableName if Prefix is not specified
+	relationName := xfile.Prefix
+	if relationName == "" {
+		relationName = xfile.TableName
+	}
+
+	// SPECIAL CASE: For recursive child tables, generate FK-based relation name
+	// Example: If prefix is "MAL" and relatedkey is "rid_parentmastertaskitem",
+	// the actual struct field is "MAL_RID_PARENTMASTERTASKITEM", not "MAL"
+	if xfile.Recursive && xfile.RelatedKey != "" && basePath != "" {
+		// Check if this is a self-referencing recursive relation (same table as parent)
+		// by comparing the last part of basePath with the current prefix
+		basePathParts := strings.Split(basePath, ".")
+		lastPrefix := basePathParts[len(basePathParts)-1]
+
+		if lastPrefix == relationName {
+			// This is a recursive self-reference, use FK-based name
+			fkUpper := strings.ToUpper(xfile.RelatedKey)
+			relationName = relationName + "_" + fkUpper
+			logger.Debug("X-Files: Generated FK-based relation name for recursive table: %s", relationName)
+		}
+	}
+
+	relationPath := relationName
 	if basePath != "" {
-		relationPath = basePath + "." + xfile.TableName
+		relationPath = basePath + "." + relationName
 	}
 
 	logger.Debug("X-Files: Adding preload for relation: %s", relationPath)
@@ -893,6 +1021,7 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	// Create PreloadOption from XFiles configuration
 	preloadOpt := common.PreloadOption{
 		Relation:    relationPath,
+		TableName:   xfile.TableName, // Store the actual database table name for WHERE clause processing
 		Columns:     xfile.Columns,
 		OmitColumns: xfile.OmitColumns,
 	}
@@ -935,12 +1064,12 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	// Add WHERE clause if SQL conditions specified
 	whereConditions := make([]string, 0)
 	if len(xfile.SqlAnd) > 0 {
-		// Process each SQL condition: add table prefixes and sanitize
+		// Process each SQL condition
+		// Note: We don't add table prefixes here because they're only needed for JOINs
+		// The handler will add prefixes later if SqlJoins are present
 		for _, sqlCond := range xfile.SqlAnd {
-			// First add table prefixes to unqualified columns
-			prefixedCond := common.AddTablePrefixToColumns(sqlCond, xfile.TableName)
-			// Then sanitize the condition
-			sanitizedCond := common.SanitizeWhereClause(prefixedCond, xfile.TableName)
+			// Sanitize the condition without adding prefixes
+			sanitizedCond := common.SanitizeWhereClause(sqlCond, xfile.TableName)
 			if sanitizedCond != "" {
 				whereConditions = append(whereConditions, sanitizedCond)
 			}
@@ -985,13 +1114,72 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		logger.Debug("X-Files: Set foreign key for %s: %s", relationPath, xfile.ForeignKey)
 	}
 
+	// Transfer SqlJoins from XFiles to PreloadOption
+	if len(xfile.SqlJoins) > 0 {
+		preloadOpt.SqlJoins = make([]string, 0, len(xfile.SqlJoins))
+		preloadOpt.JoinAliases = make([]string, 0, len(xfile.SqlJoins))
+
+		for _, joinClause := range xfile.SqlJoins {
+			// Sanitize the join clause
+			sanitizedJoin := common.SanitizeWhereClause(joinClause, "", nil)
+			if sanitizedJoin == "" {
+				logger.Warn("X-Files: SqlJoin failed sanitization for %s: %s", relationPath, joinClause)
+				continue
+			}
+
+			preloadOpt.SqlJoins = append(preloadOpt.SqlJoins, sanitizedJoin)
+
+			// Extract join alias for validation
+			alias := extractJoinAlias(sanitizedJoin)
+			if alias != "" {
+				preloadOpt.JoinAliases = append(preloadOpt.JoinAliases, alias)
+				logger.Debug("X-Files: Extracted join alias for %s: %s", relationPath, alias)
+			}
+		}
+
+		logger.Debug("X-Files: Added %d SQL joins to preload %s", len(preloadOpt.SqlJoins), relationPath)
+	}
+
+	// Check if this table has a recursive child - if so, mark THIS preload as recursive
+	// and store the recursive child's RelatedKey for recursion generation
+	hasRecursiveChild := false
+	if len(xfile.ChildTables) > 0 {
+		for _, childTable := range xfile.ChildTables {
+			if childTable.Recursive && childTable.TableName == xfile.TableName {
+				hasRecursiveChild = true
+				preloadOpt.Recursive = true
+				preloadOpt.RecursiveChildKey = childTable.RelatedKey
+				logger.Debug("X-Files: Detected recursive child for %s, marking parent as recursive (recursive FK: %s)",
+					relationPath, childTable.RelatedKey)
+				break
+			}
+		}
+	}
+
+	// Skip adding this preload if it's a recursive child (it will be handled by parent's Recursive flag)
+	if xfile.Recursive && basePath != "" {
+		logger.Debug("X-Files: Skipping recursive child preload: %s (will be handled by parent)", relationPath)
+		// Still process its parent/child tables for relations like DEF
+		h.processXFilesRelations(xfile, options, relationPath)
+		return
+	}
+
 	// Add the preload option
 	options.Preload = append(options.Preload, preloadOpt)
+	logger.Debug("X-Files: Added preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, RecursiveChildKey=%s, Where=%s",
+		len(options.Preload)-1, preloadOpt.Relation, preloadOpt.Recursive, preloadOpt.RelatedKey, preloadOpt.RecursiveChildKey, preloadOpt.Where)
 
 	// Recursively process nested ParentTables and ChildTables
-	if xfile.Recursive {
-		logger.Debug("X-Files: Recursive preload enabled for: %s", relationPath)
-		h.processXFilesRelations(xfile, options, relationPath)
+	// Skip processing child tables if we already detected and handled a recursive child
+	if hasRecursiveChild {
+		logger.Debug("X-Files: Skipping child table processing for %s (recursive child already handled)", relationPath)
+		// But still process parent tables
+		if len(xfile.ParentTables) > 0 {
+			logger.Debug("X-Files: Processing %d parent tables for %s", len(xfile.ParentTables), relationPath)
+			for _, parentTable := range xfile.ParentTables {
+				h.addXFilesPreload(parentTable, options, relationPath)
+			}
+		}
 	} else if len(xfile.ParentTables) > 0 || len(xfile.ChildTables) > 0 {
 		h.processXFilesRelations(xfile, options, relationPath)
 	}

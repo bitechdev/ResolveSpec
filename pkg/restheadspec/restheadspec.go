@@ -32,6 +32,7 @@
 //   - X-Clean-JSON: Boolean to remove null/empty fields
 //   - X-Custom-SQL-Where: Custom SQL WHERE clause (AND)
 //   - X-Custom-SQL-Or: Custom SQL WHERE clause (OR)
+//   - X-Custom-SQL-Join: Custom SQL JOIN clauses (pipe-separated for multiple)
 //
 // # Usage Example
 //
@@ -103,8 +104,9 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware Midd
 	openAPIHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		corsConfig := common.DefaultCORSConfig()
 		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
 		reqAdapter := router.NewHTTPRequest(r)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+
 		handler.HandleOpenAPI(respAdapter, reqAdapter)
 	})
 	muxRouter.Handle("/openapi", openAPIHandler).Methods("GET", "OPTIONS")
@@ -161,7 +163,8 @@ func createMuxHandler(handler *Handler, schema, entity, idParam string) http.Han
 		// Set CORS headers
 		corsConfig := common.DefaultCORSConfig()
 		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
+		reqAdapter := router.NewHTTPRequest(r)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 
 		vars := make(map[string]string)
 		vars["schema"] = schema
@@ -169,7 +172,7 @@ func createMuxHandler(handler *Handler, schema, entity, idParam string) http.Han
 		if idParam != "" {
 			vars["id"] = mux.Vars(r)[idParam]
 		}
-		reqAdapter := router.NewHTTPRequest(r)
+
 		handler.Handle(respAdapter, reqAdapter, vars)
 	}
 }
@@ -180,7 +183,8 @@ func createMuxGetHandler(handler *Handler, schema, entity, idParam string) http.
 		// Set CORS headers
 		corsConfig := common.DefaultCORSConfig()
 		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
+		reqAdapter := router.NewHTTPRequest(r)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 
 		vars := make(map[string]string)
 		vars["schema"] = schema
@@ -188,7 +192,7 @@ func createMuxGetHandler(handler *Handler, schema, entity, idParam string) http.
 		if idParam != "" {
 			vars["id"] = mux.Vars(r)[idParam]
 		}
-		reqAdapter := router.NewHTTPRequest(r)
+
 		handler.HandleGet(respAdapter, reqAdapter, vars)
 	}
 }
@@ -200,13 +204,14 @@ func createMuxOptionsHandler(handler *Handler, schema, entity string, allowedMet
 		corsConfig := common.DefaultCORSConfig()
 		corsConfig.AllowedMethods = allowedMethods
 		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
+		reqAdapter := router.NewHTTPRequest(r)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 
 		// Return metadata in the OPTIONS response body
 		vars := make(map[string]string)
 		vars["schema"] = schema
 		vars["entity"] = entity
-		reqAdapter := router.NewHTTPRequest(r)
+
 		handler.HandleGet(respAdapter, reqAdapter, vars)
 	}
 }
@@ -285,15 +290,8 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 	// Add global /openapi route
 	r.Handle("GET", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
 		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
 		reqAdapter := router.NewBunRouterRequest(req)
-		handler.HandleOpenAPI(respAdapter, reqAdapter)
-		return nil
-	})
-
-	r.Handle("OPTIONS", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
-		respAdapter := router.NewHTTPResponseWriter(w)
-		common.SetCORSHeaders(respAdapter, corsConfig)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 		return nil
 	})
 
@@ -317,24 +315,26 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		// GET and POST for /{schema}/{entity}
 		r.Handle("GET", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
 
 		r.Handle("POST", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
@@ -342,65 +342,70 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		// GET, POST, PUT, PATCH, DELETE for /{schema}/{entity}/:id
 		r.Handle("GET", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 				"id":     req.Param("id"),
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
 
 		r.Handle("POST", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 				"id":     req.Param("id"),
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
 
 		r.Handle("PUT", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 				"id":     req.Param("id"),
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
 
 		r.Handle("PATCH", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 				"id":     req.Param("id"),
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
 
 		r.Handle("DELETE", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 				"id":     req.Param("id"),
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
 		})
@@ -408,12 +413,13 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		// Metadata endpoint
 		r.Handle("GET", metadataPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
-			common.SetCORSHeaders(respAdapter, corsConfig)
+			reqAdapter := router.NewBunRouterRequest(req)
+			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
 		})
@@ -421,14 +427,15 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		// OPTIONS route without ID (returns metadata)
 		r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
+			reqAdapter := router.NewBunRouterRequest(req)
 			optionsCorsConfig := corsConfig
 			optionsCorsConfig.AllowedMethods = []string{"GET", "POST", "OPTIONS"}
-			common.SetCORSHeaders(respAdapter, optionsCorsConfig)
+			common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
 		})
@@ -436,14 +443,15 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		// OPTIONS route with ID (returns metadata)
 		r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
+			reqAdapter := router.NewBunRouterRequest(req)
 			optionsCorsConfig := corsConfig
 			optionsCorsConfig.AllowedMethods = []string{"GET", "PUT", "PATCH", "DELETE", "POST", "OPTIONS"}
-			common.SetCORSHeaders(respAdapter, optionsCorsConfig)
+			common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
 			params := map[string]string{
 				"schema": currentSchema,
 				"entity": currentEntity,
 			}
-			reqAdapter := router.NewBunRouterRequest(req)
+
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
 		})

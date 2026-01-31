@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/cache"
@@ -60,10 +61,15 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 // Requires stored procedures: resolvespec_login, resolvespec_logout, resolvespec_session,
 // resolvespec_session_update, resolvespec_refresh_token
 // See database_schema.sql for procedure definitions
+// Also supports multiple OAuth2 providers configured with WithOAuth2()
 type DatabaseAuthenticator struct {
 	db       *sql.DB
 	cache    *cache.Cache
 	cacheTTL time.Duration
+
+	// OAuth2 providers registry (multiple providers supported)
+	oauth2Providers      map[string]*OAuth2Provider
+	oauth2ProvidersMutex sync.RWMutex
 }
 
 // DatabaseAuthenticatorOptions configures the database authenticator

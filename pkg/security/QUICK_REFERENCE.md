@@ -7,15 +7,16 @@
 auth := security.NewDatabaseAuthenticator(db) // Session-based (recommended)
 // OR: auth := security.NewJWTAuthenticator("secret-key", db)
 // OR: auth := security.NewHeaderAuthenticator()
+// OR: auth := security.NewGoogleAuthenticator(clientID, secret, redirectURL, db) // OAuth2
 
 colSec := security.NewDatabaseColumnSecurityProvider(db)
 rowSec := security.NewDatabaseRowSecurityProvider(db)
 
 // Step 2: Combine providers
-provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+provider, _ := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
 
 // Step 3: Setup and apply middleware
-securityList := security.SetupSecurityProvider(handler, provider)
+securityList, _ := security.SetupSecurityProvider(handler, provider)
 router.Use(security.NewAuthMiddleware(securityList))
 router.Use(security.SetSecurityMiddleware(securityList))
 ```
@@ -729,6 +730,7 @@ meta, ok := security.GetUserMeta(ctx)
 | File | Description |
 |------|-------------|
 | `INTERFACE_GUIDE.md` | **Start here** - Complete implementation guide |
+| `OAUTH2.md` | **OAuth2 Guide** - Google, GitHub, Microsoft, Facebook, custom providers |
 | `examples.go` | Working provider implementations to copy |
 | `setup_example.go` | 6 complete integration examples |
 | `README.md` | Architecture overview and migration guide |

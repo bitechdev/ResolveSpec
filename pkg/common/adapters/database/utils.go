@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/uptrace/bun/dialect/mssqldialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
@@ -12,6 +11,8 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // PostgreSQL identifier length limit (63 bytes + null terminator = 64 bytes total)

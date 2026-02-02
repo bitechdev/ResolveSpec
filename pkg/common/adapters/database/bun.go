@@ -208,9 +208,9 @@ type BunSelectQuery struct {
 	schema         string  // Separated schema name
 	tableName      string  // Just the table name, without schema
 	tableAlias     string
-	inJoinContext  bool   // Track if we're in a JOIN relation context
-	joinTableAlias string // Alias to use for JOIN conditions
-	skipAutoDetect bool   // Skip auto-detection to prevent circular calls
+	inJoinContext  bool                                                     // Track if we're in a JOIN relation context
+	joinTableAlias string                                                   // Alias to use for JOIN conditions
+	skipAutoDetect bool                                                     // Skip auto-detection to prevent circular calls
 	customPreloads map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
 }
 

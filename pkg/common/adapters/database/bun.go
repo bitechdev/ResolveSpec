@@ -633,12 +633,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 		// Check if it's a pointer (has-one/belongs-to)
 		if !relationField.IsNil() {
 			// Already loaded! Collect all related records from all parents
-			var relatedType reflect.Type
-			if relationField.Elem().IsValid() {
-				relatedType = relationField.Type()
-			} else {
-				relatedType = relationField.Type()
-			}
+			relatedType := relationField.Type()
 			allRelated := reflect.MakeSlice(reflect.SliceOf(relatedType), 0, parents.Len())
 			for j := 0; j < parents.Len(); j++ {
 				p := parents.Index(j)
@@ -785,7 +780,7 @@ func (b *BunSelectQuery) loadRelationLevel(ctx context.Context, parentRecords re
 	}
 
 	// Create a slice to hold the results
-	resultsSlice := reflect.MakeSlice(reflect.SliceOf(reflect.PtrTo(relatedType)), 0, len(fkValues))
+	resultsSlice := reflect.MakeSlice(reflect.SliceOf(reflect.PointerTo(relatedType)), 0, len(fkValues))
 	resultsPtr := reflect.New(resultsSlice.Type())
 	resultsPtr.Elem().Set(resultsSlice)
 
@@ -876,7 +871,7 @@ func extractForeignKeyValues(records reflect.Value, fkFieldName string) ([]inter
 		fkField := record.FieldByName(fkFieldName)
 		if !fkField.IsValid() {
 			// Try capitalized version
-			fkField = record.FieldByName(strings.Title(fkFieldName))
+			fkField = record.FieldByName(strings.ToUpper(fkFieldName[:1]) + fkFieldName[1:])
 		}
 		if !fkField.IsValid() {
 			// Try finding by json tag

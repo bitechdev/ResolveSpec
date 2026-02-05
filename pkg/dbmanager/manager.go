@@ -231,11 +231,13 @@ func (m *connectionManager) Connect(ctx context.Context) error {
 
 // Close closes all database connections
 func (m *connectionManager) Close() error {
+	// Stop the health checker before taking mu.  performHealthCheck acquires
+	// a read lock, so waiting for the goroutine while holding the write lock
+	// would deadlock.
+	m.stopHealthChecker()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Stop health checker
-	m.stopHealthChecker()
 
 	// Close all connections
 	var errors []error

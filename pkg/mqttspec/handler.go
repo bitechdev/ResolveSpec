@@ -645,11 +645,14 @@ func (h *Handler) getNotifyTopic(clientID, subscriptionID string) string {
 // Database operation helpers (adapted from websocketspec)
 
 func (h *Handler) getTableName(schema, entity string, model interface{}) string {
-	// Use entity as table name
 	tableName := entity
 
 	if schema != "" {
-		tableName = schema + "." + tableName
+		if h.db.DriverName() == "sqlite" {
+			tableName = schema + "_" + tableName
+		} else {
+			tableName = schema + "." + tableName
+		}
 	}
 	return tableName
 }

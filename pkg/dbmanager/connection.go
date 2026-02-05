@@ -467,13 +467,11 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 	// Create a native adapter based on database type
 	switch c.dbType {
 	case DatabaseTypePostgreSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
 	case DatabaseTypeSQLite:
-		// For SQLite, we'll use the PgSQL adapter as it works with standard sql.DB
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
 	case DatabaseTypeMSSQL:
-		// For MSSQL, we'll use the PgSQL adapter as it works with standard sql.DB
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
 	default:
 		return nil, ErrUnsupportedDatabase
 	}

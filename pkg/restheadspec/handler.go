@@ -2015,11 +2015,18 @@ func (h *Handler) processChildRelationsForField(
 	return nil
 }
 
-// getTableNameForRelatedModel gets the table name for a related model
+// getTableNameForRelatedModel gets the table name for a related model.
+// If the model's TableName() is schema-qualified (e.g. "public.users") the
+// separator is adjusted for the active driver: underscore for SQLite, dot otherwise.
 func (h *Handler) getTableNameForRelatedModel(model interface{}, defaultName string) string {
 	if provider, ok := model.(common.TableNameProvider); ok {
 		tableName := provider.TableName()
 		if tableName != "" {
+			if schema, table := h.parseTableName(tableName); schema != "" {
+				if h.db.DriverName() == "sqlite" {
+					return fmt.Sprintf("%s_%s", schema, table)
+				}
+			}
 			return tableName
 		}
 	}
@@ -2264,10 +2271,16 @@ func (h *Handler) getSchemaAndTable(defaultSchema, entity string, model interfac
 	return schema, entity
 }
 
-// getTableName returns the full table name including schema (schema.table)
+// getTableName returns the full table name including schema.
+// For most drivers the result is "schema.table".  For SQLite, which does not
+// support schema-qualified names, the schema and table are joined with an
+// underscore: "schema_table".
 func (h *Handler) getTableName(schema, entity string, model interface{}) string {
 	schemaName, tableName := h.getSchemaAndTable(schema, entity, model)
 	if schemaName != "" {
+		if h.db.DriverName() == "sqlite" {
+			return fmt.Sprintf("%s_%s", schemaName, tableName)
+		}
 		return fmt.Sprintf("%s.%s", schemaName, tableName)
 	}
 	return tableName

@@ -30,6 +30,12 @@ type Database interface {
 	// For Bun, this returns *bun.DB
 	// This is useful for provider-specific features like PostgreSQL NOTIFY/LISTEN
 	GetUnderlyingDB() interface{}
+
+	// DriverName returns the canonical name of the underlying database driver.
+	// Possible values: "postgres", "sqlite", "mssql", "mysql".
+	// All adapters normalise vendor-specific strings (e.g. Bun's "pg", GORM's
+	// "sqlserver") to the values above before returning.
+	DriverName() string
 }
 
 // SelectQuery interface for building SELECT queries (compatible with both GORM and Bun)

@@ -106,6 +106,20 @@ func (g *GormAdapter) GetUnderlyingDB() interface{} {
 	return g.db
 }
 
+func (g *GormAdapter) DriverName() string {
+	if g.db.Dialector == nil {
+		return ""
+	}
+	// Normalize GORM's dialector name to match the project's canonical vocabulary.
+	// GORM returns "sqlserver" for MSSQL; the rest of the project uses "mssql".
+	switch name := g.db.Name(); name {
+	case "sqlserver":
+		return "mssql"
+	default:
+		return name
+	}
+}
+
 // GormSelectQuery implements SelectQuery for GORM
 type GormSelectQuery struct {
 	db             *gorm.DB

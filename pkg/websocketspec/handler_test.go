@@ -82,6 +82,10 @@ func (m *MockDatabase) GetUnderlyingDB() interface{} {
 	return args.Get(0)
 }
 
+func (m *MockDatabase) DriverName() string {
+	return "postgres"
+}
+
 // MockSelectQuery is a mock implementation of common.SelectQuery
 type MockSelectQuery struct {
 	mock.Mock

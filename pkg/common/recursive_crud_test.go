@@ -50,6 +50,9 @@ func (m *mockDatabase) RollbackTx(ctx context.Context) error {
 func (m *mockDatabase) GetUnderlyingDB() interface{} {
 	return nil
 }
+func (m *mockDatabase) DriverName() string {
+	return "postgres"
+}
 
 // Mock SelectQuery
 type mockSelectQuery struct{}

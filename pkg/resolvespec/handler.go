@@ -1380,10 +1380,16 @@ func (h *Handler) getSchemaAndTable(defaultSchema, entity string, model interfac
 	return schema, entity
 }
 
-// getTableName returns the full table name including schema (schema.table)
+// getTableName returns the full table name including schema.
+// For most drivers the result is "schema.table".  For SQLite, which does not
+// support schema-qualified names, the schema and table are joined with an
+// underscore: "schema_table".
 func (h *Handler) getTableName(schema, entity string, model interface{}) string {
 	schemaName, tableName := h.getSchemaAndTable(schema, entity, model)
 	if schemaName != "" {
+		if h.db.DriverName() == "sqlite" {
+			return fmt.Sprintf("%s_%s", schemaName, tableName)
+		}
 		return fmt.Sprintf("%s.%s", schemaName, tableName)
 	}
 	return tableName

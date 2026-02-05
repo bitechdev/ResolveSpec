@@ -16,12 +16,19 @@ import (
 // PgSQLAdapter adapts standard database/sql to work with our Database interface
 // This provides a lightweight PostgreSQL adapter without ORM overhead
 type PgSQLAdapter struct {
-	db *sql.DB
+	db         *sql.DB
+	driverName string
 }
 
-// NewPgSQLAdapter creates a new PostgreSQL adapter
-func NewPgSQLAdapter(db *sql.DB) *PgSQLAdapter {
-	return &PgSQLAdapter{db: db}
+// NewPgSQLAdapter creates a new adapter wrapping a standard sql.DB.
+// An optional driverName (e.g. "postgres", "sqlite", "mssql") can be provided;
+// it defaults to "postgres" when omitted.
+func NewPgSQLAdapter(db *sql.DB, driverName ...string) *PgSQLAdapter {
+	name := "postgres"
+	if len(driverName) > 0 && driverName[0] != "" {
+		name = driverName[0]
+	}
+	return &PgSQLAdapter{db: db, driverName: name}
 }
 
 // EnableQueryDebug enables query debugging for development
@@ -98,7 +105,7 @@ func (p *PgSQLAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PgSQLTxAdapter{tx: tx}, nil
+	return &PgSQLTxAdapter{tx: tx, driverName: p.driverName}, nil
 }
 
 func (p *PgSQLAdapter) CommitTx(ctx context.Context) error {
@@ -121,7 +128,7 @@ func (p *PgSQLAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 		return err
 	}
 
-	adapter := &PgSQLTxAdapter{tx: tx}
+	adapter := &PgSQLTxAdapter{tx: tx, driverName: p.driverName}
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -139,6 +146,10 @@ func (p *PgSQLAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 
 func (p *PgSQLAdapter) GetUnderlyingDB() interface{} {
 	return p.db
+}
+
+func (p *PgSQLAdapter) DriverName() string {
+	return p.driverName
 }
 
 // preloadConfig represents a relationship to be preloaded
@@ -835,7 +846,8 @@ func (p *PgSQLResult) LastInsertId() (int64, error) {
 
 // PgSQLTxAdapter wraps a PostgreSQL transaction
 type PgSQLTxAdapter struct {
-	tx *sql.Tx
+	tx         *sql.Tx
+	driverName string
 }
 
 func (p *PgSQLTxAdapter) NewSelect() common.SelectQuery {
@@ -910,6 +922,10 @@ func (p *PgSQLTxAdapter) RunInTransaction(ctx context.Context, fn func(common.Da
 
 func (p *PgSQLTxAdapter) GetUnderlyingDB() interface{} {
 	return p.tx
+}
+
+func (p *PgSQLTxAdapter) DriverName() string {
+	return p.driverName
 }
 
 // applyJoinPreloads adds JOINs for relationships that should use JOIN strategy

@@ -168,7 +168,7 @@ func (b *BunAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 		return nil, err
 	}
 	// For Bun, we'll return a special wrapper that holds the transaction
-	return &BunTxAdapter{tx: tx}, nil
+	return &BunTxAdapter{tx: tx, driverName: b.DriverName()}, nil
 }
 
 func (b *BunAdapter) CommitTx(ctx context.Context) error {
@@ -191,13 +191,24 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 	}()
 	return b.db.RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
 		// Create adapter with transaction
-		adapter := &BunTxAdapter{tx: tx}
+		adapter := &BunTxAdapter{tx: tx, driverName: b.DriverName()}
 		return fn(adapter)
 	})
 }
 
 func (b *BunAdapter) GetUnderlyingDB() interface{} {
 	return b.db
+}
+
+func (b *BunAdapter) DriverName() string {
+	// Normalize Bun's dialect name to match the project's canonical vocabulary.
+	// Bun returns "pg" for PostgreSQL; the rest of the project uses "postgres".
+	switch name := b.db.Dialect().Name().String(); name {
+	case "pg":
+		return "postgres"
+	default:
+		return name
+	}
 }
 
 // BunSelectQuery implements SelectQuery for Bun
@@ -1477,7 +1488,8 @@ func (b *BunResult) LastInsertId() (int64, error) {
 
 // BunTxAdapter wraps a Bun transaction to implement the Database interface
 type BunTxAdapter struct {
-	tx bun.Tx
+	tx         bun.Tx
+	driverName string
 }
 
 func (b *BunTxAdapter) NewSelect() common.SelectQuery {
@@ -1526,4 +1538,8 @@ func (b *BunTxAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 
 func (b *BunTxAdapter) GetUnderlyingDB() interface{} {
 	return b.tx
+}
+
+func (b *BunTxAdapter) DriverName() string {
+	return b.driverName
 }

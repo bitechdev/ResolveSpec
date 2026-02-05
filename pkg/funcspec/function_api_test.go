@@ -74,6 +74,10 @@ func (m *MockDatabase) GetUnderlyingDB() interface{} {
 	return m
 }
 
+func (m *MockDatabase) DriverName() string {
+	return "postgres"
+}
+
 // MockResult implements common.Result interface for testing
 type MockResult struct {
 	rows int64

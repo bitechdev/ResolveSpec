@@ -15,12 +15,16 @@ import (
 
 // GormAdapter adapts GORM to work with our Database interface
 type GormAdapter struct {
-	db *gorm.DB
+	db         *gorm.DB
+	driverName string
 }
 
 // NewGormAdapter creates a new GORM adapter
 func NewGormAdapter(db *gorm.DB) *GormAdapter {
-	return &GormAdapter{db: db}
+	adapter := &GormAdapter{db: db}
+	// Initialize driver name
+	adapter.driverName = adapter.DriverName()
+	return adapter
 }
 
 // EnableQueryDebug enables query debugging which logs all SQL queries including preloads
@@ -40,7 +44,7 @@ func (g *GormAdapter) DisableQueryDebug() *GormAdapter {
 }
 
 func (g *GormAdapter) NewSelect() common.SelectQuery {
-	return &GormSelectQuery{db: g.db}
+	return &GormSelectQuery{db: g.db, driverName: g.driverName}
 }
 
 func (g *GormAdapter) NewInsert() common.InsertQuery {
@@ -79,7 +83,7 @@ func (g *GormAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
-	return &GormAdapter{db: tx}, nil
+	return &GormAdapter{db: tx, driverName: g.driverName}, nil
 }
 
 func (g *GormAdapter) CommitTx(ctx context.Context) error {
@@ -97,7 +101,7 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 		}
 	}()
 	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		adapter := &GormAdapter{db: tx}
+		adapter := &GormAdapter{db: tx, driverName: g.driverName}
 		return fn(adapter)
 	})
 }
@@ -112,9 +116,12 @@ func (g *GormAdapter) DriverName() string {
 	}
 	// Normalize GORM's dialector name to match the project's canonical vocabulary.
 	// GORM returns "sqlserver" for MSSQL; the rest of the project uses "mssql".
+	// GORM returns "sqlite" or "sqlite3" for SQLite; we normalize to "sqlite".
 	switch name := g.db.Name(); name {
 	case "sqlserver":
 		return "mssql"
+	case "sqlite3":
+		return "sqlite"
 	default:
 		return name
 	}
@@ -126,6 +133,7 @@ type GormSelectQuery struct {
 	schema         string // Separated schema name
 	tableName      string // Just the table name, without schema
 	tableAlias     string
+	driverName     string // Database driver name (postgres, sqlite, mssql)
 	inJoinContext  bool   // Track if we're in a JOIN relation context
 	joinTableAlias string // Alias to use for JOIN conditions
 }
@@ -137,7 +145,8 @@ func (g *GormSelectQuery) Model(model interface{}) common.SelectQuery {
 	if provider, ok := model.(common.TableNameProvider); ok {
 		fullTableName := provider.TableName()
 		// Check if the table name contains schema (e.g., "schema.table")
-		g.schema, g.tableName = parseTableName(fullTableName)
+		// For SQLite, this will convert "schema.table" to "schema_table"
+		g.schema, g.tableName = parseTableName(fullTableName, g.driverName)
 	}
 
 	if provider, ok := model.(common.TableAliasProvider); ok {
@@ -150,7 +159,8 @@ func (g *GormSelectQuery) Model(model interface{}) common.SelectQuery {
 func (g *GormSelectQuery) Table(table string) common.SelectQuery {
 	g.db = g.db.Table(table)
 	// Check if the table name contains schema (e.g., "schema.table")
-	g.schema, g.tableName = parseTableName(table)
+	// For SQLite, this will convert "schema.table" to "schema_table"
+	g.schema, g.tableName = parseTableName(table, g.driverName)
 
 	return g
 }
@@ -336,7 +346,8 @@ func (g *GormSelectQuery) PreloadRelation(relation string, apply ...func(common.
 		}
 
 		wrapper := &GormSelectQuery{
-			db: db,
+			db:         db,
+			driverName: g.driverName,
 		}
 
 		current := common.SelectQuery(wrapper)
@@ -374,6 +385,7 @@ func (g *GormSelectQuery) JoinRelation(relation string, apply ...func(common.Sel
 
 		wrapper := &GormSelectQuery{
 			db:             db,
+			driverName:     g.driverName,
 			inJoinContext:  true,                      // Mark as JOIN context
 			joinTableAlias: strings.ToLower(relation), // Use relation name as alias
 		}

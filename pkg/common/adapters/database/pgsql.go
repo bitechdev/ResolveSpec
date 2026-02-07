@@ -38,22 +38,25 @@ func (p *PgSQLAdapter) EnableQueryDebug() {
 
 func (p *PgSQLAdapter) NewSelect() common.SelectQuery {
 	return &PgSQLSelectQuery{
-		db:      p.db,
-		columns: []string{"*"},
-		args:    make([]interface{}, 0),
+		db:         p.db,
+		driverName: p.driverName,
+		columns:    []string{"*"},
+		args:       make([]interface{}, 0),
 	}
 }
 
 func (p *PgSQLAdapter) NewInsert() common.InsertQuery {
 	return &PgSQLInsertQuery{
-		db:     p.db,
-		values: make(map[string]interface{}),
+		db:         p.db,
+		driverName: p.driverName,
+		values:     make(map[string]interface{}),
 	}
 }
 
 func (p *PgSQLAdapter) NewUpdate() common.UpdateQuery {
 	return &PgSQLUpdateQuery{
 		db:           p.db,
+		driverName:   p.driverName,
 		sets:         make(map[string]interface{}),
 		args:         make([]interface{}, 0),
 		whereClauses: make([]string, 0),
@@ -63,6 +66,7 @@ func (p *PgSQLAdapter) NewUpdate() common.UpdateQuery {
 func (p *PgSQLAdapter) NewDelete() common.DeleteQuery {
 	return &PgSQLDeleteQuery{
 		db:           p.db,
+		driverName:   p.driverName,
 		args:         make([]interface{}, 0),
 		whereClauses: make([]string, 0),
 	}
@@ -176,6 +180,7 @@ type PgSQLSelectQuery struct {
 	model         interface{}
 	tableName     string
 	tableAlias    string
+	driverName    string // Database driver name (postgres, sqlite, mssql)
 	columns       []string
 	columnExprs   []string
 	whereClauses  []string
@@ -194,7 +199,9 @@ type PgSQLSelectQuery struct {
 func (p *PgSQLSelectQuery) Model(model interface{}) common.SelectQuery {
 	p.model = model
 	if provider, ok := model.(common.TableNameProvider); ok {
-		p.tableName = provider.TableName()
+		fullTableName := provider.TableName()
+		// For SQLite, convert "schema.table" to "schema_table"
+		_, p.tableName = parseTableName(fullTableName, p.driverName)
 	}
 	if provider, ok := model.(common.TableAliasProvider); ok {
 		p.tableAlias = provider.TableAlias()
@@ -203,7 +210,8 @@ func (p *PgSQLSelectQuery) Model(model interface{}) common.SelectQuery {
 }
 
 func (p *PgSQLSelectQuery) Table(table string) common.SelectQuery {
-	p.tableName = table
+	// For SQLite, convert "schema.table" to "schema_table"
+	_, p.tableName = parseTableName(table, p.driverName)
 	return p
 }
 
@@ -512,16 +520,19 @@ func (p *PgSQLSelectQuery) Exists(ctx context.Context) (exists bool, err error) 
 
 // PgSQLInsertQuery implements InsertQuery for PostgreSQL
 type PgSQLInsertQuery struct {
-	db        *sql.DB
-	tx        *sql.Tx
-	tableName string
-	values    map[string]interface{}
-	returning []string
+	db         *sql.DB
+	tx         *sql.Tx
+	tableName  string
+	driverName string
+	values     map[string]interface{}
+	returning  []string
 }
 
 func (p *PgSQLInsertQuery) Model(model interface{}) common.InsertQuery {
 	if provider, ok := model.(common.TableNameProvider); ok {
-		p.tableName = provider.TableName()
+		fullTableName := provider.TableName()
+		// For SQLite, convert "schema.table" to "schema_table"
+		_, p.tableName = parseTableName(fullTableName, p.driverName)
 	}
 	// Extract values from model using reflection
 	// This is a simplified implementation
@@ -529,7 +540,8 @@ func (p *PgSQLInsertQuery) Model(model interface{}) common.InsertQuery {
 }
 
 func (p *PgSQLInsertQuery) Table(table string) common.InsertQuery {
-	p.tableName = table
+	// For SQLite, convert "schema.table" to "schema_table"
+	_, p.tableName = parseTableName(table, p.driverName)
 	return p
 }
 
@@ -602,6 +614,7 @@ type PgSQLUpdateQuery struct {
 	db           *sql.DB
 	tx           *sql.Tx
 	tableName    string
+	driverName   string
 	model        interface{}
 	sets         map[string]interface{}
 	whereClauses []string
@@ -613,13 +626,16 @@ type PgSQLUpdateQuery struct {
 func (p *PgSQLUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	p.model = model
 	if provider, ok := model.(common.TableNameProvider); ok {
-		p.tableName = provider.TableName()
+		fullTableName := provider.TableName()
+		// For SQLite, convert "schema.table" to "schema_table"
+		_, p.tableName = parseTableName(fullTableName, p.driverName)
 	}
 	return p
 }
 
 func (p *PgSQLUpdateQuery) Table(table string) common.UpdateQuery {
-	p.tableName = table
+	// For SQLite, convert "schema.table" to "schema_table"
+	_, p.tableName = parseTableName(table, p.driverName)
 	if p.model == nil {
 		model, err := modelregistry.GetModelByName(table)
 		if err == nil {
@@ -760,6 +776,7 @@ type PgSQLDeleteQuery struct {
 	db           *sql.DB
 	tx           *sql.Tx
 	tableName    string
+	driverName   string
 	whereClauses []string
 	args         []interface{}
 	paramCounter int
@@ -767,13 +784,16 @@ type PgSQLDeleteQuery struct {
 
 func (p *PgSQLDeleteQuery) Model(model interface{}) common.DeleteQuery {
 	if provider, ok := model.(common.TableNameProvider); ok {
-		p.tableName = provider.TableName()
+		fullTableName := provider.TableName()
+		// For SQLite, convert "schema.table" to "schema_table"
+		_, p.tableName = parseTableName(fullTableName, p.driverName)
 	}
 	return p
 }
 
 func (p *PgSQLDeleteQuery) Table(table string) common.DeleteQuery {
-	p.tableName = table
+	// For SQLite, convert "schema.table" to "schema_table"
+	_, p.tableName = parseTableName(table, p.driverName)
 	return p
 }
 
@@ -852,22 +872,25 @@ type PgSQLTxAdapter struct {
 
 func (p *PgSQLTxAdapter) NewSelect() common.SelectQuery {
 	return &PgSQLSelectQuery{
-		tx:      p.tx,
-		columns: []string{"*"},
-		args:    make([]interface{}, 0),
+		tx:         p.tx,
+		driverName: p.driverName,
+		columns:    []string{"*"},
+		args:       make([]interface{}, 0),
 	}
 }
 
 func (p *PgSQLTxAdapter) NewInsert() common.InsertQuery {
 	return &PgSQLInsertQuery{
-		tx:     p.tx,
-		values: make(map[string]interface{}),
+		tx:         p.tx,
+		driverName: p.driverName,
+		values:     make(map[string]interface{}),
 	}
 }
 
 func (p *PgSQLTxAdapter) NewUpdate() common.UpdateQuery {
 	return &PgSQLUpdateQuery{
 		tx:           p.tx,
+		driverName:   p.driverName,
 		sets:         make(map[string]interface{}),
 		args:         make([]interface{}, 0),
 		whereClauses: make([]string, 0),
@@ -877,6 +900,7 @@ func (p *PgSQLTxAdapter) NewUpdate() common.UpdateQuery {
 func (p *PgSQLTxAdapter) NewDelete() common.DeleteQuery {
 	return &PgSQLDeleteQuery{
 		tx:           p.tx,
+		driverName:   p.driverName,
 		args:         make([]interface{}, 0),
 		whereClauses: make([]string, 0),
 	}
@@ -1052,9 +1076,9 @@ func (p *PgSQLSelectQuery) executePreloadQuery(ctx context.Context, field reflec
 	// Create a new select query for the related table
 	var db common.Database
 	if p.tx != nil {
-		db = &PgSQLTxAdapter{tx: p.tx}
+		db = &PgSQLTxAdapter{tx: p.tx, driverName: p.driverName}
 	} else {
-		db = &PgSQLAdapter{db: p.db}
+		db = &PgSQLAdapter{db: p.db, driverName: p.driverName}
 	}
 
 	query := db.NewSelect().

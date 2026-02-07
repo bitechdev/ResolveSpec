@@ -62,9 +62,20 @@ func checkAliasLength(relation string) bool {
 // For example: "public.users" -> ("public", "users")
 //
 //	"users" -> ("", "users")
-func parseTableName(fullTableName string) (schema, table string) {
+//
+// For SQLite, schema.table is translated to schema_table since SQLite doesn't support schemas
+// in the same way as PostgreSQL/MSSQL
+func parseTableName(fullTableName, driverName string) (schema, table string) {
 	if idx := strings.LastIndex(fullTableName, "."); idx != -1 {
-		return fullTableName[:idx], fullTableName[idx+1:]
+		schema = fullTableName[:idx]
+		table = fullTableName[idx+1:]
+
+		// For SQLite, convert schema.table to schema_table
+		if driverName == "sqlite" || driverName == "sqlite3" {
+			table = schema + "_" + table
+			schema = ""
+		}
+		return schema, table
 	}
 	return "", fullTableName
 }

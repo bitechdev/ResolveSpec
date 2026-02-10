@@ -11,6 +11,7 @@ A comprehensive database connection manager for Go that provides centralized man
   - **GORM** - Popular Go ORM
   - **Native** - Standard library `*sql.DB`
   - All three share the same underlying connection pool
+- **SQLite Schema Translation**: Automatic conversion of `schema.table` to `schema_table` for SQLite compatibility
 - **Configuration-Driven**: YAML configuration with Viper integration
 - **Production-Ready Features**:
   - Automatic health checks and reconnection
@@ -177,6 +178,35 @@ if err != nil {
     log.Fatal(err)
 }
 rows, err := nativeDB.QueryContext(ctx, "SELECT * FROM users WHERE active = $1", true)
+```
+
+#### Cross-Database Example with SQLite
+
+```go
+// Same model works across all databases
+type User struct {
+    ID       int    `bun:"id,pk"`
+    Username string `bun:"username"`
+    Email    string `bun:"email"`
+}
+
+func (User) TableName() string {
+    return "auth.users"
+}
+
+// PostgreSQL connection
+pgConn, _ := mgr.Get("primary")
+pgDB, _ := pgConn.Bun()
+var pgUsers []User
+pgDB.NewSelect().Model(&pgUsers).Scan(ctx)
+// Executes: SELECT * FROM auth.users
+
+// SQLite connection
+sqliteConn, _ := mgr.Get("cache-db")
+sqliteDB, _ := sqliteConn.Bun()
+var sqliteUsers []User
+sqliteDB.NewSelect().Model(&sqliteUsers).Scan(ctx)
+// Executes: SELECT * FROM auth_users (schema.table → schema_table)
 ```
 
 #### Use MongoDB
@@ -367,6 +397,37 @@ Providers handle:
 - Health checking
 - Connection statistics
 - Connection cleanup
+
+### SQLite Schema Handling
+
+SQLite doesn't support schemas in the same way as PostgreSQL or MSSQL. To ensure compatibility when using models designed for multi-schema databases:
+
+**Automatic Translation**: When a table name contains a schema prefix (e.g., `myschema.mytable`), it is automatically converted to `myschema_mytable` for SQLite databases.
+
+```go
+// Model definition (works across all databases)
+func (User) TableName() string {
+    return "auth.users"  // PostgreSQL/MSSQL: "auth"."users"
+                         // SQLite: "auth_users"
+}
+
+// Query execution
+db.NewSelect().Model(&User{}).Scan(ctx)
+// PostgreSQL/MSSQL: SELECT * FROM auth.users
+// SQLite: SELECT * FROM auth_users
+```
+
+**How it Works**:
+- Bun, GORM, and Native adapters detect the driver type
+- `parseTableName()` automatically translates schema.table → schema_table for SQLite
+- Translation happens transparently in all database operations (SELECT, INSERT, UPDATE, DELETE)
+- Preload and relation queries are also handled automatically
+
+**Benefits**:
+- Write database-agnostic code
+- Use the same models across PostgreSQL, MSSQL, and SQLite
+- No conditional logic needed in your application
+- Schema separation maintained through naming convention in SQLite
 
 ## Best Practices
 

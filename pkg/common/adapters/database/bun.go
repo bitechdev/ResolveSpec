@@ -94,12 +94,16 @@ func debugScanIntoStruct(rows interface{}, dest interface{}) error {
 // BunAdapter adapts Bun to work with our Database interface
 // This demonstrates how the abstraction works with different ORMs
 type BunAdapter struct {
-	db *bun.DB
+	db         *bun.DB
+	driverName string
 }
 
 // NewBunAdapter creates a new Bun adapter
 func NewBunAdapter(db *bun.DB) *BunAdapter {
-	return &BunAdapter{db: db}
+	adapter := &BunAdapter{db: db}
+	// Initialize driver name
+	adapter.driverName = adapter.DriverName()
+	return adapter
 }
 
 // EnableQueryDebug enables query debugging which logs all SQL queries including preloads
@@ -126,8 +130,9 @@ func (b *BunAdapter) DisableQueryDebug() {
 
 func (b *BunAdapter) NewSelect() common.SelectQuery {
 	return &BunSelectQuery{
-		query: b.db.NewSelect(),
-		db:    b.db,
+		query:      b.db.NewSelect(),
+		db:         b.db,
+		driverName: b.driverName,
 	}
 }
 
@@ -168,7 +173,7 @@ func (b *BunAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 		return nil, err
 	}
 	// For Bun, we'll return a special wrapper that holds the transaction
-	return &BunTxAdapter{tx: tx, driverName: b.DriverName()}, nil
+	return &BunTxAdapter{tx: tx, driverName: b.driverName}, nil
 }
 
 func (b *BunAdapter) CommitTx(ctx context.Context) error {
@@ -191,7 +196,7 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 	}()
 	return b.db.RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
 		// Create adapter with transaction
-		adapter := &BunTxAdapter{tx: tx, driverName: b.DriverName()}
+		adapter := &BunTxAdapter{tx: tx, driverName: b.driverName}
 		return fn(adapter)
 	})
 }
@@ -203,9 +208,12 @@ func (b *BunAdapter) GetUnderlyingDB() interface{} {
 func (b *BunAdapter) DriverName() string {
 	// Normalize Bun's dialect name to match the project's canonical vocabulary.
 	// Bun returns "pg" for PostgreSQL; the rest of the project uses "postgres".
+	// Bun returns "sqlite3" for SQLite; we normalize to "sqlite".
 	switch name := b.db.Dialect().Name().String(); name {
 	case "pg":
 		return "postgres"
+	case "sqlite3":
+		return "sqlite"
 	default:
 		return name
 	}
@@ -219,6 +227,7 @@ type BunSelectQuery struct {
 	schema         string  // Separated schema name
 	tableName      string  // Just the table name, without schema
 	tableAlias     string
+	driverName     string                                                   // Database driver name (postgres, sqlite, mssql)
 	inJoinContext  bool                                                     // Track if we're in a JOIN relation context
 	joinTableAlias string                                                   // Alias to use for JOIN conditions
 	skipAutoDetect bool                                                     // Skip auto-detection to prevent circular calls
@@ -233,7 +242,8 @@ func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {
 	if provider, ok := model.(common.TableNameProvider); ok {
 		fullTableName := provider.TableName()
 		// Check if the table name contains schema (e.g., "schema.table")
-		b.schema, b.tableName = parseTableName(fullTableName)
+		// For SQLite, this will convert "schema.table" to "schema_table"
+		b.schema, b.tableName = parseTableName(fullTableName, b.driverName)
 	}
 
 	if provider, ok := model.(common.TableAliasProvider); ok {
@@ -246,7 +256,8 @@ func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {
 func (b *BunSelectQuery) Table(table string) common.SelectQuery {
 	b.query = b.query.Table(table)
 	// Check if the table name contains schema (e.g., "schema.table")
-	b.schema, b.tableName = parseTableName(table)
+	// For SQLite, this will convert "schema.table" to "schema_table"
+	b.schema, b.tableName = parseTableName(table, b.driverName)
 	return b
 }
 
@@ -552,8 +563,9 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 
 		// Wrap the incoming *bun.SelectQuery in our adapter
 		wrapper := &BunSelectQuery{
-			query: sq,
-			db:    b.db,
+			query:      sq,
+			db:         b.db,
+			driverName: b.driverName,
 		}
 
 		// Try to extract table name and alias from the preload model
@@ -563,7 +575,8 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 			// Extract table name if model implements TableNameProvider
 			if provider, ok := modelValue.(common.TableNameProvider); ok {
 				fullTableName := provider.TableName()
-				wrapper.schema, wrapper.tableName = parseTableName(fullTableName)
+				// For SQLite, this will convert "schema.table" to "schema_table"
+				wrapper.schema, wrapper.tableName = parseTableName(fullTableName, b.driverName)
 			}
 
 			// Extract table alias if model implements TableAliasProvider
@@ -803,7 +816,7 @@ func (b *BunSelectQuery) loadRelationLevel(ctx context.Context, parentRecords re
 
 	// Apply user's functions (if any)
 	if isLast && len(applyFuncs) > 0 {
-		wrapper := &BunSelectQuery{query: query, db: b.db}
+		wrapper := &BunSelectQuery{query: query, db: b.db, driverName: b.driverName}
 		for _, fn := range applyFuncs {
 			if fn != nil {
 				wrapper = fn(wrapper).(*BunSelectQuery)
@@ -1494,8 +1507,9 @@ type BunTxAdapter struct {
 
 func (b *BunTxAdapter) NewSelect() common.SelectQuery {
 	return &BunSelectQuery{
-		query: b.tx.NewSelect(),
-		db:    b.tx,
+		query:      b.tx.NewSelect(),
+		db:         b.tx,
+		driverName: b.driverName,
 	}
 }
 

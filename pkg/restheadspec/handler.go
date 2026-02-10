@@ -549,8 +549,30 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 	}
 
-	// If ID is provided, filter by ID
-	if id != "" {
+	// Handle FetchRowNumber before applying ID filter
+	// This must happen before the query to get the row position, then filter by PK
+	var fetchedRowNumber *int64
+	var fetchRowNumberPKValue string
+	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
+		pkName := reflection.GetPrimaryKeyName(model)
+		fetchRowNumberPKValue = *options.FetchRowNumber
+
+		logger.Debug("FetchRowNumber: Fetching row number for PK %s = %s", pkName, fetchRowNumberPKValue)
+
+		rowNum, err := h.FetchRowNumber(ctx, tableName, pkName, fetchRowNumberPKValue, options, model)
+		if err != nil {
+			logger.Error("Failed to fetch row number: %v", err)
+			h.sendError(w, http.StatusBadRequest, "fetch_rownumber_error", "Failed to fetch row number", err)
+			return
+		}
+
+		fetchedRowNumber = &rowNum
+		logger.Debug("FetchRowNumber: Row number %d for PK %s = %s", rowNum, pkName, fetchRowNumberPKValue)
+
+		// Now filter the main query to this specific primary key
+		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), fetchRowNumberPKValue)
+	} else if id != "" {
+		// If ID is provided (and not FetchRowNumber), filter by ID
 		pkName := reflection.GetPrimaryKeyName(model)
 		logger.Debug("Filtering by ID=%s: %s", pkName, id)
 
@@ -730,7 +752,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	}
 
 	// Set row numbers on each record if the model has a RowNumber field
-	h.setRowNumbersOnRecords(modelPtr, offset)
+	// If FetchRowNumber was used, set the fetched row number instead of offset-based
+	if fetchedRowNumber != nil {
+		// FetchRowNumber: set the actual row position on the record
+		logger.Debug("FetchRowNumber: Setting row number %d on record", *fetchedRowNumber)
+		h.setRowNumbersOnRecords(modelPtr, int(*fetchedRowNumber-1)) // -1 because setRowNumbersOnRecords adds 1
+	} else {
+		h.setRowNumbersOnRecords(modelPtr, offset)
+	}
 
 	metadata := &common.Metadata{
 		Total:    int64(total),
@@ -740,21 +769,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		Offset:   offset,
 	}
 
-	// Fetch row number for a specific record if requested
-	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
-		pkName := reflection.GetPrimaryKeyName(model)
-		pkValue := *options.FetchRowNumber
-
-		logger.Debug("Fetching row number for specific PK %s = %s", pkName, pkValue)
-
-		rowNum, err := h.FetchRowNumber(ctx, tableName, pkName, pkValue, options, model)
-		if err != nil {
-			logger.Warn("Failed to fetch row number: %v", err)
-			// Don't fail the entire request, just log the warning
-		} else {
-			metadata.RowNumber = &rowNum
-			logger.Debug("Row number for PK %s: %d", pkValue, rowNum)
-		}
+	// If FetchRowNumber was used, also set it in metadata
+	if fetchedRowNumber != nil {
+		metadata.RowNumber = fetchedRowNumber
+		logger.Debug("FetchRowNumber: Row number %d set in metadata", *fetchedRowNumber)
 	}
 
 	// Execute AfterRead hooks
@@ -2651,13 +2669,19 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 	var result []struct {
 		RN int64 `bun:"rn"`
 	}
+	logger.Debug("[FetchRowNumber] BEFORE Query call - about to execute raw query")
 	err := h.db.Query(ctx, &result, queryStr, pkValue)
+	logger.Debug("[FetchRowNumber] AFTER Query call - query completed with %d results, err: %v", len(result), err)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch row number: %w", err)
 	}
 
 	if len(result) == 0 {
-		return 0, fmt.Errorf("no row found for primary key %s", pkValue)
+		whereInfo := "none"
+		if whereSQL != "" {
+			whereInfo = whereSQL
+		}
+		return 0, fmt.Errorf("no row found for primary key %s=%s with active filters: %s", pkName, pkValue, whereInfo)
 	}
 
 	return result[0].RN, nil

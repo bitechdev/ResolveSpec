@@ -433,7 +433,18 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Execute query to get row number
 		var result RowNumResult
 		if err := rowNumQuery.Scan(ctx, &result); err != nil {
-			if err != sql.ErrNoRows {
+			if err == sql.ErrNoRows {
+				// Build filter description for error message
+				filterInfo := fmt.Sprintf("filters: %d", len(options.Filters))
+				if len(options.CustomOperators) > 0 {
+					customOps := make([]string, 0, len(options.CustomOperators))
+					for _, op := range options.CustomOperators {
+						customOps = append(customOps, op.SQL)
+					}
+					filterInfo += fmt.Sprintf(", custom operators: [%s]", strings.Join(customOps, "; "))
+				}
+				logger.Warn("No row found for primary key %s=%s with %s", pkName, *options.FetchRowNumber, filterInfo)
+			} else {
 				logger.Warn("Error fetching row number: %v", err)
 			}
 		} else {
@@ -499,7 +510,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// When FetchRowNumber is used, we only return 1 record
 	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
 		count = 1
-		// Don't use limit/offset when fetching specific record
+		// Set the fetched row number on the record
+		if rowNumber != nil {
+			logger.Debug("FetchRowNumber: Setting row number %d on record", *rowNumber)
+			h.setRowNumbersOnRecords(result, int(*rowNumber-1)) // -1 because setRowNumbersOnRecords adds 1
+		}
 	} else {
 		if options.Limit != nil {
 			limit = *options.Limit

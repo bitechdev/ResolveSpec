@@ -210,10 +210,14 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 	var metadata map[string]interface{}
 	var err error
 
-	if hookCtx.ID != "" {
-		// Read single record by ID
+	// Check if FetchRowNumber is specified (treat as single record read)
+	isFetchRowNumber := hookCtx.Options != nil && hookCtx.Options.FetchRowNumber != nil && *hookCtx.Options.FetchRowNumber != ""
+
+	if hookCtx.ID != "" || isFetchRowNumber {
+		// Read single record by ID or FetchRowNumber
 		data, err = h.readByID(hookCtx)
 		metadata = map[string]interface{}{"total": 1}
+		// The row number is already set on the record itself via setRowNumbersOnRecords
 	} else {
 		// Read multiple records
 		data, metadata, err = h.readMultiple(hookCtx)
@@ -510,10 +514,29 @@ func (h *Handler) notifySubscribers(schema, entity string, operation OperationTy
 // CRUD operation implementations
 
 func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
+	// Handle FetchRowNumber before building query
+	var fetchedRowNumber *int64
+	pkName := reflection.GetPrimaryKeyName(hookCtx.Model)
+
+	if hookCtx.Options != nil && hookCtx.Options.FetchRowNumber != nil && *hookCtx.Options.FetchRowNumber != "" {
+		fetchRowNumberPKValue := *hookCtx.Options.FetchRowNumber
+		logger.Debug("[WebSocketSpec] FetchRowNumber: Fetching row number for PK %s = %s", pkName, fetchRowNumberPKValue)
+
+		rowNum, err := h.FetchRowNumber(hookCtx.Context, hookCtx.TableName, pkName, fetchRowNumberPKValue, hookCtx.Options, hookCtx.Model)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch row number: %w", err)
+		}
+
+		fetchedRowNumber = &rowNum
+		logger.Debug("[WebSocketSpec] FetchRowNumber: Row number %d for PK %s = %s", rowNum, pkName, fetchRowNumberPKValue)
+
+		// Override ID with FetchRowNumber value
+		hookCtx.ID = fetchRowNumberPKValue
+	}
+
 	query := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Add ID filter
-	pkName := reflection.GetPrimaryKeyName(hookCtx.Model)
 	query = query.Where(fmt.Sprintf("%s = ?", pkName), hookCtx.ID)
 
 	// Apply columns
@@ -531,6 +554,12 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 	// Execute query
 	if err := query.ScanModel(hookCtx.Context); err != nil {
 		return nil, fmt.Errorf("failed to read record: %w", err)
+	}
+
+	// Set the fetched row number on the record if FetchRowNumber was used
+	if fetchedRowNumber != nil {
+		logger.Debug("[WebSocketSpec] FetchRowNumber: Setting row number %d on record", *fetchedRowNumber)
+		h.setRowNumbersOnRecords(hookCtx.ModelPtr, int(*fetchedRowNumber-1)) // -1 because setRowNumbersOnRecords adds 1
 	}
 
 	return hookCtx.ModelPtr, nil
@@ -839,6 +868,92 @@ func (h *Handler) getOperatorSQL(operator string) string {
 	default:
 		return "="
 	}
+}
+
+// FetchRowNumber calculates the row number of a specific record based on sorting and filtering
+// Returns the 1-based row number of the record with the given primary key value
+func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName string, pkValue string, options *common.RequestOptions, model interface{}) (int64, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("[WebSocketSpec] Panic during FetchRowNumber: %v", r)
+		}
+	}()
+
+	// Build the sort order SQL
+	sortSQL := ""
+	if options != nil && len(options.Sort) > 0 {
+		sortParts := make([]string, 0, len(options.Sort))
+		for _, sort := range options.Sort {
+			if sort.Column == "" {
+				continue
+			}
+			direction := "ASC"
+			if strings.EqualFold(sort.Direction, "desc") {
+				direction = "DESC"
+			}
+			sortParts = append(sortParts, fmt.Sprintf("%s %s", sort.Column, direction))
+		}
+		sortSQL = strings.Join(sortParts, ", ")
+	} else {
+		// Default sort by primary key
+		sortSQL = fmt.Sprintf("%s ASC", pkName)
+	}
+
+	// Build WHERE clause from filters
+	whereSQL := ""
+	var whereArgs []interface{}
+	if options != nil && len(options.Filters) > 0 {
+		var conditions []string
+		for _, filter := range options.Filters {
+			operatorSQL := h.getOperatorSQL(filter.Operator)
+			conditions = append(conditions, fmt.Sprintf("%s.%s %s ?", tableName, filter.Column, operatorSQL))
+			whereArgs = append(whereArgs, filter.Value)
+		}
+		if len(conditions) > 0 {
+			whereSQL = "WHERE " + strings.Join(conditions, " AND ")
+		}
+	}
+
+	// Build the final query with parameterized PK value
+	queryStr := fmt.Sprintf(`
+		SELECT search.rn
+		FROM (
+			SELECT %[1]s.%[2]s,
+				ROW_NUMBER() OVER(ORDER BY %[3]s) AS rn
+			FROM %[1]s
+			%[4]s
+		) search
+		WHERE search.%[2]s = ?
+	`,
+		tableName, // [1] - table name
+		pkName,    // [2] - primary key column name
+		sortSQL,   // [3] - sort order SQL
+		whereSQL,  // [4] - WHERE clause
+	)
+
+	logger.Debug("[WebSocketSpec] FetchRowNumber query: %s, pkValue: %s", queryStr, pkValue)
+
+	// Append PK value to whereArgs
+	whereArgs = append(whereArgs, pkValue)
+
+	// Execute the raw query with parameterized PK value
+	var result []struct {
+		RN int64 `bun:"rn"`
+	}
+	err := h.db.Query(ctx, &result, queryStr, whereArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch row number: %w", err)
+	}
+
+	if len(result) == 0 {
+		whereInfo := "none"
+		if whereSQL != "" {
+			whereInfo = whereSQL
+		}
+		return 0, fmt.Errorf("no row found for primary key %s=%s with active filters: %s", pkName, pkValue, whereInfo)
+	}
+
+	return result[0].RN, nil
 }
 
 // Shutdown gracefully shuts down the handler

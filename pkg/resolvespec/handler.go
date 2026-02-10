@@ -280,10 +280,13 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 	}
 
-	// Apply filters
-	for _, filter := range options.Filters {
-		logger.Debug("Applying filter: %s %s %v", filter.Column, filter.Operator, filter.Value)
-		query = h.applyFilter(query, filter)
+	// Apply filters with proper grouping for OR logic
+	query = h.applyFilters(query, options.Filters)
+
+	// Apply custom operators
+	for _, customOp := range options.CustomOperators {
+		logger.Debug("Applying custom operator: %s - %s", customOp.Name, customOp.SQL)
+		query = query.Where(customOp.SQL)
 	}
 
 	// Apply sorting
@@ -381,24 +384,94 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 	}
 
-	// Apply pagination
-	if options.Limit != nil && *options.Limit > 0 {
-		logger.Debug("Applying limit: %d", *options.Limit)
-		query = query.Limit(*options.Limit)
+	// Handle FetchRowNumber if requested
+	var rowNumber *int64
+	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
+		logger.Debug("Fetching row number for ID: %s", *options.FetchRowNumber)
+		pkName := reflection.GetPrimaryKeyName(model)
+
+		// Build ROW_NUMBER window function SQL
+		rowNumberSQL := "ROW_NUMBER() OVER ("
+		if len(options.Sort) > 0 {
+			rowNumberSQL += "ORDER BY "
+			for i, sort := range options.Sort {
+				if i > 0 {
+					rowNumberSQL += ", "
+				}
+				direction := "ASC"
+				if strings.EqualFold(sort.Direction, "desc") {
+					direction = "DESC"
+				}
+				rowNumberSQL += fmt.Sprintf("%s %s", sort.Column, direction)
+			}
+		}
+		rowNumberSQL += ")"
+
+		// Create a query to fetch the row number using a subquery approach
+		// We'll select the PK and row_number, then filter by the target ID
+		type RowNumResult struct {
+			RowNum int64 `bun:"row_num"`
+		}
+
+		rowNumQuery := h.db.NewSelect().Table(tableName).
+			ColumnExpr(fmt.Sprintf("%s AS row_num", rowNumberSQL)).
+			Column(pkName)
+
+		// Apply the same filters as the main query
+		for _, filter := range options.Filters {
+			rowNumQuery = h.applyFilter(rowNumQuery, filter)
+		}
+
+		// Apply custom operators
+		for _, customOp := range options.CustomOperators {
+			rowNumQuery = rowNumQuery.Where(customOp.SQL)
+		}
+
+		// Filter for the specific ID we want the row number for
+		rowNumQuery = rowNumQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), *options.FetchRowNumber)
+
+		// Execute query to get row number
+		var result RowNumResult
+		if err := rowNumQuery.Scan(ctx, &result); err != nil {
+			if err != sql.ErrNoRows {
+				logger.Warn("Error fetching row number: %v", err)
+			}
+		} else {
+			rowNumber = &result.RowNum
+			logger.Debug("Found row number: %d", *rowNumber)
+		}
 	}
-	if options.Offset != nil && *options.Offset > 0 {
-		logger.Debug("Applying offset: %d", *options.Offset)
-		query = query.Offset(*options.Offset)
+
+	// Apply pagination (skip if FetchRowNumber is set - we want only that record)
+	if options.FetchRowNumber == nil || *options.FetchRowNumber == "" {
+		if options.Limit != nil && *options.Limit > 0 {
+			logger.Debug("Applying limit: %d", *options.Limit)
+			query = query.Limit(*options.Limit)
+		}
+		if options.Offset != nil && *options.Offset > 0 {
+			logger.Debug("Applying offset: %d", *options.Offset)
+			query = query.Offset(*options.Offset)
+		}
 	}
 
 	// Execute query
 	var result interface{}
-	if id != "" {
-		logger.Debug("Querying single record with ID: %s", id)
+	if id != "" || (options.FetchRowNumber != nil && *options.FetchRowNumber != "") {
+		// Single record query - either by URL ID or FetchRowNumber
+		var targetID string
+		if id != "" {
+			targetID = id
+			logger.Debug("Querying single record with URL ID: %s", id)
+		} else {
+			targetID = *options.FetchRowNumber
+			logger.Debug("Querying single record with FetchRowNumber ID: %s", targetID)
+		}
+
 		// For single record, create a new pointer to the struct type
 		singleResult := reflect.New(modelType).Interface()
+		pkName := reflection.GetPrimaryKeyName(singleResult)
 
-		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(singleResult))), id)
+		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := query.Scan(ctx, singleResult); err != nil {
 			logger.Error("Error querying record: %v", err)
 			h.sendError(w, http.StatusInternalServerError, "query_error", "Error executing query", err)
@@ -418,20 +491,35 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	logger.Info("Successfully retrieved records")
 
+	// Build metadata
 	limit := 0
-	if options.Limit != nil {
-		limit = *options.Limit
-	}
 	offset := 0
-	if options.Offset != nil {
-		offset = *options.Offset
+	count := int64(total)
+
+	// When FetchRowNumber is used, we only return 1 record
+	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
+		count = 1
+		// Don't use limit/offset when fetching specific record
+	} else {
+		if options.Limit != nil {
+			limit = *options.Limit
+		}
+		if options.Offset != nil {
+			offset = *options.Offset
+		}
+
+		// Set row numbers on records if RowNumber field exists
+		// Only for multiple records (not when fetching single record)
+		h.setRowNumbersOnRecords(result, offset)
 	}
 
 	h.sendResponse(w, result, &common.Metadata{
-		Total:    int64(total),
-		Filtered: int64(total),
-		Limit:    limit,
-		Offset:   offset,
+		Total:     int64(total),
+		Filtered:  int64(total),
+		Count:     count,
+		Limit:     limit,
+		Offset:    offset,
+		RowNumber: rowNumber,
 	})
 }
 
@@ -1303,29 +1391,161 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	h.sendResponse(w, recordToDelete, nil)
 }
 
-func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption) common.SelectQuery {
+// applyFilters applies all filters with proper grouping for OR logic
+// Groups consecutive OR filters together to ensure proper query precedence
+// Example: [A, B(OR), C(OR), D(AND)] => WHERE (A OR B OR C) AND D
+func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	i := 0
+	for i < len(filters) {
+		// Check if this starts an OR group (current or next filter has OR logic)
+		startORGroup := i+1 < len(filters) && strings.EqualFold(filters[i+1].LogicOperator, "OR")
+
+		if startORGroup {
+			// Collect all consecutive filters that are OR'd together
+			orGroup := []common.FilterOption{filters[i]}
+			j := i + 1
+			for j < len(filters) && strings.EqualFold(filters[j].LogicOperator, "OR") {
+				orGroup = append(orGroup, filters[j])
+				j++
+			}
+
+			// Apply the OR group as a single grouped WHERE clause
+			query = h.applyFilterGroup(query, orGroup)
+			i = j
+		} else {
+			// Single filter with AND logic (or first filter)
+			condition, args := h.buildFilterCondition(filters[i])
+			if condition != "" {
+				query = query.Where(condition, args...)
+			}
+			i++
+		}
+	}
+
+	return query
+}
+
+// applyFilterGroup applies a group of filters that should be OR'd together
+// Always wraps them in parentheses and applies as a single WHERE clause
+func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	// Build all conditions and collect args
+	var conditions []string
+	var args []interface{}
+
+	for _, filter := range filters {
+		condition, filterArgs := h.buildFilterCondition(filter)
+		if condition != "" {
+			conditions = append(conditions, condition)
+			args = append(args, filterArgs...)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return query
+	}
+
+	// Single filter - no need for grouping
+	if len(conditions) == 1 {
+		return query.Where(conditions[0], args...)
+	}
+
+	// Multiple conditions - group with parentheses and OR
+	groupedCondition := "(" + strings.Join(conditions, " OR ") + ")"
+	return query.Where(groupedCondition, args...)
+}
+
+// buildFilterCondition builds a filter condition and returns it with args
+func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionString string, conditionArgs []interface{}) {
+	var condition string
+	var args []interface{}
+
 	switch filter.Operator {
 	case "eq":
-		return query.Where(fmt.Sprintf("%s = ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s = ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "neq":
-		return query.Where(fmt.Sprintf("%s != ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s != ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "gt":
-		return query.Where(fmt.Sprintf("%s > ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s > ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "gte":
-		return query.Where(fmt.Sprintf("%s >= ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s >= ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "lt":
-		return query.Where(fmt.Sprintf("%s < ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s < ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "lte":
-		return query.Where(fmt.Sprintf("%s <= ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s <= ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "like":
-		return query.Where(fmt.Sprintf("%s LIKE ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s LIKE ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "ilike":
-		return query.Where(fmt.Sprintf("%s ILIKE ?", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
+		args = []interface{}{filter.Value}
 	case "in":
-		return query.Where(fmt.Sprintf("%s IN (?)", filter.Column), filter.Value)
+		condition = fmt.Sprintf("%s IN (?)", filter.Column)
+		args = []interface{}{filter.Value}
+	default:
+		return "", nil
+	}
+
+	return condition, args
+}
+
+func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption) common.SelectQuery {
+	// Determine which method to use based on LogicOperator
+	useOrLogic := strings.EqualFold(filter.LogicOperator, "OR")
+
+	var condition string
+	var args []interface{}
+
+	switch filter.Operator {
+	case "eq":
+		condition = fmt.Sprintf("%s = ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "neq":
+		condition = fmt.Sprintf("%s != ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "gt":
+		condition = fmt.Sprintf("%s > ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "gte":
+		condition = fmt.Sprintf("%s >= ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "lt":
+		condition = fmt.Sprintf("%s < ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "lte":
+		condition = fmt.Sprintf("%s <= ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "like":
+		condition = fmt.Sprintf("%s LIKE ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "ilike":
+		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
+		args = []interface{}{filter.Value}
+	case "in":
+		condition = fmt.Sprintf("%s IN (?)", filter.Column)
+		args = []interface{}{filter.Value}
 	default:
 		return query
 	}
+
+	// Apply filter with appropriate logic operator
+	if useOrLogic {
+		return query.WhereOr(condition, args...)
+	}
+	return query.Where(condition, args...)
 }
 
 // parseTableName splits a table name that may contain schema into separate schema and table
@@ -1707,6 +1927,51 @@ func toSnakeCase(s string) string {
 		result.WriteRune(r)
 	}
 	return strings.ToLower(result.String())
+}
+
+// setRowNumbersOnRecords sets the RowNumber field on each record if it exists
+// The row number is calculated as offset + index + 1 (1-based)
+func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
+	// Get the reflect value of the records
+	recordsValue := reflect.ValueOf(records)
+	if recordsValue.Kind() == reflect.Ptr {
+		recordsValue = recordsValue.Elem()
+	}
+
+	// Ensure it's a slice
+	if recordsValue.Kind() != reflect.Slice {
+		logger.Debug("setRowNumbersOnRecords: records is not a slice, skipping")
+		return
+	}
+
+	// Iterate through each record
+	for i := 0; i < recordsValue.Len(); i++ {
+		record := recordsValue.Index(i)
+
+		// Dereference if it's a pointer
+		if record.Kind() == reflect.Ptr {
+			if record.IsNil() {
+				continue
+			}
+			record = record.Elem()
+		}
+
+		// Ensure it's a struct
+		if record.Kind() != reflect.Struct {
+			continue
+		}
+
+		// Try to find and set the RowNumber field
+		rowNumberField := record.FieldByName("RowNumber")
+		if rowNumberField.IsValid() && rowNumberField.CanSet() {
+			// Check if the field is of type int64
+			if rowNumberField.Kind() == reflect.Int64 {
+				rowNum := int64(offset + i + 1)
+				rowNumberField.SetInt(rowNum)
+				logger.Debug("Set RowNumber=%d for record index %d", rowNum, i)
+			}
+		}
+	}
 }
 
 // HandleOpenAPI generates and returns the OpenAPI specification

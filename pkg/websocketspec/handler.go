@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -540,10 +541,8 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 
 	// Apply options (simplified implementation)
 	if hookCtx.Options != nil {
-		// Apply filters
-		for _, filter := range hookCtx.Options.Filters {
-			query = query.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
-		}
+		// Apply filters with OR grouping support
+		query = h.applyFilters(query, hookCtx.Options.Filters)
 
 		// Apply sorting
 		for _, sort := range hookCtx.Options.Sort {
@@ -577,6 +576,13 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	if err := query.ScanModel(hookCtx.Context); err != nil {
 		return nil, nil, fmt.Errorf("failed to read records: %w", err)
 	}
+
+	// Set row numbers on records if RowNumber field exists
+	offset := 0
+	if hookCtx.Options != nil && hookCtx.Options.Offset != nil {
+		offset = *hookCtx.Options.Offset
+	}
+	h.setRowNumbersOnRecords(hookCtx.ModelPtr, offset)
 
 	// Get count
 	metadata = make(map[string]interface{})
@@ -683,6 +689,133 @@ func (h *Handler) getMetadata(schema, entity string, model interface{}) map[stri
 }
 
 // getOperatorSQL converts filter operator to SQL operator
+// applyFilters applies all filters with proper grouping for OR logic
+// Groups consecutive OR filters together to ensure proper query precedence
+func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	i := 0
+	for i < len(filters) {
+		// Check if this starts an OR group (next filter has OR logic)
+		startORGroup := i+1 < len(filters) && strings.EqualFold(filters[i+1].LogicOperator, "OR")
+
+		if startORGroup {
+			// Collect all consecutive filters that are OR'd together
+			orGroup := []common.FilterOption{filters[i]}
+			j := i + 1
+			for j < len(filters) && strings.EqualFold(filters[j].LogicOperator, "OR") {
+				orGroup = append(orGroup, filters[j])
+				j++
+			}
+
+			// Apply the OR group as a single grouped WHERE clause
+			query = h.applyFilterGroup(query, orGroup)
+			i = j
+		} else {
+			// Single filter with AND logic (or first filter)
+			condition, args := h.buildFilterCondition(filters[i])
+			if condition != "" {
+				query = query.Where(condition, args...)
+			}
+			i++
+		}
+	}
+
+	return query
+}
+
+// applyFilterGroup applies a group of filters that should be OR'd together
+// Always wraps them in parentheses and applies as a single WHERE clause
+func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+	if len(filters) == 0 {
+		return query
+	}
+
+	// Build all conditions and collect args
+	var conditions []string
+	var args []interface{}
+
+	for _, filter := range filters {
+		condition, filterArgs := h.buildFilterCondition(filter)
+		if condition != "" {
+			conditions = append(conditions, condition)
+			args = append(args, filterArgs...)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return query
+	}
+
+	// Single filter - no need for grouping
+	if len(conditions) == 1 {
+		return query.Where(conditions[0], args...)
+	}
+
+	// Multiple conditions - group with parentheses and OR
+	groupedCondition := "(" + strings.Join(conditions, " OR ") + ")"
+	return query.Where(groupedCondition, args...)
+}
+
+// buildFilterCondition builds a filter condition and returns it with args
+func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionString string, conditionArgs []interface{}) {
+	var condition string
+	var args []interface{}
+
+	operatorSQL := h.getOperatorSQL(filter.Operator)
+	condition = fmt.Sprintf("%s %s ?", filter.Column, operatorSQL)
+	args = []interface{}{filter.Value}
+
+	return condition, args
+}
+
+// setRowNumbersOnRecords sets the RowNumber field on each record if it exists
+// The row number is calculated as offset + index + 1 (1-based)
+func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
+	// Get the reflect value of the records
+	recordsValue := reflect.ValueOf(records)
+	if recordsValue.Kind() == reflect.Ptr {
+		recordsValue = recordsValue.Elem()
+	}
+
+	// Ensure it's a slice
+	if recordsValue.Kind() != reflect.Slice {
+		logger.Debug("[WebSocketSpec] setRowNumbersOnRecords: records is not a slice, skipping")
+		return
+	}
+
+	// Iterate through each record
+	for i := 0; i < recordsValue.Len(); i++ {
+		record := recordsValue.Index(i)
+
+		// Dereference if it's a pointer
+		if record.Kind() == reflect.Ptr {
+			if record.IsNil() {
+				continue
+			}
+			record = record.Elem()
+		}
+
+		// Ensure it's a struct
+		if record.Kind() != reflect.Struct {
+			continue
+		}
+
+		// Try to find and set the RowNumber field
+		rowNumberField := record.FieldByName("RowNumber")
+		if rowNumberField.IsValid() && rowNumberField.CanSet() {
+			// Check if the field is of type int64
+			if rowNumberField.Kind() == reflect.Int64 {
+				rowNum := int64(offset + i + 1)
+				rowNumberField.SetInt(rowNum)
+				logger.Debug("[WebSocketSpec] Set RowNumber=%d for record index %d", rowNum, i)
+			}
+		}
+	}
+}
+
 func (h *Handler) getOperatorSQL(operator string) string {
 	switch operator {
 	case "eq":

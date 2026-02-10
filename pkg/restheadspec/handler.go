@@ -2602,21 +2602,8 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 		sortSQL = fmt.Sprintf("%s.%s ASC", tableName, pkName)
 	}
 
-	// Build WHERE clauses from filters
-	whereClauses := make([]string, 0)
-	for i := range options.Filters {
-		filter := &options.Filters[i]
-		whereClause := h.buildFilterSQL(filter, tableName)
-		if whereClause != "" {
-			whereClauses = append(whereClauses, fmt.Sprintf("(%s)", whereClause))
-		}
-	}
-
-	// Combine WHERE clauses
-	whereSQL := ""
-	if len(whereClauses) > 0 {
-		whereSQL = "WHERE " + strings.Join(whereClauses, " AND ")
-	}
+	// Build WHERE clause from filters with proper OR grouping
+	whereSQL := h.buildWhereClauseWithORGrouping(options.Filters, tableName)
 
 	// Add custom SQL WHERE if provided
 	if options.CustomSQLWhere != "" {
@@ -2677,6 +2664,67 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 }
 
 // buildFilterSQL converts a filter to SQL WHERE clause string
+// buildWhereClauseWithORGrouping builds a WHERE clause from filters with proper OR grouping
+// Groups consecutive OR filters together to ensure proper SQL precedence
+// Example: [A, B(OR), C(OR), D(AND)] => WHERE (A OR B OR C) AND D
+func (h *Handler) buildWhereClauseWithORGrouping(filters []common.FilterOption, tableName string) string {
+	if len(filters) == 0 {
+		return ""
+	}
+
+	var groups []string
+	i := 0
+
+	for i < len(filters) {
+		// Check if this starts an OR group (next filter has OR logic)
+		startORGroup := i+1 < len(filters) && strings.EqualFold(filters[i+1].LogicOperator, "OR")
+
+		if startORGroup {
+			// Collect all consecutive filters that are OR'd together
+			orGroup := []string{}
+
+			// Add current filter
+			filterSQL := h.buildFilterSQL(&filters[i], tableName)
+			if filterSQL != "" {
+				orGroup = append(orGroup, filterSQL)
+			}
+
+			// Collect remaining OR filters
+			j := i + 1
+			for j < len(filters) && strings.EqualFold(filters[j].LogicOperator, "OR") {
+				filterSQL := h.buildFilterSQL(&filters[j], tableName)
+				if filterSQL != "" {
+					orGroup = append(orGroup, filterSQL)
+				}
+				j++
+			}
+
+			// Group OR filters with parentheses
+			if len(orGroup) > 0 {
+				if len(orGroup) == 1 {
+					groups = append(groups, orGroup[0])
+				} else {
+					groups = append(groups, "("+strings.Join(orGroup, " OR ")+")")
+				}
+			}
+			i = j
+		} else {
+			// Single filter with AND logic (or first filter)
+			filterSQL := h.buildFilterSQL(&filters[i], tableName)
+			if filterSQL != "" {
+				groups = append(groups, filterSQL)
+			}
+			i++
+		}
+	}
+
+	if len(groups) == 0 {
+		return ""
+	}
+
+	return "WHERE " + strings.Join(groups, " AND ")
+}
+
 func (h *Handler) buildFilterSQL(filter *common.FilterOption, tableName string) string {
 	qualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
 

@@ -214,6 +214,146 @@ Content-Type: application/json
 }
 ```
 
+### OR Logic in Filters (SearchOr)
+
+Use the `logic_operator` field to combine filters with OR logic instead of the default AND:
+
+```json
+{
+  "operation": "read",
+  "options": {
+    "filters": [
+      {
+        "column": "status",
+        "operator": "eq",
+        "value": "active"
+      },
+      {
+        "column": "status",
+        "operator": "eq",
+        "value": "pending",
+        "logic_operator": "OR"
+      },
+      {
+        "column": "priority",
+        "operator": "eq",
+        "value": "high",
+        "logic_operator": "OR"
+      }
+    ]
+  }
+}
+```
+
+This will produce: `WHERE (status = 'active' OR status = 'pending' OR priority = 'high')`
+
+**Important:** Consecutive OR filters are automatically grouped together with parentheses to ensure proper query logic.
+
+#### Mixing AND and OR
+
+Consecutive OR filters are grouped, then combined with AND filters:
+
+```json
+{
+  "filters": [
+    {
+      "column": "status",
+      "operator": "eq",
+      "value": "active"
+    },
+    {
+      "column": "status",
+      "operator": "eq",
+      "value": "pending",
+      "logic_operator": "OR"
+    },
+    {
+      "column": "age",
+      "operator": "gte",
+      "value": 18
+    }
+  ]
+}
+```
+
+Produces: `WHERE (status = 'active' OR status = 'pending') AND age >= 18`
+
+This grouping ensures OR conditions don't interfere with other AND conditions in the query.
+
+### Custom Operators
+
+Add custom SQL conditions when needed:
+
+```json
+{
+  "operation": "read",
+  "options": {
+    "customOperators": [
+      {
+        "name": "email_domain_filter",
+        "sql": "LOWER(email) LIKE '%@example.com'"
+      },
+      {
+        "name": "recent_records",
+        "sql": "created_at > NOW() - INTERVAL '7 days'"
+      }
+    ]
+  }
+}
+```
+
+Custom operators are applied as additional WHERE conditions to your query.
+
+### Fetch Row Number
+
+Get the row number (position) of a specific record in the filtered and sorted result set. **When `fetch_row_number` is specified, only that specific record is returned** (not all records).
+
+```json
+{
+  "operation": "read",
+  "options": {
+    "filters": [
+      {
+        "column": "status",
+        "operator": "eq",
+        "value": "active"
+      }
+    ],
+    "sort": [
+      {
+        "column": "score",
+        "direction": "desc"
+      }
+    ],
+    "fetch_row_number": "12345"
+  }
+}
+```
+
+**Response - Returns ONLY the specified record with its position:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": 12345,
+    "name": "John Doe",
+    "score": 850,
+    "status": "active"
+  },
+  "metadata": {
+    "total": 1000,
+    "count": 1,
+    "filtered": 1000,
+    "row_number": 42
+  }
+}
+```
+
+**Use Case:** Perfect for "Show me this user and their ranking" - you get just that one user with their position in the leaderboard.
+
+**Note:** This is different from the `RowNumber` field feature, which automatically numbers all records in a paginated response based on offset. That feature uses simple math (`offset + index + 1`), while `fetch_row_number` uses SQL window functions to calculate the actual position in a sorted/filtered set. To use the `RowNumber` field feature, simply add a `RowNumber int64` field to your model - it will be automatically populated with the row position based on pagination.
+
 ## Preloading
 
 Load related entities with custom configuration:
@@ -427,7 +567,7 @@ Define virtual columns using SQL expressions:
 
 ## Custom Operators
 
-Add custom SQL conditions when needed:
+Add custom SQL conditions when standard filters aren't sufficient:
 
 ```json
 {
@@ -435,16 +575,23 @@ Add custom SQL conditions when needed:
   "options": {
     "customOperators": [
       {
-        "condition": "LOWER(email) LIKE ?",
-        "values": ["%@example.com"]
+        "name": "email_domain_filter",
+        "sql": "LOWER(email) LIKE '%@example.com'"
       },
       {
-        "condition": "created_at > NOW() - INTERVAL '7 days'"
+        "name": "recent_records",
+        "sql": "created_at > NOW() - INTERVAL '7 days'"
+      },
+      {
+        "name": "complex_condition",
+        "sql": "(status = 'active' AND score > 100) OR (status = 'pending' AND priority = 'high')"
       }
     ]
   }
 }
 ```
+
+**Note:** Custom operators are applied as WHERE conditions. Make sure to properly escape and sanitize any user input to prevent SQL injection.
 
 ## Lifecycle Hooks
 

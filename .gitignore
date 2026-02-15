@@ -28,3 +28,4 @@ test.db
 /testserver
 tests/data/
 node_modules/
+resolvespec-js/dist/

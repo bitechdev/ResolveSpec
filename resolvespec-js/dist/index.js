@@ -84,9 +84,9 @@ const f = /* @__PURE__ */ new Map();
 function _(n) {
   const e = n.url;
   let t = f.get(e);
-  return t || (t = new w(n), f.set(e, t)), t;
+  return t || (t = new p(n), f.set(e, t)), t;
 }
-class w {
+class p {
   constructor(e) {
     this.ws = null, this.messageHandlers = /* @__PURE__ */ new Map(), this.subscriptions = /* @__PURE__ */ new Map(), this.eventListeners = {}, this.state = "disconnected", this.reconnectAttempts = 0, this.reconnectTimer = null, this.heartbeatTimer = null, this.isManualClose = !1, this.config = {
       url: e.url,
@@ -309,12 +309,12 @@ class w {
     this.config.debug && console.log("[WebSocketClient]", ...e);
   }
 }
-function C(n) {
+function v(n) {
   return typeof btoa == "function" ? "ZIP_" + btoa(n) : "ZIP_" + Buffer.from(n, "utf-8").toString("base64");
 }
-function y(n) {
+function w(n) {
   let e = n;
-  return e.startsWith("ZIP_") ? (e = e.slice(4).replace(/[\n\r ]/g, ""), e = m(e)) : e.startsWith("__") && (e = e.slice(2).replace(/[\n\r ]/g, ""), e = m(e)), (e.startsWith("ZIP_") || e.startsWith("__")) && (e = y(e)), e;
+  return e.startsWith("ZIP_") ? (e = e.slice(4).replace(/[\n\r ]/g, ""), e = m(e)) : e.startsWith("__") && (e = e.slice(2).replace(/[\n\r ]/g, ""), e = m(e)), (e.startsWith("ZIP_") || e.startsWith("__")) && (e = w(e)), e;
 }
 function m(n) {
   return typeof atob == "function" ? atob(n) : Buffer.from(n, "base64").toString("utf-8");
@@ -323,7 +323,7 @@ function u(n) {
   const e = {};
   if (n.columns?.length && (e["X-Select-Fields"] = n.columns.join(",")), n.omit_columns?.length && (e["X-Not-Select-Fields"] = n.omit_columns.join(",")), n.filters?.length)
     for (const t of n.filters) {
-      const s = t.logic_operator ?? "AND", r = p(t.operator), i = S(t);
+      const s = t.logic_operator ?? "AND", r = y(t.operator), i = S(t);
       t.operator === "eq" && s === "AND" ? e[`X-FieldFilter-${t.column}`] = i : s === "OR" ? e[`X-SearchOr-${r}-${t.column}`] = i : e[`X-SearchOp-${r}-${t.column}`] = i;
     }
   if (n.sort?.length) {
@@ -338,12 +338,14 @@ function u(n) {
     for (const t of n.computedColumns)
       e[`X-CQL-SEL-${t.name}`] = t.expression;
   if (n.customOperators?.length) {
-    const t = n.customOperators.map((s) => s.sql);
+    const t = n.customOperators.map(
+      (s) => s.sql
+    );
     e["X-Custom-SQL-W"] = t.join(" AND ");
   }
   return e;
 }
-function p(n) {
+function y(n) {
   switch (n) {
     case "eq":
       return "equals";
@@ -383,7 +385,7 @@ function S(n) {
   return n.value === null || n.value === void 0 ? "" : Array.isArray(n.value) ? n.value.join(",") : String(n.value);
 }
 const b = /* @__PURE__ */ new Map();
-function v(n) {
+function C(n) {
   const e = n.baseUrl;
   let t = b.get(e);
   return t || (t = new H(n), b.set(e, t)), t;
@@ -405,8 +407,23 @@ class H {
   async fetchWithError(e, t) {
     const s = await fetch(e, t), r = await s.json();
     if (!s.ok)
-      throw new Error(r.error?.message || "An error occurred");
-    return r;
+      throw new Error(
+        r.error?.message || `${s.statusText} (${s.status})`
+      );
+    return {
+      data: r,
+      success: !0,
+      error: r.error ? r.error : void 0,
+      metadata: {
+        count: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
+        total: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
+        filtered: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
+        offset: s.headers.get("content-range") ? Number(
+          s.headers.get("content-range")?.split("/")[0].split("-")[0]
+        ) : 0,
+        limit: s.headers.get("x-limit") ? Number(s.headers.get("x-limit")) : 0
+      }
+    };
   }
   async read(e, t, s, r) {
     const i = this.buildUrl(e, t, s), a = r ? u(r) : {};
@@ -442,11 +459,11 @@ class H {
 export {
   H as HeaderSpecClient,
   g as ResolveSpecClient,
-  w as WebSocketClient,
+  p as WebSocketClient,
   u as buildHeaders,
-  y as decodeHeaderValue,
-  C as encodeHeaderValue,
-  v as getHeaderSpecClient,
+  w as decodeHeaderValue,
+  v as encodeHeaderValue,
+  C as getHeaderSpecClient,
   E as getResolveSpecClient,
   _ as getWebSocketClient
 };

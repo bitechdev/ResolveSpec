@@ -1,50 +1,50 @@
 import type {
-    ClientConfig,
-    APIResponse,
-    Options,
-    FilterOption,
-    SortOption,
-    PreloadOption,
-    CustomOperator,
-} from '../common/types';
+  APIResponse,
+  ClientConfig,
+  CustomOperator,
+  FilterOption,
+  Options,
+  PreloadOption,
+  SortOption,
+} from "../common/types";
 
 /**
  * Encode a value with base64 and ZIP_ prefix for complex header values.
  */
 export function encodeHeaderValue(value: string): string {
-    if (typeof btoa === 'function') {
-        return 'ZIP_' + btoa(value);
-    }
-    return 'ZIP_' + Buffer.from(value, 'utf-8').toString('base64');
+  if (typeof btoa === "function") {
+    return "ZIP_" + btoa(value);
+  }
+  return "ZIP_" + Buffer.from(value, "utf-8").toString("base64");
 }
 
 /**
  * Decode a header value that may be base64 encoded with ZIP_ or __ prefix.
  */
 export function decodeHeaderValue(value: string): string {
-    let code = value;
+  let code = value;
 
-    if (code.startsWith('ZIP_')) {
-        code = code.slice(4).replace(/[\n\r ]/g, '');
-        code = decodeBase64(code);
-    } else if (code.startsWith('__')) {
-        code = code.slice(2).replace(/[\n\r ]/g, '');
-        code = decodeBase64(code);
-    }
+  if (code.startsWith("ZIP_")) {
+    code = code.slice(4).replace(/[\n\r ]/g, "");
+    code = decodeBase64(code);
+  } else if (code.startsWith("__")) {
+    code = code.slice(2).replace(/[\n\r ]/g, "");
+    code = decodeBase64(code);
+  }
 
-    // Handle nested encoding
-    if (code.startsWith('ZIP_') || code.startsWith('__')) {
-        code = decodeHeaderValue(code);
-    }
+  // Handle nested encoding
+  if (code.startsWith("ZIP_") || code.startsWith("__")) {
+    code = decodeHeaderValue(code);
+  }
 
-    return code;
+  return code;
 }
 
 function decodeBase64(str: string): string {
-    if (typeof atob === 'function') {
-        return atob(str);
-    }
-    return Buffer.from(str, 'base64').toString('utf-8');
+  if (typeof atob === "function") {
+    return atob(str);
+  }
+  return Buffer.from(str, "base64").toString("utf-8");
 }
 
 /**
@@ -65,134 +65,151 @@ function decodeBase64(str: string): string {
  *  - X-Custom-SQL-W: custom operators (AND)
  */
 export function buildHeaders(options: Options): Record<string, string> {
-    const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {};
 
-    // Column selection
-    if (options.columns?.length) {
-        headers['X-Select-Fields'] = options.columns.join(',');
-    }
+  // Column selection
+  if (options.columns?.length) {
+    headers["X-Select-Fields"] = options.columns.join(",");
+  }
 
-    if (options.omit_columns?.length) {
-        headers['X-Not-Select-Fields'] = options.omit_columns.join(',');
-    }
+  if (options.omit_columns?.length) {
+    headers["X-Not-Select-Fields"] = options.omit_columns.join(",");
+  }
 
-    // Filters
-    if (options.filters?.length) {
-        for (const filter of options.filters) {
-            const logicOp = filter.logic_operator ?? 'AND';
-            const op = mapOperatorToHeaderOp(filter.operator);
-            const valueStr = formatFilterValue(filter);
+  // Filters
+  if (options.filters?.length) {
+    for (const filter of options.filters) {
+      const logicOp = filter.logic_operator ?? "AND";
+      const op = mapOperatorToHeaderOp(filter.operator);
+      const valueStr = formatFilterValue(filter);
 
-            if (filter.operator === 'eq' && logicOp === 'AND') {
-                // Simple field filter shorthand
-                headers[`X-FieldFilter-${filter.column}`] = valueStr;
-            } else if (logicOp === 'OR') {
-                headers[`X-SearchOr-${op}-${filter.column}`] = valueStr;
-            } else {
-                headers[`X-SearchOp-${op}-${filter.column}`] = valueStr;
-            }
-        }
+      if (filter.operator === "eq" && logicOp === "AND") {
+        // Simple field filter shorthand
+        headers[`X-FieldFilter-${filter.column}`] = valueStr;
+      } else if (logicOp === "OR") {
+        headers[`X-SearchOr-${op}-${filter.column}`] = valueStr;
+      } else {
+        headers[`X-SearchOp-${op}-${filter.column}`] = valueStr;
+      }
     }
+  }
 
-    // Sort
-    if (options.sort?.length) {
-        const sortParts = options.sort.map((s: SortOption) => {
-            const dir = s.direction.toUpperCase();
-            return dir === 'DESC' ? `-${s.column}` : `+${s.column}`;
-        });
-        headers['X-Sort'] = sortParts.join(',');
-    }
+  // Sort
+  if (options.sort?.length) {
+    const sortParts = options.sort.map((s: SortOption) => {
+      const dir = s.direction.toUpperCase();
+      return dir === "DESC" ? `-${s.column}` : `+${s.column}`;
+    });
+    headers["X-Sort"] = sortParts.join(",");
+  }
 
-    // Pagination
-    if (options.limit !== undefined) {
-        headers['X-Limit'] = String(options.limit);
-    }
-    if (options.offset !== undefined) {
-        headers['X-Offset'] = String(options.offset);
-    }
+  // Pagination
+  if (options.limit !== undefined) {
+    headers["X-Limit"] = String(options.limit);
+  }
+  if (options.offset !== undefined) {
+    headers["X-Offset"] = String(options.offset);
+  }
 
-    // Cursor pagination
-    if (options.cursor_forward) {
-        headers['X-Cursor-Forward'] = options.cursor_forward;
-    }
-    if (options.cursor_backward) {
-        headers['X-Cursor-Backward'] = options.cursor_backward;
-    }
+  // Cursor pagination
+  if (options.cursor_forward) {
+    headers["X-Cursor-Forward"] = options.cursor_forward;
+  }
+  if (options.cursor_backward) {
+    headers["X-Cursor-Backward"] = options.cursor_backward;
+  }
 
-    // Preload
-    if (options.preload?.length) {
-        const parts = options.preload.map((p: PreloadOption) => {
-            if (p.columns?.length) {
-                return `${p.relation}:${p.columns.join(',')}`;
-            }
-            return p.relation;
-        });
-        headers['X-Preload'] = parts.join('|');
-    }
+  // Preload
+  if (options.preload?.length) {
+    const parts = options.preload.map((p: PreloadOption) => {
+      if (p.columns?.length) {
+        return `${p.relation}:${p.columns.join(",")}`;
+      }
+      return p.relation;
+    });
+    headers["X-Preload"] = parts.join("|");
+  }
 
-    // Fetch row number
-    if (options.fetch_row_number) {
-        headers['X-Fetch-RowNumber'] = options.fetch_row_number;
-    }
+  // Fetch row number
+  if (options.fetch_row_number) {
+    headers["X-Fetch-RowNumber"] = options.fetch_row_number;
+  }
 
-    // Computed columns
-    if (options.computedColumns?.length) {
-        for (const cc of options.computedColumns) {
-            headers[`X-CQL-SEL-${cc.name}`] = cc.expression;
-        }
+  // Computed columns
+  if (options.computedColumns?.length) {
+    for (const cc of options.computedColumns) {
+      headers[`X-CQL-SEL-${cc.name}`] = cc.expression;
     }
+  }
 
-    // Custom operators -> X-Custom-SQL-W
-    if (options.customOperators?.length) {
-        const sqlParts = options.customOperators.map((co: CustomOperator) => co.sql);
-        headers['X-Custom-SQL-W'] = sqlParts.join(' AND ');
-    }
+  // Custom operators -> X-Custom-SQL-W
+  if (options.customOperators?.length) {
+    const sqlParts = options.customOperators.map(
+      (co: CustomOperator) => co.sql,
+    );
+    headers["X-Custom-SQL-W"] = sqlParts.join(" AND ");
+  }
 
-    return headers;
+  return headers;
 }
 
 function mapOperatorToHeaderOp(operator: string): string {
-    switch (operator) {
-        case 'eq': return 'equals';
-        case 'neq': return 'notequals';
-        case 'gt': return 'greaterthan';
-        case 'gte': return 'greaterthanorequal';
-        case 'lt': return 'lessthan';
-        case 'lte': return 'lessthanorequal';
-        case 'like':
-        case 'ilike':
-        case 'contains': return 'contains';
-        case 'startswith': return 'beginswith';
-        case 'endswith': return 'endswith';
-        case 'in': return 'in';
-        case 'between': return 'between';
-        case 'between_inclusive': return 'betweeninclusive';
-        case 'is_null': return 'empty';
-        case 'is_not_null': return 'notempty';
-        default: return operator;
-    }
+  switch (operator) {
+    case "eq":
+      return "equals";
+    case "neq":
+      return "notequals";
+    case "gt":
+      return "greaterthan";
+    case "gte":
+      return "greaterthanorequal";
+    case "lt":
+      return "lessthan";
+    case "lte":
+      return "lessthanorequal";
+    case "like":
+    case "ilike":
+    case "contains":
+      return "contains";
+    case "startswith":
+      return "beginswith";
+    case "endswith":
+      return "endswith";
+    case "in":
+      return "in";
+    case "between":
+      return "between";
+    case "between_inclusive":
+      return "betweeninclusive";
+    case "is_null":
+      return "empty";
+    case "is_not_null":
+      return "notempty";
+    default:
+      return operator;
+  }
 }
 
 function formatFilterValue(filter: FilterOption): string {
-    if (filter.value === null || filter.value === undefined) {
-        return '';
-    }
-    if (Array.isArray(filter.value)) {
-        return filter.value.join(',');
-    }
-    return String(filter.value);
+  if (filter.value === null || filter.value === undefined) {
+    return "";
+  }
+  if (Array.isArray(filter.value)) {
+    return filter.value.join(",");
+  }
+  return String(filter.value);
 }
 
 const instances = new Map<string, HeaderSpecClient>();
 
 export function getHeaderSpecClient(config: ClientConfig): HeaderSpecClient {
-    const key = config.baseUrl;
-    let instance = instances.get(key);
-    if (!instance) {
-        instance = new HeaderSpecClient(config);
-        instances.set(key, instance);
-    }
-    return instance;
+  const key = config.baseUrl;
+  let instance = instances.get(key);
+  if (!instance) {
+    instance = new HeaderSpecClient(config);
+    instances.set(key, instance);
+  }
+  return instance;
 }
 
 /**
@@ -202,95 +219,127 @@ export function getHeaderSpecClient(config: ClientConfig): HeaderSpecClient {
  * HTTP methods: GET=read, POST=create, PUT=update, DELETE=delete
  */
 export class HeaderSpecClient {
-    private config: ClientConfig;
+  private config: ClientConfig;
 
-    constructor(config: ClientConfig) {
-        this.config = config;
+  constructor(config: ClientConfig) {
+    this.config = config;
+  }
+
+  private buildUrl(schema: string, entity: string, id?: string): string {
+    let url = `${this.config.baseUrl}/${schema}/${entity}`;
+    if (id) {
+      url += `/${id}`;
+    }
+    return url;
+  }
+
+  private baseHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.config.token) {
+      headers["Authorization"] = `Bearer ${this.config.token}`;
+    }
+    return headers;
+  }
+
+  private async fetchWithError<T>(
+    url: string,
+    init: RequestInit,
+  ): Promise<APIResponse<T>> {
+    const response = await fetch(url, init);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error?.message ||
+          `${response.statusText} ` + `(${response.status})`,
+      );
     }
 
-    private buildUrl(schema: string, entity: string, id?: string): string {
-        let url = `${this.config.baseUrl}/${schema}/${entity}`;
-        if (id) {
-            url += `/${id}`;
-        }
-        return url;
-    }
+    return {
+      data: data,
+      success: true,
+      error: data.error ? data.error : undefined,
+      metadata: {
+        count: response.headers.get("content-range")
+          ? Number(response.headers.get("content-range")?.split("/")[1])
+          : 0,
+        total: response.headers.get("content-range")
+          ? Number(response.headers.get("content-range")?.split("/")[1])
+          : 0,
+        filtered: response.headers.get("content-range")
+          ? Number(response.headers.get("content-range")?.split("/")[1])
+          : 0,
+        offset: response.headers.get("content-range")
+          ? Number(
+              response.headers
+                .get("content-range")
+                ?.split("/")[0]
+                .split("-")[0],
+            )
+          : 0,
+        limit: response.headers.get("x-limit")
+          ? Number(response.headers.get("x-limit"))
+          : 0,
+      },
+    };
+  }
 
-    private baseHeaders(): Record<string, string> {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-        if (this.config.token) {
-            headers['Authorization'] = `Bearer ${this.config.token}`;
-        }
-        return headers;
-    }
+  async read<T = any>(
+    schema: string,
+    entity: string,
+    id?: string,
+    options?: Options,
+  ): Promise<APIResponse<T>> {
+    const url = this.buildUrl(schema, entity, id);
+    const optHeaders = options ? buildHeaders(options) : {};
+    return this.fetchWithError<T>(url, {
+      method: "GET",
+      headers: { ...this.baseHeaders(), ...optHeaders },
+    });
+  }
 
-    private async fetchWithError<T>(url: string, init: RequestInit): Promise<APIResponse<T>> {
-        const response = await fetch(url, init);
-        const data = await response.json();
+  async create<T = any>(
+    schema: string,
+    entity: string,
+    data: any,
+    options?: Options,
+  ): Promise<APIResponse<T>> {
+    const url = this.buildUrl(schema, entity);
+    const optHeaders = options ? buildHeaders(options) : {};
+    return this.fetchWithError<T>(url, {
+      method: "POST",
+      headers: { ...this.baseHeaders(), ...optHeaders },
+      body: JSON.stringify(data),
+    });
+  }
 
-        if (!response.ok) {
-            throw new Error(data.error?.message || 'An error occurred');
-        }
+  async update<T = any>(
+    schema: string,
+    entity: string,
+    id: string,
+    data: any,
+    options?: Options,
+  ): Promise<APIResponse<T>> {
+    const url = this.buildUrl(schema, entity, id);
+    const optHeaders = options ? buildHeaders(options) : {};
+    return this.fetchWithError<T>(url, {
+      method: "PUT",
+      headers: { ...this.baseHeaders(), ...optHeaders },
+      body: JSON.stringify(data),
+    });
+  }
 
-        return data;
-    }
-
-    async read<T = any>(
-        schema: string,
-        entity: string,
-        id?: string,
-        options?: Options
-    ): Promise<APIResponse<T>> {
-        const url = this.buildUrl(schema, entity, id);
-        const optHeaders = options ? buildHeaders(options) : {};
-        return this.fetchWithError<T>(url, {
-            method: 'GET',
-            headers: { ...this.baseHeaders(), ...optHeaders },
-        });
-    }
-
-    async create<T = any>(
-        schema: string,
-        entity: string,
-        data: any,
-        options?: Options
-    ): Promise<APIResponse<T>> {
-        const url = this.buildUrl(schema, entity);
-        const optHeaders = options ? buildHeaders(options) : {};
-        return this.fetchWithError<T>(url, {
-            method: 'POST',
-            headers: { ...this.baseHeaders(), ...optHeaders },
-            body: JSON.stringify(data),
-        });
-    }
-
-    async update<T = any>(
-        schema: string,
-        entity: string,
-        id: string,
-        data: any,
-        options?: Options
-    ): Promise<APIResponse<T>> {
-        const url = this.buildUrl(schema, entity, id);
-        const optHeaders = options ? buildHeaders(options) : {};
-        return this.fetchWithError<T>(url, {
-            method: 'PUT',
-            headers: { ...this.baseHeaders(), ...optHeaders },
-            body: JSON.stringify(data),
-        });
-    }
-
-    async delete(
-        schema: string,
-        entity: string,
-        id: string
-    ): Promise<APIResponse<void>> {
-        const url = this.buildUrl(schema, entity, id);
-        return this.fetchWithError<void>(url, {
-            method: 'DELETE',
-            headers: this.baseHeaders(),
-        });
-    }
+  async delete(
+    schema: string,
+    entity: string,
+    id: string,
+  ): Promise<APIResponse<void>> {
+    const url = this.buildUrl(schema, entity, id);
+    return this.fetchWithError<void>(url, {
+      method: "DELETE",
+      headers: this.baseHeaders(),
+    });
+  }
 }

@@ -1,17 +1,24 @@
+import type { FilterOption, SortOption, PreloadOption, Parameter } from '../common/types';
+
+// Re-export common types
+export type { FilterOption, SortOption, PreloadOption, Operator, SortDirection } from '../common/types';
+
 // WebSocket Message Types
 export type MessageType = 'request' | 'response' | 'notification' | 'subscription' | 'error' | 'ping' | 'pong';
 export type WSOperation = 'read' | 'create' | 'update' | 'delete' | 'subscribe' | 'unsubscribe' | 'meta';
 
-// Re-export common types
-export type { FilterOption, SortOption, PreloadOption, Operator, SortDirection } from './types';
-
 export interface WSOptions {
-    filters?: import('./types').FilterOption[];
+    filters?: FilterOption[];
     columns?: string[];
-    preload?: import('./types').PreloadOption[];
-    sort?: import('./types').SortOption[];
+    omit_columns?: string[];
+    preload?: PreloadOption[];
+    sort?: SortOption[];
     limit?: number;
     offset?: number;
+    parameters?: Parameter[];
+    cursor_forward?: string;
+    cursor_backward?: string;
+    fetch_row_number?: string;
 }
 
 export interface WSMessage {
@@ -78,7 +85,7 @@ export interface WSSubscriptionMessage {
 }
 
 export interface SubscriptionOptions {
-    filters?: import('./types').FilterOption[];
+    filters?: FilterOption[];
     onNotification?: (notification: WSNotificationMessage) => void;
 }
 

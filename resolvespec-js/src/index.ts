@@ -1,7 +1,11 @@
-// Types
-export * from './types';
-export * from './websocket-types';
+// Common types
+export * from './common';
 
-// WebSocket Client
-export { WebSocketClient } from './websocket-client';
-export type { WebSocketClient as default } from './websocket-client';
+// REST client (ResolveSpec)
+export * from './resolvespec';
+
+// WebSocket client
+export * from './websocketspec';
+
+// HeaderSpec client
+export * from './headerspec';

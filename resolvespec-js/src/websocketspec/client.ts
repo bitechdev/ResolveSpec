@@ -8,10 +8,22 @@ import type {
     WSOperation,
     WSOptions,
     Subscription,
-    SubscriptionOptions,
     ConnectionState,
     WebSocketClientEvents
-} from './websocket-types';
+} from './types';
+import type { FilterOption, SortOption, PreloadOption } from '../common/types';
+
+const instances = new Map<string, WebSocketClient>();
+
+export function getWebSocketClient(config: WebSocketClientConfig): WebSocketClient {
+    const key = config.url;
+    let instance = instances.get(key);
+    if (!instance) {
+        instance = new WebSocketClient(config);
+        instances.set(key, instance);
+    }
+    return instance;
+}
 
 export class WebSocketClient {
     private ws: WebSocket | null = null;
@@ -36,9 +48,6 @@ export class WebSocketClient {
         };
     }
 
-    /**
-     * Connect to WebSocket server
-     */
     async connect(): Promise<void> {
         if (this.ws?.readyState === WebSocket.OPEN) {
             this.log('Already connected');
@@ -78,7 +87,6 @@ export class WebSocketClient {
                     this.setState('disconnected');
                     this.emit('disconnect', event);
 
-                    // Attempt reconnection if enabled and not manually closed
                     if (this.config.reconnect && !this.isManualClose && this.reconnectAttempts < this.config.maxReconnectAttempts) {
                         this.reconnectAttempts++;
                         this.log(`Reconnection attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`);
@@ -97,9 +105,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Disconnect from WebSocket server
-     */
     disconnect(): void {
         this.isManualClose = true;
 
@@ -120,9 +125,6 @@ export class WebSocketClient {
         this.messageHandlers.clear();
     }
 
-    /**
-     * Send a CRUD request and wait for response
-     */
     async request<T = any>(
         operation: WSOperation,
         entity: string,
@@ -148,7 +150,6 @@ export class WebSocketClient {
         };
 
         return new Promise((resolve, reject) => {
-            // Set up response handler
             this.messageHandlers.set(id, (response: WSResponseMessage) => {
                 if (response.success) {
                     resolve(response.data);
@@ -157,10 +158,8 @@ export class WebSocketClient {
                 }
             });
 
-            // Send message
             this.send(message);
 
-            // Timeout after 30 seconds
             setTimeout(() => {
                 if (this.messageHandlers.has(id)) {
                     this.messageHandlers.delete(id);
@@ -170,16 +169,13 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Read records
-     */
     async read<T = any>(entity: string, options?: {
         schema?: string;
         record_id?: string;
-        filters?: import('./types').FilterOption[];
+        filters?: FilterOption[];
         columns?: string[];
-        sort?: import('./types').SortOption[];
-        preload?: import('./types').PreloadOption[];
+        sort?: SortOption[];
+        preload?: PreloadOption[];
         limit?: number;
         offset?: number;
     }): Promise<T> {
@@ -197,9 +193,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Create a record
-     */
     async create<T = any>(entity: string, data: any, options?: {
         schema?: string;
     }): Promise<T> {
@@ -209,9 +202,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Update a record
-     */
     async update<T = any>(entity: string, id: string, data: any, options?: {
         schema?: string;
     }): Promise<T> {
@@ -222,9 +212,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Delete a record
-     */
     async delete(entity: string, id: string, options?: {
         schema?: string;
     }): Promise<void> {
@@ -234,9 +221,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Get metadata for an entity
-     */
     async meta<T = any>(entity: string, options?: {
         schema?: string;
     }): Promise<T> {
@@ -245,15 +229,12 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Subscribe to entity changes
-     */
     async subscribe(
         entity: string,
         callback: (notification: WSNotificationMessage) => void,
         options?: {
             schema?: string;
-            filters?: import('./types').FilterOption[];
+            filters?: FilterOption[];
         }
     ): Promise<string> {
         this.ensureConnected();
@@ -275,7 +256,6 @@ export class WebSocketClient {
                 if (response.success && response.data?.subscription_id) {
                     const subscriptionId = response.data.subscription_id;
 
-                    // Store subscription
                     this.subscriptions.set(subscriptionId, {
                         id: subscriptionId,
                         entity,
@@ -293,7 +273,6 @@ export class WebSocketClient {
 
             this.send(message);
 
-            // Timeout
             setTimeout(() => {
                 if (this.messageHandlers.has(id)) {
                     this.messageHandlers.delete(id);
@@ -303,9 +282,6 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Unsubscribe from entity changes
-     */
     async unsubscribe(subscriptionId: string): Promise<void> {
         this.ensureConnected();
 
@@ -330,7 +306,6 @@ export class WebSocketClient {
 
             this.send(message);
 
-            // Timeout
             setTimeout(() => {
                 if (this.messageHandlers.has(id)) {
                     this.messageHandlers.delete(id);
@@ -340,37 +315,22 @@ export class WebSocketClient {
         });
     }
 
-    /**
-     * Get list of active subscriptions
-     */
     getSubscriptions(): Subscription[] {
         return Array.from(this.subscriptions.values());
     }
 
-    /**
-     * Get connection state
-     */
     getState(): ConnectionState {
         return this.state;
     }
 
-    /**
-     * Check if connected
-     */
     isConnected(): boolean {
         return this.ws?.readyState === WebSocket.OPEN;
     }
 
-    /**
-     * Add event listener
-     */
     on<K extends keyof WebSocketClientEvents>(event: K, callback: WebSocketClientEvents[K]): void {
         this.eventListeners[event] = callback as any;
     }
 
-    /**
-     * Remove event listener
-     */
     off<K extends keyof WebSocketClientEvents>(event: K): void {
         delete this.eventListeners[event];
     }
@@ -384,7 +344,6 @@ export class WebSocketClient {
 
             this.emit('message', message);
 
-            // Handle different message types
             switch (message.type) {
                 case 'response':
                     this.handleResponse(message as WSResponseMessage);
@@ -395,7 +354,6 @@ export class WebSocketClient {
                     break;
 
                 case 'pong':
-                    // Heartbeat response
                     break;
 
                 default:

@@ -27,3 +27,4 @@ bin/
 test.db
 /testserver
 tests/data/
+node_modules/

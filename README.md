@@ -357,6 +357,17 @@ Execute SQL functions and queries through a simple HTTP API with header-based pa
 
 For complete documentation, see [pkg/funcspec/](pkg/funcspec/).
 
+#### ResolveSpec JS - TypeScript Client Library
+
+TypeScript/JavaScript client library supporting all three REST and WebSocket protocols.
+
+**Clients**:
+- Body-based REST client (`read`, `create`, `update`, `deleteEntity`)
+- Header-based REST client (`HeaderSpecClient`)
+- WebSocket client (`WebSocketClient`) with CRUD, subscriptions, heartbeat, reconnect
+
+For complete documentation, see [resolvespec-js/README.md](resolvespec-js/README.md).
+
 ### Real-Time Communication
 
 #### WebSocketSpec - WebSocket API

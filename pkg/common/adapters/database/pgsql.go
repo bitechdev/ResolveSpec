@@ -394,12 +394,12 @@ func (p *PgSQLSelectQuery) buildSQL() string {
 
 	// LIMIT clause
 	if p.limit > 0 {
-		sb.WriteString(fmt.Sprintf(" LIMIT %d", p.limit))
+		fmt.Fprintf(&sb, " LIMIT %d", p.limit)
 	}
 
 	// OFFSET clause
 	if p.offset > 0 {
-		sb.WriteString(fmt.Sprintf(" OFFSET %d", p.offset))
+		fmt.Fprintf(&sb, " OFFSET %d", p.offset)
 	}
 
 	return sb.String()

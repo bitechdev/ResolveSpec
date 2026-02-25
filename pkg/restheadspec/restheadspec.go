@@ -313,6 +313,14 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler, authMiddleware M
 		respAdapter := router.NewHTTPResponseWriter(w)
 		reqAdapter := router.NewBunRouterRequest(req)
 		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+		handler.HandleOpenAPI(respAdapter, reqAdapter)
+		return nil
+	})
+
+	r.Handle("OPTIONS", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
+		respAdapter := router.NewHTTPResponseWriter(w)
+		reqAdapter := router.NewHTTPRequest(req.Request)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 		return nil
 	})
 

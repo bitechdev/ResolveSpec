@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
 
 // contextKey is a custom type for context keys to avoid collisions
@@ -23,6 +25,7 @@ const (
 	UserMetaKey     contextKey = "user_meta"
 	SkipAuthKey     contextKey = "skip_auth"
 	OptionalAuthKey contextKey = "optional_auth"
+	ModelRulesKey   contextKey = "model_rules"
 )
 
 // SkipAuth returns a context with skip auth flag set to true
@@ -177,6 +180,68 @@ func NewAuthMiddleware(securityList *SecurityList) func(http.Handler) http.Handl
 			}
 
 			// Authentication succeeded - set user context
+			next.ServeHTTP(w, setUserContext(r, userCtx))
+		})
+	}
+}
+
+// NewModelAuthMiddleware creates authentication middleware that respects ModelRules for the given model name.
+// It first checks if ModelRules are set for the model:
+//   - If SecurityDisabled is true, authentication is skipped and a guest context is set.
+//   - Otherwise, all checks from NewAuthMiddleware apply (SkipAuthKey, provider check, OptionalAuthKey, Authenticate).
+//
+// If the model is not found in any registry, the middleware falls back to standard NewAuthMiddleware behaviour.
+func NewModelAuthMiddleware(securityList *SecurityList, modelName string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check ModelRules first
+			if rules, err := modelregistry.GetModelRulesByName(modelName); err == nil {
+				// Store rules in context for downstream use (e.g., security hooks)
+				r = r.WithContext(context.WithValue(r.Context(), ModelRulesKey, rules))
+
+				if rules.SecurityDisabled {
+					guestCtx := createGuestContext(r)
+					next.ServeHTTP(w, setUserContext(r, guestCtx))
+					return
+				}
+				isRead := r.Method == http.MethodGet || r.Method == http.MethodHead
+				isUpdate := r.Method == http.MethodPut || r.Method == http.MethodPatch
+				if (isRead && rules.CanPublicRead) || (isUpdate && rules.CanPublicUpdate) {
+					guestCtx := createGuestContext(r)
+					next.ServeHTTP(w, setUserContext(r, guestCtx))
+					return
+				}
+			}
+
+			// Check if this route should skip authentication
+			if skip, ok := r.Context().Value(SkipAuthKey).(bool); ok && skip {
+				guestCtx := createGuestContext(r)
+				next.ServeHTTP(w, setUserContext(r, guestCtx))
+				return
+			}
+
+			// Get the security provider
+			provider := securityList.Provider()
+			if provider == nil {
+				http.Error(w, "Security provider not configured", http.StatusInternalServerError)
+				return
+			}
+
+			// Check if this route has optional authentication
+			optional, _ := r.Context().Value(OptionalAuthKey).(bool)
+
+			// Try to authenticate
+			userCtx, err := provider.Authenticate(r)
+			if err != nil {
+				if optional {
+					guestCtx := createGuestContext(r)
+					next.ServeHTTP(w, setUserContext(r, guestCtx))
+					return
+				}
+				http.Error(w, "Authentication failed: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
+
 			next.ServeHTTP(w, setUserContext(r, userCtx))
 		})
 	}
@@ -364,6 +429,12 @@ func GetUserEmail(ctx context.Context) (string, bool) {
 func GetUserMeta(ctx context.Context) (map[string]any, bool) {
 	meta, ok := ctx.Value(UserMetaKey).(map[string]any)
 	return meta, ok
+}
+
+// GetModelRulesFromContext extracts ModelRules stored by NewModelAuthMiddleware
+func GetModelRulesFromContext(ctx context.Context) (modelregistry.ModelRules, bool) {
+	rules, ok := ctx.Value(ModelRulesKey).(modelregistry.ModelRules)
+	return rules, ok
 }
 
 // // Handler adapters for resolvespec/restheadspec compatibility

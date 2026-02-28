@@ -1236,6 +1236,24 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	logger.Info("Deleting records from %s.%s", schema, entity)
 
+	// Execute BeforeDelete hooks (covers model-rule checks before any deletion)
+	hookCtx := &HookContext{
+		Context: ctx,
+		Handler: h,
+		Schema:  schema,
+		Entity:  entity,
+		Model:   model,
+		ID:      id,
+		Data:    data,
+		Writer:  w,
+		Tx:      h.db,
+	}
+	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+		logger.Error("BeforeDelete hook failed: %v", err)
+		h.sendError(w, http.StatusForbidden, "delete_forbidden", "Delete operation not allowed", err)
+		return
+	}
+
 	// Handle batch delete from request data
 	if data != nil {
 		switch v := data.(type) {

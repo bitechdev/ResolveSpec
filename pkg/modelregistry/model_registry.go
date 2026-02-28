@@ -8,6 +8,8 @@ import (
 
 // ModelRules defines the permissions and security settings for a model
 type ModelRules struct {
+	CanPublicRead    bool // Whether the model can be read (GET operations)
+	CanPublicUpdate  bool // Whether the model can be updated (PUT/PATCH operations)
 	CanRead          bool // Whether the model can be read (GET operations)
 	CanUpdate        bool // Whether the model can be updated (PUT/PATCH operations)
 	CanCreate        bool // Whether the model can be created (POST operations)
@@ -22,6 +24,8 @@ func DefaultModelRules() ModelRules {
 		CanUpdate:        true,
 		CanCreate:        true,
 		CanDelete:        true,
+		CanPublicRead:    false,
+		CanPublicUpdate:  false,
 		SecurityDisabled: false,
 	}
 }

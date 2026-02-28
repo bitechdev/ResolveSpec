@@ -1498,8 +1498,8 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 					}
 
 					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
-						logger.Warn("BeforeDelete hook failed for ID %s: %v", itemID, err)
-						continue
+						logger.Error("BeforeDelete hook failed for ID %s: %v", itemID, err)
+						return fmt.Errorf("delete not allowed for ID %s: %w", itemID, err)
 					}
 
 					query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
@@ -1572,8 +1572,8 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 					}
 
 					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
-						logger.Warn("BeforeDelete hook failed for ID %v: %v", itemID, err)
-						continue
+						logger.Error("BeforeDelete hook failed for ID %v: %v", itemID, err)
+						return fmt.Errorf("delete not allowed for ID %v: %w", itemID, err)
 					}
 
 					query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
@@ -1630,8 +1630,8 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 						}
 
 						if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
-							logger.Warn("BeforeDelete hook failed for ID %v: %v", itemID, err)
-							continue
+							logger.Error("BeforeDelete hook failed for ID %v: %v", itemID, err)
+							return fmt.Errorf("delete not allowed for ID %v: %w", itemID, err)
 						}
 
 						query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)

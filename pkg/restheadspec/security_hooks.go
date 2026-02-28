@@ -33,6 +33,18 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return security.LogDataAccess(secCtx)
 	})
 
+	// Hook 5: BeforeUpdate - enforce CanUpdate rule from context/registry
+	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
+		secCtx := newSecurityContext(hookCtx)
+		return security.CheckModelUpdateAllowed(secCtx)
+	})
+
+	// Hook 6: BeforeDelete - enforce CanDelete rule from context/registry
+	handler.Hooks().Register(BeforeDelete, func(hookCtx *HookContext) error {
+		secCtx := newSecurityContext(hookCtx)
+		return security.CheckModelDeleteAllowed(secCtx)
+	})
+
 	logger.Info("Security hooks registered for restheadspec handler")
 }
 

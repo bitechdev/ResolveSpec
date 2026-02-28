@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
 
 // SecurityContext is a generic interface that any spec can implement to integrate with security features
@@ -224,6 +225,64 @@ func ApplyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 // This allows other packages to apply column-level security using the generic interface
 func ApplyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) error {
 	return applyColumnSecurity(secCtx, securityList)
+}
+
+// checkModelUpdateAllowed returns an error if CanUpdate is false for the model.
+// Rules are read from context (set by NewModelAuthMiddleware) with a fallback to the model registry.
+func checkModelUpdateAllowed(secCtx SecurityContext) error {
+	rules, ok := GetModelRulesFromContext(secCtx.GetContext())
+	if !ok {
+		schema := secCtx.GetSchema()
+		entity := secCtx.GetEntity()
+		var err error
+		if schema != "" {
+			rules, err = modelregistry.GetModelRulesByName(fmt.Sprintf("%s.%s", schema, entity))
+		}
+		if err != nil || schema == "" {
+			rules, err = modelregistry.GetModelRulesByName(entity)
+		}
+		if err != nil {
+			return nil // model not registered, allow by default
+		}
+	}
+	if !rules.CanUpdate {
+		return fmt.Errorf("update not allowed for %s", secCtx.GetEntity())
+	}
+	return nil
+}
+
+// checkModelDeleteAllowed returns an error if CanDelete is false for the model.
+// Rules are read from context (set by NewModelAuthMiddleware) with a fallback to the model registry.
+func checkModelDeleteAllowed(secCtx SecurityContext) error {
+	rules, ok := GetModelRulesFromContext(secCtx.GetContext())
+	if !ok {
+		schema := secCtx.GetSchema()
+		entity := secCtx.GetEntity()
+		var err error
+		if schema != "" {
+			rules, err = modelregistry.GetModelRulesByName(fmt.Sprintf("%s.%s", schema, entity))
+		}
+		if err != nil || schema == "" {
+			rules, err = modelregistry.GetModelRulesByName(entity)
+		}
+		if err != nil {
+			return nil // model not registered, allow by default
+		}
+	}
+	if !rules.CanDelete {
+		return fmt.Errorf("delete not allowed for %s", secCtx.GetEntity())
+	}
+	return nil
+}
+
+// CheckModelUpdateAllowed is the public wrapper for checkModelUpdateAllowed.
+func CheckModelUpdateAllowed(secCtx SecurityContext) error {
+	return checkModelUpdateAllowed(secCtx)
+}
+
+// CheckModelDeleteAllowed is the public wrapper for checkModelDeleteAllowed.
+func CheckModelDeleteAllowed(secCtx SecurityContext) error {
+	return checkModelDeleteAllowed(secCtx)
 }
 
 // Helper functions

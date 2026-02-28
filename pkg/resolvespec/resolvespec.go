@@ -216,9 +216,30 @@ type BunRouterHandler interface {
 	Handle(method, path string, handler bunrouter.HandlerFunc)
 }
 
+// wrapBunRouterHandler wraps a bunrouter handler with auth middleware if provided
+func wrapBunRouterHandler(handler bunrouter.HandlerFunc, authMiddleware MiddlewareFunc) bunrouter.HandlerFunc {
+	if authMiddleware == nil {
+		return handler
+	}
+
+	return func(w http.ResponseWriter, req bunrouter.Request) error {
+		// Create an http.Handler that calls the bunrouter handler
+		httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = handler(w, req)
+		})
+
+		// Wrap with auth middleware and execute
+		wrappedHandler := authMiddleware(httpHandler)
+		wrappedHandler.ServeHTTP(w, req.Request)
+
+		return nil
+	}
+}
+
 // SetupBunRouterRoutes sets up bunrouter routes for the ResolveSpec API
 // Accepts bunrouter.Router or bunrouter.Group
-func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
+// authMiddleware is optional - if provided, routes will be protected with the middleware
+func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler, authMiddleware MiddlewareFunc) {
 
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
@@ -256,7 +277,7 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		currentEntity := entity
 
 		// POST route without ID
-		r.Handle("POST", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		postEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -267,10 +288,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("POST", entityPath, wrapBunRouterHandler(postEntityHandler, authMiddleware))
 
 		// POST route with ID
-		r.Handle("POST", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		postEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -282,10 +304,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("POST", entityWithIDPath, wrapBunRouterHandler(postEntityWithIDHandler, authMiddleware))
 
 		// GET route without ID
-		r.Handle("GET", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		getEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -296,10 +319,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("GET", entityPath, wrapBunRouterHandler(getEntityHandler, authMiddleware))
 
 		// GET route with ID
-		r.Handle("GET", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		getEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -311,9 +335,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("GET", entityWithIDPath, wrapBunRouterHandler(getEntityWithIDHandler, authMiddleware))
 
 		// OPTIONS route without ID (returns metadata)
+		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
@@ -330,6 +356,7 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		})
 
 		// OPTIONS route with ID (returns metadata)
+		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewHTTPRequest(req.Request)
@@ -355,8 +382,8 @@ func ExampleWithBunRouter(bunDB *bun.DB) {
 	// Create bunrouter
 	bunRouter := bunrouter.New()
 
-	// Setup ResolveSpec routes with bunrouter
-	SetupBunRouterRoutes(bunRouter, handler)
+	// Setup ResolveSpec routes with bunrouter without authentication
+	SetupBunRouterRoutes(bunRouter, handler, nil)
 
 	// Start server
 	// http.ListenAndServe(":8080", bunRouter)
@@ -377,8 +404,8 @@ func ExampleBunRouterWithBunDB(bunDB *bun.DB) {
 	// Create bunrouter
 	bunRouter := bunrouter.New()
 
-	// Setup ResolveSpec routes
-	SetupBunRouterRoutes(bunRouter, handler)
+	// Setup ResolveSpec routes without authentication
+	SetupBunRouterRoutes(bunRouter, handler, nil)
 
 	// This gives you the full uptrace stack: bunrouter + Bun ORM
 	// http.ListenAndServe(":8080", bunRouter)
@@ -396,8 +423,87 @@ func ExampleBunRouterWithGroup(bunDB *bun.DB) {
 	apiGroup := bunRouter.NewGroup("/api")
 
 	// Setup ResolveSpec routes on the group - routes will be under /api
-	SetupBunRouterRoutes(apiGroup, handler)
+	SetupBunRouterRoutes(apiGroup, handler, nil)
 
 	// Start server
+	// http.ListenAndServe(":8080", bunRouter)
+}
+
+// ExampleWithGORMAndAuth shows how to use ResolveSpec with GORM and authentication
+func ExampleWithGORMAndAuth(db *gorm.DB) {
+	// Create handler using GORM
+	_ = NewHandlerWithGORM(db)
+
+	// Create auth middleware
+	// import "github.com/bitechdev/ResolveSpec/pkg/security"
+	// secList := security.NewSecurityList(myProvider)
+	// authMiddleware := func(h http.Handler) http.Handler {
+	//     return security.NewAuthHandler(secList, h)
+	// }
+
+	// Setup router with authentication
+	_ = mux.NewRouter()
+	// SetupMuxRoutes(muxRouter, handler, authMiddleware)
+
+	// Register models
+	// handler.RegisterModel("public", "users", &User{})
+
+	// Start server
+	// http.ListenAndServe(":8080", muxRouter)
+}
+
+// ExampleWithBunAndAuth shows how to use ResolveSpec with Bun and authentication
+func ExampleWithBunAndAuth(bunDB *bun.DB) {
+	// Create Bun adapter
+	dbAdapter := database.NewBunAdapter(bunDB)
+
+	// Create model registry
+	registry := modelregistry.NewModelRegistry()
+	// registry.RegisterModel("public.users", &User{})
+
+	// Create handler
+	_ = NewHandler(dbAdapter, registry)
+
+	// Create auth middleware
+	// import "github.com/bitechdev/ResolveSpec/pkg/security"
+	// secList := security.NewSecurityList(myProvider)
+	// authMiddleware := func(h http.Handler) http.Handler {
+	//     return security.NewAuthHandler(secList, h)
+	// }
+
+	// Setup routes with authentication
+	_ = mux.NewRouter()
+	// SetupMuxRoutes(muxRouter, handler, authMiddleware)
+
+	// Start server
+	// http.ListenAndServe(":8080", muxRouter)
+}
+
+// ExampleBunRouterWithBunDBAndAuth shows the full uptrace stack with authentication
+func ExampleBunRouterWithBunDBAndAuth(bunDB *bun.DB) {
+	// Create Bun database adapter
+	dbAdapter := database.NewBunAdapter(bunDB)
+
+	// Create model registry
+	registry := modelregistry.NewModelRegistry()
+	// registry.RegisterModel("public.users", &User{})
+
+	// Create handler with Bun
+	_ = NewHandler(dbAdapter, registry)
+
+	// Create auth middleware
+	// import "github.com/bitechdev/ResolveSpec/pkg/security"
+	// secList := security.NewSecurityList(myProvider)
+	// authMiddleware := func(h http.Handler) http.Handler {
+	//     return security.NewAuthHandler(secList, h)
+	// }
+
+	// Create bunrouter
+	_ = bunrouter.New()
+
+	// Setup ResolveSpec routes with authentication
+	// SetupBunRouterRoutes(bunRouter, handler, authMiddleware)
+
+	// This gives you the full uptrace stack: bunrouter + Bun ORM with authentication
 	// http.ListenAndServe(":8080", bunRouter)
 }

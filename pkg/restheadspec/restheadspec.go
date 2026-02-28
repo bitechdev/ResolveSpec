@@ -280,9 +280,30 @@ type BunRouterHandler interface {
 	Handle(method, path string, handler bunrouter.HandlerFunc)
 }
 
+// wrapBunRouterHandler wraps a bunrouter handler with auth middleware if provided
+func wrapBunRouterHandler(handler bunrouter.HandlerFunc, authMiddleware MiddlewareFunc) bunrouter.HandlerFunc {
+	if authMiddleware == nil {
+		return handler
+	}
+
+	return func(w http.ResponseWriter, req bunrouter.Request) error {
+		// Create an http.Handler that calls the bunrouter handler
+		httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = handler(w, req)
+		})
+
+		// Wrap with auth middleware and execute
+		wrappedHandler := authMiddleware(httpHandler)
+		wrappedHandler.ServeHTTP(w, req.Request)
+
+		return nil
+	}
+}
+
 // SetupBunRouterRoutes sets up bunrouter routes for the RestHeadSpec API
 // Accepts bunrouter.Router or bunrouter.Group
-func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
+// authMiddleware is optional - if provided, routes will be protected with the middleware
+func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler, authMiddleware MiddlewareFunc) {
 
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
@@ -291,6 +312,14 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 	r.Handle("GET", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
 		respAdapter := router.NewHTTPResponseWriter(w)
 		reqAdapter := router.NewBunRouterRequest(req)
+		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+		handler.HandleOpenAPI(respAdapter, reqAdapter)
+		return nil
+	})
+
+	r.Handle("OPTIONS", "/openapi", func(w http.ResponseWriter, req bunrouter.Request) error {
+		respAdapter := router.NewHTTPResponseWriter(w)
+		reqAdapter := router.NewHTTPRequest(req.Request)
 		common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
 		return nil
 	})
@@ -313,7 +342,7 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		currentEntity := entity
 
 		// GET and POST for /{schema}/{entity}
-		r.Handle("GET", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		getEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -324,9 +353,10 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("GET", entityPath, wrapBunRouterHandler(getEntityHandler, authMiddleware))
 
-		r.Handle("POST", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		postEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -337,10 +367,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("POST", entityPath, wrapBunRouterHandler(postEntityHandler, authMiddleware))
 
 		// GET, POST, PUT, PATCH, DELETE for /{schema}/{entity}/:id
-		r.Handle("GET", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		getEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -352,9 +383,10 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("GET", entityWithIDPath, wrapBunRouterHandler(getEntityWithIDHandler, authMiddleware))
 
-		r.Handle("POST", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		postEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -366,9 +398,10 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("POST", entityWithIDPath, wrapBunRouterHandler(postEntityWithIDHandler, authMiddleware))
 
-		r.Handle("PUT", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		putEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -380,9 +413,10 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("PUT", entityWithIDPath, wrapBunRouterHandler(putEntityWithIDHandler, authMiddleware))
 
-		r.Handle("PATCH", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		patchEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -394,9 +428,10 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("PATCH", entityWithIDPath, wrapBunRouterHandler(patchEntityWithIDHandler, authMiddleware))
 
-		r.Handle("DELETE", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		deleteEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -408,10 +443,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.Handle(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("DELETE", entityWithIDPath, wrapBunRouterHandler(deleteEntityWithIDHandler, authMiddleware))
 
 		// Metadata endpoint
-		r.Handle("GET", metadataPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+		metadataHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
 			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
@@ -422,9 +458,11 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 
 			handler.HandleGet(respAdapter, reqAdapter, params)
 			return nil
-		})
+		}
+		r.Handle("GET", metadataPath, wrapBunRouterHandler(metadataHandler, authMiddleware))
 
 		// OPTIONS route without ID (returns metadata)
+		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
@@ -441,6 +479,7 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler) {
 		})
 
 		// OPTIONS route with ID (returns metadata)
+		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
 			respAdapter := router.NewHTTPResponseWriter(w)
 			reqAdapter := router.NewBunRouterRequest(req)
@@ -466,8 +505,8 @@ func ExampleBunRouterWithBunDB(bunDB *bun.DB) {
 	// Create bunrouter
 	bunRouter := bunrouter.New()
 
-	// Setup routes
-	SetupBunRouterRoutes(bunRouter, handler)
+	// Setup routes without authentication
+	SetupBunRouterRoutes(bunRouter, handler, nil)
 
 	// Start server
 	if err := http.ListenAndServe(":8080", bunRouter); err != nil {
@@ -487,7 +526,7 @@ func ExampleBunRouterWithGroup(bunDB *bun.DB) {
 	apiGroup := bunRouter.NewGroup("/api")
 
 	// Setup RestHeadSpec routes on the group - routes will be under /api
-	SetupBunRouterRoutes(apiGroup, handler)
+	SetupBunRouterRoutes(apiGroup, handler, nil)
 
 	// Start server
 	if err := http.ListenAndServe(":8080", bunRouter); err != nil {

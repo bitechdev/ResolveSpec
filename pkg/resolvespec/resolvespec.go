@@ -225,7 +225,11 @@ func wrapBunRouterHandler(handler bunrouter.HandlerFunc, authMiddleware Middlewa
 	return func(w http.ResponseWriter, req bunrouter.Request) error {
 		// Create an http.Handler that calls the bunrouter handler
 		httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = handler(w, req)
+			// Replace the embedded *http.Request with the middleware-enriched one
+			// so that auth context (user ID, etc.) is visible to the handler.
+			enrichedReq := req
+			enrichedReq.Request = r
+			_ = handler(w, enrichedReq)
 		})
 
 		// Wrap with auth middleware and execute

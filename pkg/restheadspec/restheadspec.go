@@ -125,17 +125,17 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware Midd
 		metadataPath := buildRoutePath(schema, entity) + "/metadata"
 
 		// Create handler functions for this specific entity
-		entityHandler := createMuxHandler(handler, schema, entity, "")
-		entityWithIDHandler := createMuxHandler(handler, schema, entity, "id")
-		metadataHandler := createMuxGetHandler(handler, schema, entity, "")
+		var entityHandler http.Handler = createMuxHandler(handler, schema, entity, "")
+		var entityWithIDHandler http.Handler = createMuxHandler(handler, schema, entity, "id")
+		var metadataHandler http.Handler = createMuxGetHandler(handler, schema, entity, "")
 		optionsEntityHandler := createMuxOptionsHandler(handler, schema, entity, []string{"GET", "POST", "OPTIONS"})
 		optionsEntityWithIDHandler := createMuxOptionsHandler(handler, schema, entity, []string{"GET", "PUT", "PATCH", "DELETE", "POST", "OPTIONS"})
 
 		// Apply authentication middleware if provided
 		if authMiddleware != nil {
-			entityHandler = authMiddleware(entityHandler).(http.HandlerFunc)
-			entityWithIDHandler = authMiddleware(entityWithIDHandler).(http.HandlerFunc)
-			metadataHandler = authMiddleware(metadataHandler).(http.HandlerFunc)
+			entityHandler = authMiddleware(entityHandler)
+			entityWithIDHandler = authMiddleware(entityWithIDHandler)
+			metadataHandler = authMiddleware(metadataHandler)
 			// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		}
 
@@ -289,7 +289,11 @@ func wrapBunRouterHandler(handler bunrouter.HandlerFunc, authMiddleware Middlewa
 	return func(w http.ResponseWriter, req bunrouter.Request) error {
 		// Create an http.Handler that calls the bunrouter handler
 		httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = handler(w, req)
+			// Replace the embedded *http.Request with the middleware-enriched one
+			// so that auth context (user ID, etc.) is visible to the handler.
+			enrichedReq := req
+			enrichedReq.Request = r
+			_ = handler(w, enrichedReq)
 		})
 
 		// Wrap with auth middleware and execute

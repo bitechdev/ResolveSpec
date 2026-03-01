@@ -2226,17 +2226,17 @@ func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common
 // buildFilterCondition builds a single filter condition and returns the condition string and args
 func (h *Handler) buildFilterCondition(qualifiedColumn string, filter *common.FilterOption, tableName string) (filterStr string, filterInterface []interface{}) {
 	switch strings.ToLower(filter.Operator) {
-	case "eq", "equals":
+	case "eq", "equals", "=":
 		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
-	case "neq", "not_equals", "ne":
+	case "neq", "not_equals", "ne", "!=", "<>":
 		return fmt.Sprintf("%s != ?", qualifiedColumn), []interface{}{filter.Value}
-	case "gt", "greater_than":
+	case "gt", "greater_than", ">":
 		return fmt.Sprintf("%s > ?", qualifiedColumn), []interface{}{filter.Value}
-	case "gte", "greater_than_equals", "ge":
+	case "gte", "greater_than_equals", "ge", ">=":
 		return fmt.Sprintf("%s >= ?", qualifiedColumn), []interface{}{filter.Value}
-	case "lt", "less_than":
+	case "lt", "less_than", "<":
 		return fmt.Sprintf("%s < ?", qualifiedColumn), []interface{}{filter.Value}
-	case "lte", "less_than_equals", "le":
+	case "lte", "less_than_equals", "le", "<=":
 		return fmt.Sprintf("%s <= ?", qualifiedColumn), []interface{}{filter.Value}
 	case "like":
 		return fmt.Sprintf("%s LIKE ?", qualifiedColumn), []interface{}{filter.Value}

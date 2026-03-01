@@ -1521,22 +1521,22 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 	var args []interface{}
 
 	switch filter.Operator {
-	case "eq":
+	case "eq", "=":
 		condition = fmt.Sprintf("%s = ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "neq":
+	case "neq", "!=", "<>":
 		condition = fmt.Sprintf("%s != ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "gt":
+	case "gt", ">":
 		condition = fmt.Sprintf("%s > ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "gte":
+	case "gte", ">=":
 		condition = fmt.Sprintf("%s >= ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "lt":
+	case "lt", "<":
 		condition = fmt.Sprintf("%s < ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "lte":
+	case "lte", "<=":
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
@@ -1565,22 +1565,22 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 	var args []interface{}
 
 	switch filter.Operator {
-	case "eq":
+	case "eq", "=":
 		condition = fmt.Sprintf("%s = ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "neq":
+	case "neq", "!=", "<>":
 		condition = fmt.Sprintf("%s != ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "gt":
+	case "gt", ">":
 		condition = fmt.Sprintf("%s > ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "gte":
+	case "gte", ">=":
 		condition = fmt.Sprintf("%s >= ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "lt":
+	case "lt", "<":
 		condition = fmt.Sprintf("%s < ?", filter.Column)
 		args = []interface{}{filter.Value}
-	case "lte":
+	case "lte", "<=":
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":

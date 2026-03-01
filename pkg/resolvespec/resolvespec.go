@@ -70,17 +70,17 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, authMiddleware Midd
 		entityWithIDPath := buildRoutePath(schema, entity) + "/{id}"
 
 		// Create handler functions for this specific entity
-		postEntityHandler := createMuxHandler(handler, schema, entity, "")
-		postEntityWithIDHandler := createMuxHandler(handler, schema, entity, "id")
-		getEntityHandler := createMuxGetHandler(handler, schema, entity, "")
+		var postEntityHandler http.Handler = createMuxHandler(handler, schema, entity, "")
+		var postEntityWithIDHandler http.Handler = createMuxHandler(handler, schema, entity, "id")
+		var getEntityHandler http.Handler = createMuxGetHandler(handler, schema, entity, "")
 		optionsEntityHandler := createMuxOptionsHandler(handler, schema, entity, []string{"GET", "POST", "OPTIONS"})
 		optionsEntityWithIDHandler := createMuxOptionsHandler(handler, schema, entity, []string{"POST", "OPTIONS"})
 
 		// Apply authentication middleware if provided
 		if authMiddleware != nil {
-			postEntityHandler = authMiddleware(postEntityHandler).(http.HandlerFunc)
-			postEntityWithIDHandler = authMiddleware(postEntityWithIDHandler).(http.HandlerFunc)
-			getEntityHandler = authMiddleware(getEntityHandler).(http.HandlerFunc)
+			postEntityHandler = authMiddleware(postEntityHandler)
+			postEntityWithIDHandler = authMiddleware(postEntityWithIDHandler)
+			getEntityHandler = authMiddleware(getEntityHandler)
 			// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
 		}
 

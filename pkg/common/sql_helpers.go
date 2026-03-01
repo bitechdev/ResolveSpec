@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -924,4 +925,37 @@ func extractLeftSideOfComparison(cond string) string {
 	}
 
 	return ""
+}
+
+// FilterValueToSlice converts a filter value to []interface{} for use with IN operators.
+// JSON-decoded arrays arrive as []interface{}, but typed slices (e.g. []string) also work.
+// Returns a single-element slice if the value is not a slice type.
+func FilterValueToSlice(v interface{}) []interface{} {
+	if v == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Slice {
+		result := make([]interface{}, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			result[i] = rv.Index(i).Interface()
+		}
+		return result
+	}
+	return []interface{}{v}
+}
+
+// BuildInCondition builds a parameterized IN condition from a filter value.
+// Returns the condition string (e.g. "col IN (?,?)") and the individual values as args.
+// Returns ("", nil) if the value is empty or not a slice.
+func BuildInCondition(column string, v interface{}) (query string, args []interface{}) {
+	values := FilterValueToSlice(v)
+	if len(values) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(values))
+	for i := range values {
+		placeholders[i] = "?"
+	}
+	return fmt.Sprintf("%s IN (%s)", column, strings.Join(placeholders, ",")), values
 }

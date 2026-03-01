@@ -44,8 +44,8 @@ func TestBuildFilterCondition(t *testing.T) {
 				Operator: "in",
 				Value:    []string{"active", "pending"},
 			},
-			expectedCondition: "status IN (?)",
-			expectedArgsCount: 1,
+			expectedCondition: "status IN (?,?)",
+			expectedArgsCount: 2,
 		},
 		{
 			name: "LIKE operator",

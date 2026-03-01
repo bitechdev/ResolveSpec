@@ -2146,7 +2146,11 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		// Column is already cast to TEXT if needed
 		return applyWhere(fmt.Sprintf("%s ILIKE ?", qualifiedColumn), filter.Value)
 	case "in":
-		return applyWhere(fmt.Sprintf("%s IN (?)", qualifiedColumn), filter.Value)
+		cond, inArgs := common.BuildInCondition(qualifiedColumn, filter.Value)
+		if cond == "" {
+			return query
+		}
+		return applyWhere(cond, inArgs...)
 	case "between":
 		// Handle between operator - exclusive (> val1 AND < val2)
 		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {
@@ -2239,7 +2243,8 @@ func (h *Handler) buildFilterCondition(qualifiedColumn string, filter *common.Fi
 	case "ilike":
 		return fmt.Sprintf("%s ILIKE ?", qualifiedColumn), []interface{}{filter.Value}
 	case "in":
-		return fmt.Sprintf("%s IN (?)", qualifiedColumn), []interface{}{filter.Value}
+		cond, inArgs := common.BuildInCondition(qualifiedColumn, filter.Value)
+		return cond, inArgs
 	case "between":
 		// Handle between operator - exclusive (> val1 AND < val2)
 		if values, ok := filter.Value.([]interface{}); ok && len(values) == 2 {

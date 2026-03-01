@@ -628,7 +628,10 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {
-			countQuery = countQuery.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			cond, args := h.buildFilterCondition(filter)
+			if cond != "" {
+				countQuery = countQuery.Where(cond, args...)
+			}
 		}
 	}
 	count, _ := countQuery.Count(hookCtx.Context)
@@ -800,14 +803,12 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 
 // buildFilterCondition builds a filter condition and returns it with args
 func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionString string, conditionArgs []interface{}) {
-	var condition string
-	var args []interface{}
-
+	if strings.EqualFold(filter.Operator, "in") {
+		cond, args := common.BuildInCondition(filter.Column, filter.Value)
+		return cond, args
+	}
 	operatorSQL := h.getOperatorSQL(filter.Operator)
-	condition = fmt.Sprintf("%s %s ?", filter.Column, operatorSQL)
-	args = []interface{}{filter.Value}
-
-	return condition, args
+	return fmt.Sprintf("%s %s ?", filter.Column, operatorSQL), []interface{}{filter.Value}
 }
 
 // setRowNumbersOnRecords sets the RowNumber field on each record if it exists

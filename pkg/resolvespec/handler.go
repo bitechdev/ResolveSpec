@@ -1546,8 +1546,10 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "in":
-		condition = fmt.Sprintf("%s IN (?)", filter.Column)
-		args = []interface{}{filter.Value}
+		condition, args = common.BuildInCondition(filter.Column, filter.Value)
+		if condition == "" {
+			return "", nil
+		}
 	default:
 		return "", nil
 	}
@@ -1588,8 +1590,10 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "in":
-		condition = fmt.Sprintf("%s IN (?)", filter.Column)
-		args = []interface{}{filter.Value}
+		condition, args = common.BuildInCondition(filter.Column, filter.Value)
+		if condition == "" {
+			return query
+		}
 	default:
 		return query
 	}

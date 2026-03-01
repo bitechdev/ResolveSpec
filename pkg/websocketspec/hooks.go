@@ -2,6 +2,7 @@ package websocketspec
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 )
@@ -10,6 +11,10 @@ import (
 type HookType string
 
 const (
+	// BeforeHandle fires after model resolution, before operation dispatch.
+	// Use this for auth checks that need model rules and user context simultaneously.
+	BeforeHandle HookType = "before_handle"
+
 	// BeforeRead is called before a read operation
 	BeforeRead HookType = "before_read"
 	// AfterRead is called after a read operation
@@ -83,6 +88,9 @@ type HookContext struct {
 	// Options contains the parsed request options
 	Options *common.RequestOptions
 
+	// Operation being dispatched (e.g. "read", "create", "update", "delete")
+	Operation string
+
 	// ID is the record ID for single-record operations
 	ID string
 
@@ -97,6 +105,11 @@ type HookContext struct {
 
 	// Error is any error that occurred (for after hooks)
 	Error error
+
+	// Allow hooks to abort the operation
+	Abort        bool   // If set to true, the operation will be aborted
+	AbortMessage string // Message to return if aborted
+	AbortCode    int    // HTTP status code if aborted
 
 	// Metadata is additional context data
 	Metadata map[string]interface{}
@@ -170,6 +183,11 @@ func (hr *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 	for _, hook := range hooks {
 		if err := hook(ctx); err != nil {
 			return err
+		}
+
+		// Check if hook requested abort
+		if ctx.Abort {
+			return fmt.Errorf("operation aborted by hook: %s", ctx.AbortMessage)
 		}
 	}
 

@@ -1,4 +1,4 @@
-package restheadspec
+package mqttspec
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
-// RegisterSecurityHooks registers all security-related hooks with the handler
+// RegisterSecurityHooks registers all security-related hooks with the MQTT handler
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
 	// Hook 0: BeforeHandle - enforce auth after model resolution
 	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
@@ -27,40 +27,34 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return security.LoadSecurityRules(secCtx, securityList)
 	})
 
-	// Hook 2: BeforeScan - Apply row-level security filters
-	handler.Hooks().Register(BeforeScan, func(hookCtx *HookContext) error {
-		secCtx := newSecurityContext(hookCtx)
-		return security.ApplyRowSecurity(secCtx, securityList)
-	})
-
-	// Hook 3: AfterRead - Apply column-level security (masking)
+	// Hook 2: AfterRead - Apply column-level security (masking)
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.ApplyColumnSecurity(secCtx, securityList)
 	})
 
-	// Hook 4 (Optional): Audit logging
+	// Hook 3 (Optional): Audit logging
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.LogDataAccess(secCtx)
 	})
 
-	// Hook 5: BeforeUpdate - enforce CanUpdate rule from context/registry
+	// Hook 4: BeforeUpdate - enforce CanUpdate rule from context/registry
 	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.CheckModelUpdateAllowed(secCtx)
 	})
 
-	// Hook 6: BeforeDelete - enforce CanDelete rule from context/registry
+	// Hook 5: BeforeDelete - enforce CanDelete rule from context/registry
 	handler.Hooks().Register(BeforeDelete, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.CheckModelDeleteAllowed(secCtx)
 	})
 
-	logger.Info("Security hooks registered for restheadspec handler")
+	logger.Info("Security hooks registered for mqttspec handler")
 }
 
-// securityContext adapts restheadspec.HookContext to security.SecurityContext interface
+// securityContext adapts mqttspec.HookContext to security.SecurityContext interface
 type securityContext struct {
 	ctx *HookContext
 }
@@ -89,12 +83,20 @@ func (s *securityContext) GetModel() interface{} {
 	return s.ctx.Model
 }
 
+// GetQuery retrieves a stored query from hook metadata
 func (s *securityContext) GetQuery() interface{} {
-	return s.ctx.Query
+	if s.ctx.Metadata == nil {
+		return nil
+	}
+	return s.ctx.Metadata["query"]
 }
 
+// SetQuery stores the query in hook metadata
 func (s *securityContext) SetQuery(query interface{}) {
-	s.ctx.Query = query
+	if s.ctx.Metadata == nil {
+		s.ctx.Metadata = make(map[string]interface{})
+	}
+	s.ctx.Metadata["query"] = query
 }
 
 func (s *securityContext) GetResult() interface{} {

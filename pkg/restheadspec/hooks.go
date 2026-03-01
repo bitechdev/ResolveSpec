@@ -12,6 +12,10 @@ import (
 type HookType string
 
 const (
+	// BeforeHandle fires after model resolution, before operation dispatch.
+	// Use this for auth checks that need model rules and user context simultaneously.
+	BeforeHandle HookType = "before_handle"
+
 	// Read operation hooks
 	BeforeRead HookType = "before_read"
 	AfterRead  HookType = "after_read"
@@ -42,6 +46,9 @@ type HookContext struct {
 	Model     interface{}
 	Options   ExtendedRequestOptions
 
+	// Operation being dispatched (e.g. "read", "create", "update", "delete")
+	Operation string
+
 	// Operation-specific fields
 	ID          string
 	Data        interface{} // For create/update operations
@@ -55,6 +62,14 @@ type HookContext struct {
 
 	// Response writer - allows hooks to modify response
 	Writer common.ResponseWriter
+
+	// Request - the original HTTP request
+	Request common.Request
+
+	// Allow hooks to abort the operation
+	Abort        bool   // If set to true, the operation will be aborted
+	AbortMessage string // Message to return if aborted
+	AbortCode    int    // HTTP status code if aborted
 
 	// Tx provides access to the database/transaction for executing additional SQL
 	// This allows hooks to run custom queries in addition to the main Query chain
@@ -109,6 +124,12 @@ func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 		if err := hook(ctx); err != nil {
 			logger.Error("Hook %d for %s failed: %v", i+1, hookType, err)
 			return fmt.Errorf("hook execution failed: %w", err)
+		}
+
+		// Check if hook requested abort
+		if ctx.Abort {
+			logger.Warn("Hook %d for %s requested abort: %s", i+1, hookType, ctx.AbortMessage)
+			return fmt.Errorf("operation aborted by hook: %s", ctx.AbortMessage)
 		}
 	}
 

@@ -275,6 +275,64 @@ func checkModelDeleteAllowed(secCtx SecurityContext) error {
 	return nil
 }
 
+// CheckModelAuthAllowed checks whether the requested operation is permitted based on
+// model rules and the current user's authentication state. It is intended for use in
+// a BeforeHandle hook, fired after model resolution.
+//
+// Logic:
+//  1. Load model rules from context (set by NewModelAuthMiddleware) or fall back to registry.
+//  2. SecurityDisabled → allow.
+//  3. operation == "read" && CanPublicRead → allow.
+//  4. operation == "create" && CanPublicCreate → allow.
+//  5. operation == "update" && CanPublicUpdate → allow.
+//  6. operation == "delete" && CanPublicDelete → allow.
+//  7. Guest (UserID == 0) → return "authentication required".
+//  8. Authenticated user → allow (operation-specific checks remain in BeforeUpdate/BeforeDelete).
+func CheckModelAuthAllowed(secCtx SecurityContext, operation string) error {
+	rules, ok := GetModelRulesFromContext(secCtx.GetContext())
+	if !ok {
+		schema := secCtx.GetSchema()
+		entity := secCtx.GetEntity()
+		var err error
+		if schema != "" {
+			rules, err = modelregistry.GetModelRulesByName(fmt.Sprintf("%s.%s", schema, entity))
+		}
+		if err != nil || schema == "" {
+			rules, err = modelregistry.GetModelRulesByName(entity)
+		}
+		if err != nil {
+			// Model not registered - fall through to auth check
+			userID, _ := secCtx.GetUserID()
+			if userID == 0 {
+				return fmt.Errorf("authentication required")
+			}
+			return nil
+		}
+	}
+
+	if rules.SecurityDisabled {
+		return nil
+	}
+	if operation == "read" && rules.CanPublicRead {
+		return nil
+	}
+	if operation == "create" && rules.CanPublicCreate {
+		return nil
+	}
+	if operation == "update" && rules.CanPublicUpdate {
+		return nil
+	}
+	if operation == "delete" && rules.CanPublicDelete {
+		return nil
+	}
+
+	userID, _ := secCtx.GetUserID()
+	if userID == 0 {
+		return fmt.Errorf("authentication required")
+	}
+	return nil
+}
+
 // CheckModelUpdateAllowed is the public wrapper for checkModelUpdateAllowed.
 func CheckModelUpdateAllowed(secCtx SecurityContext) error {
 	return checkModelUpdateAllowed(secCtx)

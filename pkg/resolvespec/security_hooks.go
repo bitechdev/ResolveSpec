@@ -2,6 +2,7 @@ package resolvespec
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -10,6 +11,17 @@ import (
 
 // RegisterSecurityHooks registers all security-related hooks with the handler
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// Hook 0: BeforeHandle - enforce auth after model resolution
+	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
+		if err := security.CheckModelAuthAllowed(newSecurityContext(hookCtx), hookCtx.Operation); err != nil {
+			hookCtx.Abort = true
+			hookCtx.AbortMessage = err.Error()
+			hookCtx.AbortCode = http.StatusUnauthorized
+			return err
+		}
+		return nil
+	})
+
 	// Hook 1: BeforeRead - Load security rules
 	handler.Hooks().Register(BeforeRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)

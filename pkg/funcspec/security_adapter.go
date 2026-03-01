@@ -2,14 +2,38 @@ package funcspec
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 
 	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
 // RegisterSecurityHooks registers security hooks for funcspec handlers
 // Note: funcspec operates on SQL queries directly, so row-level security is not directly applicable
-// We provide audit logging for data access tracking
+// We provide auth enforcement and audit logging for data access tracking
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// Hook 0: BeforeQueryList - Auth check before list query execution
+	handler.Hooks().Register(BeforeQueryList, func(hookCtx *HookContext) error {
+		if hookCtx.UserContext == nil || hookCtx.UserContext.UserID == 0 {
+			hookCtx.Abort = true
+			hookCtx.AbortMessage = "authentication required"
+			hookCtx.AbortCode = http.StatusUnauthorized
+			return fmt.Errorf("authentication required")
+		}
+		return nil
+	})
+
+	// Hook 0: BeforeQuery - Auth check before single query execution
+	handler.Hooks().Register(BeforeQuery, func(hookCtx *HookContext) error {
+		if hookCtx.UserContext == nil || hookCtx.UserContext.UserID == 0 {
+			hookCtx.Abort = true
+			hookCtx.AbortMessage = "authentication required"
+			hookCtx.AbortCode = http.StatusUnauthorized
+			return fmt.Errorf("authentication required")
+		}
+		return nil
+	})
+
 	// Hook 1: BeforeQueryList - Audit logging before query list execution
 	handler.Hooks().Register(BeforeQueryList, func(hookCtx *HookContext) error {
 		secCtx := newFuncSpecSecurityContext(hookCtx)

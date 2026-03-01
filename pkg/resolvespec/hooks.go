@@ -12,6 +12,10 @@ import (
 type HookType string
 
 const (
+	// BeforeHandle fires after model resolution, before operation dispatch.
+	// Use this for auth checks that need model rules and user context simultaneously.
+	BeforeHandle HookType = "before_handle"
+
 	// Read operation hooks
 	BeforeRead HookType = "before_read"
 	AfterRead  HookType = "after_read"
@@ -42,6 +46,9 @@ type HookContext struct {
 	Options common.RequestOptions
 	Writer  common.ResponseWriter
 	Request common.Request
+
+	// Operation being dispatched (e.g. "read", "create", "update", "delete")
+	Operation string
 
 	// Operation-specific fields
 	ID     string

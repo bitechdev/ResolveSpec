@@ -133,6 +133,41 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	// Add request-scoped data to context (including options)
 	ctx = WithRequestData(ctx, schema, entity, tableName, model, modelPtr, options)
 
+	// Derive operation for auth check
+	var operation string
+	switch method {
+	case "GET":
+		operation = "read"
+	case "POST":
+		operation = "create"
+	case "PUT", "PATCH":
+		operation = "update"
+	case "DELETE":
+		operation = "delete"
+	default:
+		operation = "read"
+	}
+
+	// Execute BeforeHandle hook - auth check fires here, after model resolution
+	beforeCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		Model:     model,
+		Writer:    w,
+		Request:   r,
+		Operation: operation,
+	}
+	if err := h.hooks.Execute(BeforeHandle, beforeCtx); err != nil {
+		code := http.StatusUnauthorized
+		if beforeCtx.AbortCode != 0 {
+			code = beforeCtx.AbortCode
+		}
+		h.sendError(w, code, "unauthorized", beforeCtx.AbortMessage, err)
+		return
+	}
+
 	switch method {
 	case "GET":
 		if id != "" {

@@ -139,6 +139,31 @@ func NewOptionalAuthHandler(securityList *SecurityList, next http.Handler) http.
 	})
 }
 
+// NewOptionalAuthMiddleware creates authentication middleware that always continues.
+// On auth failure, a guest user context is set instead of returning 401.
+// Intended for spec routes where auth enforcement is deferred to a BeforeHandle hook
+// after model resolution.
+func NewOptionalAuthMiddleware(securityList *SecurityList) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			provider := securityList.Provider()
+			if provider == nil {
+				http.Error(w, "Security provider not configured", http.StatusInternalServerError)
+				return
+			}
+
+			userCtx, err := provider.Authenticate(r)
+			if err != nil {
+				guestCtx := createGuestContext(r)
+				next.ServeHTTP(w, setUserContext(r, guestCtx))
+				return
+			}
+
+			next.ServeHTTP(w, setUserContext(r, userCtx))
+		})
+	}
+}
+
 // NewAuthMiddleware creates an authentication middleware with the given security list
 // This middleware extracts user authentication from the request and adds it to context
 // Routes can skip authentication by setting SkipAuthKey context value (use SkipAuth helper)

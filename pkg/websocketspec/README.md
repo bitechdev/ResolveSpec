@@ -330,12 +330,15 @@ Hooks allow you to intercept and modify operations at various points in the life
 
 ### Available Hook Types
 
+- **BeforeHandle** — fires after model resolution, before operation dispatch (auth checks)
 - **BeforeRead** / **AfterRead**
 - **BeforeCreate** / **AfterCreate**
 - **BeforeUpdate** / **AfterUpdate**
 - **BeforeDelete** / **AfterDelete**
 - **BeforeSubscribe** / **AfterSubscribe**
 - **BeforeConnect** / **AfterConnect**
+
+`HookContext` includes `Operation string` (`"read"`, `"create"`, `"update"`, `"delete"`) and `Abort bool`, `AbortMessage string`, `AbortCode int` for abort signaling.
 
 ### Hook Example
 
@@ -599,7 +602,19 @@ asyncio.run(main())
 
 ## Authentication
 
-Implement authentication using hooks:
+Use `RegisterSecurityHooks` for integrated auth with model-rule support:
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/security"
+
+provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+securityList := security.NewSecurityList(provider)
+websocketspec.RegisterSecurityHooks(handler, securityList)
+// Registers BeforeHandle (model auth), BeforeRead (load rules),
+// AfterRead (column security + audit), BeforeUpdate, BeforeDelete
+```
+
+Or implement custom authentication using hooks directly:
 
 ```go
 handler := websocketspec.NewHandlerWithGORM(db)

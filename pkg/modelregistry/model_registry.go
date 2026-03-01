@@ -10,6 +10,8 @@ import (
 type ModelRules struct {
 	CanPublicRead    bool // Whether the model can be read (GET operations)
 	CanPublicUpdate  bool // Whether the model can be updated (PUT/PATCH operations)
+	CanPublicCreate  bool // Whether the model can be created (POST operations)
+	CanPublicDelete  bool // Whether the model can be deleted (DELETE operations)
 	CanRead          bool // Whether the model can be read (GET operations)
 	CanUpdate        bool // Whether the model can be updated (PUT/PATCH operations)
 	CanCreate        bool // Whether the model can be created (POST operations)
@@ -26,6 +28,8 @@ func DefaultModelRules() ModelRules {
 		CanDelete:        true,
 		CanPublicRead:    false,
 		CanPublicUpdate:  false,
+		CanPublicCreate:  false,
+		CanPublicDelete:  false,
 		SecurityDisabled: false,
 	}
 }

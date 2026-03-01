@@ -147,6 +147,7 @@ handler.Hooks.Register(restheadspec.BeforeCreate, func(ctx *restheadspec.HookCon
 ```
 
 **Available Hook Types**:
+* `BeforeHandle` — fires after model resolution, before operation dispatch (auth checks)
 * `BeforeRead`, `AfterRead`
 * `BeforeCreate`, `AfterCreate`
 * `BeforeUpdate`, `AfterUpdate`
@@ -157,11 +158,13 @@ handler.Hooks.Register(restheadspec.BeforeCreate, func(ctx *restheadspec.HookCon
 * `Handler`: Access to handler, database, and registry
 * `Schema`, `Entity`, `TableName`: Request info
 * `Model`: The registered model type
+* `Operation`: Current operation string (`"read"`, `"create"`, `"update"`, `"delete"`)
 * `Options`: Parsed request options (filters, sorting, etc.)
 * `ID`: Record ID (for single-record operations)
 * `Data`: Request data (for create/update)
 * `Result`: Operation result (for after hooks)
 * `Writer`: Response writer (allows hooks to modify response)
+* `Abort`, `AbortMessage`, `AbortCode`: Set in hook to abort with an error response
 
 ## Cursor Pagination
 

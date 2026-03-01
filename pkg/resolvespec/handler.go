@@ -138,6 +138,26 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	validator := common.NewColumnValidator(model)
 	req.Options = validator.FilterRequestOptions(req.Options)
 
+	// Execute BeforeHandle hook - auth check fires here, after model resolution
+	beforeCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		Model:     model,
+		Writer:    w,
+		Request:   r,
+		Operation: req.Operation,
+	}
+	if err := h.hooks.Execute(BeforeHandle, beforeCtx); err != nil {
+		code := http.StatusUnauthorized
+		if beforeCtx.AbortCode != 0 {
+			code = beforeCtx.AbortCode
+		}
+		h.sendError(w, code, "unauthorized", beforeCtx.AbortMessage, err)
+		return
+	}
+
 	switch req.Operation {
 	case "read":
 		h.handleRead(ctx, w, id, req.Options)

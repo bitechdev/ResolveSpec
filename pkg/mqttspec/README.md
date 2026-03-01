@@ -9,7 +9,7 @@ MQTTSpec is an MQTT-based database query framework that enables real-time databa
 - **Full CRUD Operations**: Create, Read, Update, Delete with hooks
 - **Real-time Subscriptions**: Subscribe to entity changes with filtering
 - **Database Agnostic**: GORM and Bun ORM support
-- **Lifecycle Hooks**: 12 hooks for authentication, authorization, validation, and auditing
+- **Lifecycle Hooks**: 13 hooks for authentication, authorization, validation, and auditing
 - **Multi-tenancy Support**: Built-in tenant isolation via hooks
 - **Thread-safe**: Proper concurrency handling throughout
 
@@ -326,10 +326,11 @@ When any client creates/updates/deletes a user matching the subscription filters
 
 ## Lifecycle Hooks
 
-MQTTSpec provides 12 lifecycle hooks for implementing cross-cutting concerns:
+MQTTSpec provides 13 lifecycle hooks for implementing cross-cutting concerns:
 
 ### Hook Types
 
+- `BeforeHandle` — fires after model resolution, before operation dispatch (auth checks)
 - `BeforeConnect` / `AfterConnect` - Connection lifecycle
 - `BeforeDisconnect` / `AfterDisconnect` - Disconnection lifecycle
 - `BeforeRead` / `AfterRead` - Read operations
@@ -338,6 +339,20 @@ MQTTSpec provides 12 lifecycle hooks for implementing cross-cutting concerns:
 - `BeforeDelete` / `AfterDelete` - Delete operations
 - `BeforeSubscribe` / `AfterSubscribe` - Subscription creation
 - `BeforeUnsubscribe` / `AfterUnsubscribe` - Subscription removal
+
+### Security Hooks (Recommended)
+
+Use `RegisterSecurityHooks` for integrated auth with model-rule support:
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/security"
+
+provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+securityList := security.NewSecurityList(provider)
+mqttspec.RegisterSecurityHooks(handler, securityList)
+// Registers BeforeHandle (model auth), BeforeRead (load rules),
+// AfterRead (column security + audit), BeforeUpdate, BeforeDelete
+```
 
 ### Authentication Example (JWT)
 
@@ -657,7 +672,7 @@ handler, err := mqttspec.NewHandlerWithGORM(db,
 | **Network Efficiency** | Better for unreliable networks | Better for low-latency |
 | **Best For** | IoT, mobile apps, distributed systems | Web applications, real-time dashboards |
 | **Message Protocol** | Same JSON structure | Same JSON structure |
-| **Hooks** | Same 12 hooks | Same 12 hooks |
+| **Hooks** | Same 13 hooks | Same 13 hooks |
 | **CRUD Operations** | Identical | Identical |
 | **Subscriptions** | Identical (via MQTT topics) | Identical (via app-level) |
 

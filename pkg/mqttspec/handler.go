@@ -284,6 +284,15 @@ func (h *Handler) handleRequest(client *Client, msg *Message) {
 		},
 	}
 
+	// Execute BeforeHandle hook - auth check fires here, after model resolution
+	hookCtx.Operation = string(msg.Operation)
+	if err := h.hooks.Execute(BeforeHandle, hookCtx); err != nil {
+		if hookCtx.Abort {
+			h.sendError(client.ID, msg.ID, "unauthorized", hookCtx.AbortMessage)
+		}
+		return
+	}
+
 	// Route to operation handler
 	switch msg.Operation {
 	case OperationRead:

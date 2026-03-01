@@ -751,14 +751,25 @@ resolvespec.RegisterSecurityHooks(resolveHandler, securityList)
 ```
 HTTP Request
     ↓
-NewAuthMiddleware (security package)
+NewOptionalAuthMiddleware (security package)  ← recommended for spec routes
     ├─ Calls provider.Authenticate(request)
-    └─ Adds UserContext to context
+    ├─ On success: adds authenticated UserContext to context
+    └─ On failure: adds guest UserContext (UserID=0) to context
     ↓
 SetSecurityMiddleware (security package)
     └─ Adds SecurityList to context
     ↓
-Spec Handler (restheadspec/funcspec/resolvespec)
+Spec Handler (restheadspec/funcspec/resolvespec/websocketspec/mqttspec)
+    └─ Resolves schema + entity + model from request
+    ↓
+BeforeHandle Hook (registered by spec via RegisterSecurityHooks)
+    ├─ Adapts spec's HookContext → SecurityContext
+    ├─ Calls security.CheckModelAuthAllowed(secCtx, operation)
+    │   ├─ Loads model rules from context or registry
+    │   ├─ SecurityDisabled → allow
+    │   ├─ CanPublicRead/Create/Update/Delete → allow unauthenticated
+    │   └─ UserID == 0 → 401 unauthorized
+    └─ On error: aborts with 401
     ↓
 BeforeRead Hook (registered by spec)
     ├─ Adapts spec's HookContext → SecurityContext
@@ -784,7 +795,8 @@ HTTP Response (secured data)
 ```
 
 **Key Points:**
-- Security package is spec-agnostic and provides core logic
+- `NewOptionalAuthMiddleware` never rejects — it sets guest context on auth failure; `BeforeHandle` enforces auth after model resolution
+- `BeforeHandle` fires after model resolution, giving access to model rules and user context simultaneously
 - Each spec registers its own hooks that adapt to SecurityContext
 - Security rules are loaded once and cached for the request
 - Row security is applied to the query (database level)
@@ -1002,13 +1014,47 @@ func (p *MyProvider) GetRowSecurity(ctx context.Context, userID int, schema, tab
 }
 ```
 
+## Model-Level Access Control
+
+Use `ModelRules` (from `pkg/modelregistry`) to control per-entity auth behavior:
+
+```go
+modelregistry.RegisterModelWithRules("public.products", &Product{}, modelregistry.ModelRules{
+    SecurityDisabled: false,   // true = skip all auth checks
+    CanPublicRead:    true,    // unauthenticated GET allowed
+    CanPublicCreate:  false,   // requires auth
+    CanPublicUpdate:  false,   // requires auth
+    CanPublicDelete:  false,   // requires auth
+    CanUpdate:        true,    // authenticated users can update
+    CanDelete:        false,   // authenticated users cannot delete
+})
+```
+
+`CheckModelAuthAllowed(secCtx, operation)` applies these rules in `BeforeHandle`:
+1. `SecurityDisabled` → allow all
+2. `CanPublicRead/Create/Update/Delete` → allow unauthenticated for that operation
+3. Guest (UserID == 0) → return 401
+4. Authenticated → allow (operation-specific `CanUpdate`/`CanDelete` checked in `BeforeUpdate`/`BeforeDelete`)
+
+---
+
 ## Middleware and Handler API
 
 ### NewAuthMiddleware
-Standard middleware that authenticates all requests:
+Standard middleware that authenticates all requests and returns 401 on failure:
 
 ```go
 router.Use(security.NewAuthMiddleware(securityList))
+```
+
+### NewOptionalAuthMiddleware
+Middleware for spec routes — always continues; sets guest context on auth failure:
+
+```go
+// Use with RegisterSecurityHooks — auth enforcement is deferred to BeforeHandle
+apiRouter.Use(security.NewOptionalAuthMiddleware(securityList))
+apiRouter.Use(security.SetSecurityMiddleware(securityList))
+restheadspec.RegisterSecurityHooks(handler, securityList)  // registers BeforeHandle
 ```
 
 Routes can skip authentication using the `SkipAuth` helper:

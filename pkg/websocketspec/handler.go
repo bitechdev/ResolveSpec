@@ -177,6 +177,16 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 		Metadata:   make(map[string]interface{}),
 	}
 
+	// Execute BeforeHandle hook - auth check fires here, after model resolution
+	hookCtx.Operation = string(msg.Operation)
+	if err := h.hooks.Execute(BeforeHandle, hookCtx); err != nil {
+		if hookCtx.Abort {
+			errResp := NewErrorResponse(msg.ID, "unauthorized", hookCtx.AbortMessage)
+			_ = conn.SendJSON(errResp)
+		}
+		return
+	}
+
 	// Route to operation handler
 	switch msg.Operation {
 	case OperationRead:

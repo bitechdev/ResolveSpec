@@ -405,11 +405,16 @@ assert.Equal(t, "user_id = {UserID}", row.Template)
 ```
 HTTP Request
     ↓
-NewAuthMiddleware → calls provider.Authenticate()
-    ↓ (adds UserContext to context)
+NewOptionalAuthMiddleware → calls provider.Authenticate()
+    ↓ (adds UserContext or guest context; never 401)
 SetSecurityMiddleware → adds SecurityList to context
     ↓
-Handler.Handle()
+Handler.Handle() → resolves model
+    ↓
+BeforeHandle Hook → CheckModelAuthAllowed(secCtx, operation)
+    ├─ SecurityDisabled → allow
+    ├─ CanPublicRead/Create/Update/Delete → allow unauthenticated
+    └─ UserID == 0 → abort 401
     ↓
 BeforeRead Hook → calls provider.GetColumnSecurity() + GetRowSecurity()
     ↓
@@ -693,15 +698,30 @@ http.Handle("/api/protected", authHandler)
 optionalHandler := security.NewOptionalAuthHandler(securityList, myHandler)
 http.Handle("/home", optionalHandler)
 
-// Example handler
-func myHandler(w http.ResponseWriter, r *http.Request) {
-    userCtx, _ := security.GetUserContext(r.Context())
-    if userCtx.UserID == 0 {
-        // Guest user
-    } else {
-        // Authenticated user
-    }
-}
+// NewOptionalAuthMiddleware - For spec routes; auth enforcement deferred to BeforeHandle
+apiRouter.Use(security.NewOptionalAuthMiddleware(securityList))
+apiRouter.Use(security.SetSecurityMiddleware(securityList))
+restheadspec.RegisterSecurityHooks(handler, securityList) // includes BeforeHandle
+```
+
+---
+
+## Model-Level Access Control
+
+```go
+// Register model with rules (pkg/modelregistry)
+modelregistry.RegisterModelWithRules("public.products", &Product{}, modelregistry.ModelRules{
+    SecurityDisabled: false,  // skip all auth when true
+    CanPublicRead:    true,   // unauthenticated reads allowed
+    CanPublicCreate:  false,  // requires auth
+    CanPublicUpdate:  false,  // requires auth
+    CanPublicDelete:  false,  // requires auth
+    CanUpdate:        true,   // authenticated can update
+    CanDelete:        false,  // authenticated cannot delete (enforced in BeforeDelete)
+})
+
+// CheckModelAuthAllowed used automatically in BeforeHandle hook
+// No code needed — call RegisterSecurityHooks and it's applied
 ```
 
 ---

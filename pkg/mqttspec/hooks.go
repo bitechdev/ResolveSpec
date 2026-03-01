@@ -20,8 +20,11 @@ type (
 	HookRegistry = websocketspec.HookRegistry
 )
 
-// Hook type constants - all 12 lifecycle hooks
+// Hook type constants - all lifecycle hooks
 const (
+	// BeforeHandle fires after model resolution, before operation dispatch
+	BeforeHandle = websocketspec.BeforeHandle
+
 	// CRUD operation hooks
 	BeforeRead   = websocketspec.BeforeRead
 	AfterRead    = websocketspec.AfterRead

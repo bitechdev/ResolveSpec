@@ -329,6 +329,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Extract model columns for validation
 		modelColumns := reflection.GetModelColumns(model)
 
+		// Default sort to primary key when none provided
+		if len(options.Sort) == 0 {
+			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+		}
+
 		// Get cursor filter SQL
 		cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
 		if err != nil {

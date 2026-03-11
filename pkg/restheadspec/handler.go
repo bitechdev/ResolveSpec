@@ -731,6 +731,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			// For now, pass empty map as joins are handled via Preload
 		}
 
+		// Default sort to primary key when none provided
+		if len(options.Sort) == 0 {
+			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+		}
+
 		// Get cursor filter SQL
 		cursorFilter, err := options.GetCursorFilter(tableName, pkName, modelColumns, expandJoins)
 		if err != nil {

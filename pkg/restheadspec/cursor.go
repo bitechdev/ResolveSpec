@@ -32,6 +32,8 @@ func (opts *ExtendedRequestOptions) GetCursorFilter(
 	modelColumns []string, // optional: for validation
 	expandJoins map[string]string, // optional: alias → JOIN SQL
 ) (string, error) {
+	// Separate schema prefix from bare table name
+	fullTableName := tableName
 	if strings.Contains(tableName, ".") {
 		tableName = strings.SplitN(tableName, ".", 2)[1]
 	}
@@ -127,7 +129,7 @@ func (opts *ExtendedRequestOptions) GetCursorFilter(
   WHERE cursor_select.%s = %s
     AND (%s)
 )`,
-		tableName,
+		fullTableName,
 		joinSQL,
 		pkName,
 		cursorID,

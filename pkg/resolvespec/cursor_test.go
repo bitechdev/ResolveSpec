@@ -175,9 +175,9 @@ func TestGetCursorFilter_WithSchemaPrefix(t *testing.T) {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}
 
-	// Should handle schema prefix properly
-	if !strings.Contains(filter, "users") {
-		t.Errorf("Filter should reference table name users, got: %s", filter)
+	// Should include full schema-qualified name in FROM clause
+	if !strings.Contains(filter, "public.users") {
+		t.Errorf("Filter FROM clause should use schema-qualified name public.users, got: %s", filter)
 	}
 
 	t.Logf("Generated cursor filter with schema: %s", filter)

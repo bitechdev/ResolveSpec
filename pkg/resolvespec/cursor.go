@@ -32,7 +32,8 @@ func GetCursorFilter(
 	modelColumns []string,
 	options common.RequestOptions,
 ) (string, error) {
-	// Remove schema prefix if present
+	// Separate schema prefix from bare table name
+	fullTableName := tableName
 	if strings.Contains(tableName, ".") {
 		tableName = strings.SplitN(tableName, ".", 2)[1]
 	}
@@ -115,7 +116,7 @@ func GetCursorFilter(
   WHERE cursor_select.%s = %s
     AND (%s)
 )`,
-		tableName,
+		fullTableName,
 		pkName,
 		cursorID,
 		orSQL,

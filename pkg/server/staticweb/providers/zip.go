@@ -56,6 +56,7 @@ func (p *ZipFSProvider) Open(name string) (fs.File, error) {
 
 	// Apply prefix stripping by prepending the prefix to the requested path
 	actualPath := name
+	alternatePath := ""
 	if p.stripPrefix != "" {
 		// Clean the paths to handle leading/trailing slashes
 		prefix := strings.Trim(p.stripPrefix, "/")
@@ -63,12 +64,26 @@ func (p *ZipFSProvider) Open(name string) (fs.File, error) {
 
 		if prefix != "" {
 			actualPath = path.Join(prefix, cleanName)
+			alternatePath = cleanName
 		} else {
 			actualPath = cleanName
 		}
 	}
 
-	return p.zipFS.Open(actualPath)
+	// First try the actual path with prefix
+	if file, err := p.zipFS.Open(actualPath); err == nil {
+		return file, nil
+	}
+
+	// If alternate path is different, try it as well
+	if alternatePath != "" && alternatePath != actualPath {
+		if file, err := p.zipFS.Open(alternatePath); err == nil {
+			return file, nil
+		}
+	}
+
+	// If both attempts fail, return the error from the first attempt
+	return nil, fmt.Errorf("file not found: %s", name)
 }
 
 // Close releases resources held by the zip reader.

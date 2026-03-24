@@ -98,6 +98,7 @@ func (p *EmbedFSProvider) Open(name string) (fs.File, error) {
 
 	// Apply prefix stripping by prepending the prefix to the requested path
 	actualPath := name
+	alternatePath := ""
 	if p.stripPrefix != "" {
 		// Clean the paths to handle leading/trailing slashes
 		prefix := strings.Trim(p.stripPrefix, "/")
@@ -105,12 +106,25 @@ func (p *EmbedFSProvider) Open(name string) (fs.File, error) {
 
 		if prefix != "" {
 			actualPath = path.Join(prefix, cleanName)
+			alternatePath = cleanName
 		} else {
 			actualPath = cleanName
 		}
 	}
+	// First try the actual path with prefix
+	if file, err := p.fs.Open(actualPath); err == nil {
+		return file, nil
+	}
 
-	return p.fs.Open(actualPath)
+	// If alternate path is different, try it as well
+	if alternatePath != "" && alternatePath != actualPath {
+		if file, err := p.fs.Open(alternatePath); err == nil {
+			return file, nil
+		}
+	}
+
+	// If both attempts fail, return the error from the first attempt
+	return nil, fmt.Errorf("file not found: %s", name)
 }
 
 // Close releases any resources held by the provider.

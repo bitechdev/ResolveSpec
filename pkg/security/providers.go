@@ -222,9 +222,8 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 
 	if sessionToken == "" {
 		// Try cookie
-		cookie, err := r.Cookie("session_token")
-		if err == nil {
-			tokens = []string{cookie.Value}
+		if token := GetSessionCookie(r); token != "" {
+			tokens = []string{token}
 			reference = "cookie"
 		}
 	} else {

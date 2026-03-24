@@ -456,6 +456,125 @@ func GetUserMeta(ctx context.Context) (map[string]any, bool) {
 	return meta, ok
 }
 
+// SessionCookieOptions configures the session cookie set by SetSessionCookie.
+// All fields are optional; sensible secure defaults are applied when omitted.
+type SessionCookieOptions struct {
+	// Name is the cookie name. Defaults to "session_token".
+	Name string
+	// Path is the cookie path. Defaults to "/".
+	Path string
+	// Domain restricts the cookie to a specific domain. Empty means current host.
+	Domain string
+	// Secure sets the Secure flag. Defaults to true.
+	// Set to false only in local development over HTTP.
+	Secure *bool
+	// SameSite sets the SameSite policy. Defaults to http.SameSiteLaxMode.
+	SameSite http.SameSite
+}
+
+func (o SessionCookieOptions) name() string {
+	if o.Name != "" {
+		return o.Name
+	}
+	return "session_token"
+}
+
+func (o SessionCookieOptions) path() string {
+	if o.Path != "" {
+		return o.Path
+	}
+	return "/"
+}
+
+func (o SessionCookieOptions) secure() bool {
+	if o.Secure != nil {
+		return *o.Secure
+	}
+	return true
+}
+
+func (o SessionCookieOptions) sameSite() http.SameSite {
+	if o.SameSite != 0 {
+		return o.SameSite
+	}
+	return http.SameSiteLaxMode
+}
+
+// SetSessionCookie writes the session_token cookie to the response after a successful login.
+// Call this immediately after a successful Authenticator.Login() call.
+//
+// Example:
+//
+//	resp, err := auth.Login(r.Context(), req)
+//	if err != nil { ... }
+//	security.SetSessionCookie(w, resp)
+//	json.NewEncoder(w).Encode(resp)
+func SetSessionCookie(w http.ResponseWriter, loginResp *LoginResponse, opts ...SessionCookieOptions) {
+	var o SessionCookieOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
+	maxAge := 0
+	if loginResp.ExpiresIn > 0 {
+		maxAge = int(loginResp.ExpiresIn)
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     o.name(),
+		Value:    loginResp.Token,
+		Path:     o.path(),
+		Domain:   o.Domain,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   o.secure(),
+		SameSite: o.sameSite(),
+	})
+}
+
+// GetSessionCookie returns the session token value from the request cookie, or empty string if not present.
+//
+// Example:
+//
+//	token := security.GetSessionCookie(r)
+func GetSessionCookie(r *http.Request, opts ...SessionCookieOptions) string {
+	var o SessionCookieOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	cookie, err := r.Cookie(o.name())
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+// ClearSessionCookie expires the session_token cookie, effectively logging the user out on the browser side.
+// Call this after a successful Authenticator.Logout() call.
+//
+// Example:
+//
+//	err := auth.Logout(r.Context(), req)
+//	if err != nil { ... }
+//	security.ClearSessionCookie(w)
+func ClearSessionCookie(w http.ResponseWriter, opts ...SessionCookieOptions) {
+	var o SessionCookieOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     o.name(),
+		Value:    "",
+		Path:     o.path(),
+		Domain:   o.Domain,
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   o.secure(),
+		SameSite: o.sameSite(),
+	})
+}
+
 // GetModelRulesFromContext extracts ModelRules stored by NewModelAuthMiddleware
 func GetModelRulesFromContext(ctx context.Context) (modelregistry.ModelRules, bool) {
 	rules, ok := ctx.Value(ModelRulesKey).(modelregistry.ModelRules)

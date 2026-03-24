@@ -1061,15 +1061,42 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 		}
 	}
 
+	// Transfer SqlJoins from XFiles to PreloadOption first, so aliases are available for WHERE sanitization
+	if len(xfile.SqlJoins) > 0 {
+		preloadOpt.SqlJoins = make([]string, 0, len(xfile.SqlJoins))
+		preloadOpt.JoinAliases = make([]string, 0, len(xfile.SqlJoins))
+
+		for _, joinClause := range xfile.SqlJoins {
+			// Sanitize the join clause
+			sanitizedJoin := common.SanitizeWhereClause(joinClause, "", nil)
+			if sanitizedJoin == "" {
+				logger.Warn("X-Files: SqlJoin failed sanitization for %s: %s", relationPath, joinClause)
+				continue
+			}
+
+			preloadOpt.SqlJoins = append(preloadOpt.SqlJoins, sanitizedJoin)
+
+			// Extract join alias for validation
+			alias := extractJoinAlias(sanitizedJoin)
+			if alias != "" {
+				preloadOpt.JoinAliases = append(preloadOpt.JoinAliases, alias)
+				logger.Debug("X-Files: Extracted join alias for %s: %s", relationPath, alias)
+			}
+		}
+
+		logger.Debug("X-Files: Added %d SQL joins to preload %s", len(preloadOpt.SqlJoins), relationPath)
+	}
+
 	// Add WHERE clause if SQL conditions specified
+	// SqlJoins must be processed first so join aliases are known and not incorrectly replaced
 	whereConditions := make([]string, 0)
 	if len(xfile.SqlAnd) > 0 {
-		// Process each SQL condition
-		// Note: We don't add table prefixes here because they're only needed for JOINs
-		// The handler will add prefixes later if SqlJoins are present
+		var sqlAndOpts *common.RequestOptions
+		if len(preloadOpt.JoinAliases) > 0 {
+			sqlAndOpts = &common.RequestOptions{JoinAliases: preloadOpt.JoinAliases}
+		}
 		for _, sqlCond := range xfile.SqlAnd {
-			// Sanitize the condition without adding prefixes
-			sanitizedCond := common.SanitizeWhereClause(sqlCond, xfile.TableName)
+			sanitizedCond := common.SanitizeWhereClause(sqlCond, xfile.TableName, sqlAndOpts)
 			if sanitizedCond != "" {
 				whereConditions = append(whereConditions, sanitizedCond)
 			}
@@ -1112,32 +1139,6 @@ func (h *Handler) addXFilesPreload(xfile *XFiles, options *ExtendedRequestOption
 	if xfile.ForeignKey != "" {
 		preloadOpt.ForeignKey = xfile.ForeignKey
 		logger.Debug("X-Files: Set foreign key for %s: %s", relationPath, xfile.ForeignKey)
-	}
-
-	// Transfer SqlJoins from XFiles to PreloadOption
-	if len(xfile.SqlJoins) > 0 {
-		preloadOpt.SqlJoins = make([]string, 0, len(xfile.SqlJoins))
-		preloadOpt.JoinAliases = make([]string, 0, len(xfile.SqlJoins))
-
-		for _, joinClause := range xfile.SqlJoins {
-			// Sanitize the join clause
-			sanitizedJoin := common.SanitizeWhereClause(joinClause, "", nil)
-			if sanitizedJoin == "" {
-				logger.Warn("X-Files: SqlJoin failed sanitization for %s: %s", relationPath, joinClause)
-				continue
-			}
-
-			preloadOpt.SqlJoins = append(preloadOpt.SqlJoins, sanitizedJoin)
-
-			// Extract join alias for validation
-			alias := extractJoinAlias(sanitizedJoin)
-			if alias != "" {
-				preloadOpt.JoinAliases = append(preloadOpt.JoinAliases, alias)
-				logger.Debug("X-Files: Extracted join alias for %s: %s", relationPath, alias)
-			}
-		}
-
-		logger.Debug("X-Files: Added %d SQL joins to preload %s", len(preloadOpt.SqlJoins), relationPath)
 	}
 
 	// Check if this table has a recursive child - if so, mark THIS preload as recursive

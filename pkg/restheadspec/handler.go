@@ -2884,6 +2884,8 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 
 	// Filter base RequestOptions
 	filtered.RequestOptions = validator.FilterRequestOptions(options.RequestOptions)
+	// Restore JoinAliases cleared by FilterRequestOptions — still needed for SanitizeWhereClause
+	filtered.RequestOptions.JoinAliases = options.JoinAliases
 
 	// Filter SearchColumns
 	filtered.SearchColumns = validator.FilterValidColumns(options.SearchColumns)

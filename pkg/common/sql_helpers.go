@@ -168,16 +168,17 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 	}
 
 	// Build a set of allowed table prefixes (main table + preloaded relations)
+	// Keys are stored lowercase for case-insensitive matching
 	allowedPrefixes := make(map[string]bool)
 	if tableName != "" {
-		allowedPrefixes[tableName] = true
+		allowedPrefixes[strings.ToLower(tableName)] = true
 	}
 
 	// Add preload relation names as allowed prefixes
 	if len(options) > 0 && options[0] != nil {
 		for pi := range options[0].Preload {
 			if options[0].Preload[pi].Relation != "" {
-				allowedPrefixes[options[0].Preload[pi].Relation] = true
+				allowedPrefixes[strings.ToLower(options[0].Preload[pi].Relation)] = true
 				logger.Debug("Added preload relation '%s' as allowed table prefix", options[0].Preload[pi].Relation)
 			}
 		}
@@ -185,7 +186,7 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 		// Add join aliases as allowed prefixes
 		for _, alias := range options[0].JoinAliases {
 			if alias != "" {
-				allowedPrefixes[alias] = true
+				allowedPrefixes[strings.ToLower(alias)] = true
 				logger.Debug("Added join alias '%s' as allowed table prefix", alias)
 			}
 		}
@@ -217,8 +218,8 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 			currentPrefix, columnName := extractTableAndColumn(condToCheck)
 
 			if currentPrefix != "" && columnName != "" {
-				// Check if the prefix is allowed (main table or preload relation)
-				if !allowedPrefixes[currentPrefix] {
+				// Check if the prefix is allowed (main table or preload relation) - case-insensitive
+				if !allowedPrefixes[strings.ToLower(currentPrefix)] {
 					// Prefix is not in the allowed list - only fix if it's a valid column in the main table
 					if validColumns == nil || isValidColumn(columnName, validColumns) {
 						// Replace the incorrect prefix with the correct main table name

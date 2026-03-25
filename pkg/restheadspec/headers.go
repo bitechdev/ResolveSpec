@@ -274,9 +274,11 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		}
 	}
 
-	// Resolve relation names (convert table names to field names) if model is provided
-	// Skip resolution if X-Files header was provided, as XFiles uses Prefix which already contains the correct field names
-	if model != nil && !options.XFilesPresent {
+	// Resolve relation names (convert table names/prefixes to actual model field names) if model is provided.
+	// This runs for both regular headers and X-Files, because XFile prefixes don't always match model
+	// field names (e.g., prefix "HUB" vs field "HUB_RID_HUB"). RelatedKey/ForeignKey are used to
+	// disambiguate when multiple fields point to the same related type.
+	if model != nil {
 		h.resolveRelationNamesInOptions(&options, model)
 	}
 
@@ -863,8 +865,21 @@ func (h *Handler) resolveRelationNamesInOptions(options *ExtendedRequestOptions,
 
 		// Resolve each part of the path
 		currentModel := model
-		for _, part := range parts {
-			resolvedPart := h.resolveRelationName(currentModel, part)
+		for partIdx, part := range parts {
+			isLast := partIdx == len(parts)-1
+			var resolvedPart string
+			if isLast {
+				// For the final part, use join-key-aware resolution to disambiguate when
+				// multiple fields point to the same type (e.g., HUB_RID_HUB vs HUB_RID_ASSIGNEDTO).
+				// RelatedKey = parent's local column linking to child; ForeignKey = local column linking to parent.
+				localKey := preload.RelatedKey
+				if localKey == "" {
+					localKey = preload.ForeignKey
+				}
+				resolvedPart = h.resolveRelationNameWithJoinKey(currentModel, part, localKey)
+			} else {
+				resolvedPart = h.resolveRelationName(currentModel, part)
+			}
 			resolvedParts = append(resolvedParts, resolvedPart)
 
 			// Try to get the model type for the next level
@@ -978,6 +993,101 @@ func (h *Handler) resolveRelationName(model interface{}, nameOrTable string) str
 	// If no match found, return the original input
 	logger.Debug("No field found for '%s', using as-is", nameOrTable)
 	return nameOrTable
+}
+
+// resolveRelationNameWithJoinKey resolves a relation name like resolveRelationName, but when
+// multiple fields point to the same related type, uses localKey to pick the one whose bun join
+// tag starts with "join:localKey=". Falls back to resolveRelationName if no key match is found.
+func (h *Handler) resolveRelationNameWithJoinKey(model interface{}, nameOrTable string, localKey string) string {
+	if localKey == "" {
+		return h.resolveRelationName(model, nameOrTable)
+	}
+
+	modelType := reflect.TypeOf(model)
+	if modelType == nil {
+		return nameOrTable
+	}
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return nameOrTable
+	}
+
+	// If it's already a direct field name, return as-is (no ambiguity).
+	for i := 0; i < modelType.NumField(); i++ {
+		if modelType.Field(i).Name == nameOrTable {
+			return nameOrTable
+		}
+	}
+
+	normalizedInput := strings.ToLower(strings.ReplaceAll(nameOrTable, "_", ""))
+	localKeyLower := strings.ToLower(localKey)
+
+	// Find all fields whose related type matches nameOrTable, then pick the one
+	// whose bun join tag local key matches localKey.
+	var fallbackField string
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		fieldType := field.Type
+
+		var targetType reflect.Type
+		if fieldType.Kind() == reflect.Slice {
+			targetType = fieldType.Elem()
+		} else if fieldType.Kind() == reflect.Ptr {
+			targetType = fieldType.Elem()
+		}
+		if targetType != nil && targetType.Kind() == reflect.Ptr {
+			targetType = targetType.Elem()
+		}
+		if targetType == nil || targetType.Kind() != reflect.Struct {
+			continue
+		}
+
+		normalizedTypeName := strings.ToLower(targetType.Name())
+		normalizedTypeName = strings.TrimPrefix(normalizedTypeName, "modelcore")
+		normalizedTypeName = strings.TrimPrefix(normalizedTypeName, "model")
+		if normalizedTypeName != normalizedInput {
+			continue
+		}
+
+		// Type name matches; record as fallback.
+		if fallbackField == "" {
+			fallbackField = field.Name
+		}
+
+		// Check bun join tag: "join:localKey=foreignKey"
+		bunTag := field.Tag.Get("bun")
+		for _, tagPart := range strings.Split(bunTag, ",") {
+			tagPart = strings.TrimSpace(tagPart)
+			if !strings.HasPrefix(tagPart, "join:") {
+				continue
+			}
+			joinSpec := strings.TrimPrefix(tagPart, "join:")
+			// joinSpec can be "col1=col2" or "col1=col2 col3=col4" (multi-col joins)
+			joinCols := strings.Fields(joinSpec)
+			if len(joinCols) == 0 {
+				joinCols = []string{joinSpec}
+			}
+			for _, joinCol := range joinCols {
+				eqIdx := strings.Index(joinCol, "=")
+				if eqIdx < 0 {
+					continue
+				}
+				joinLocalKey := strings.ToLower(joinCol[:eqIdx])
+				if joinLocalKey == localKeyLower {
+					logger.Debug("Resolved '%s' (localKey: %s) -> field '%s'", nameOrTable, localKey, field.Name)
+					return field.Name
+				}
+			}
+		}
+	}
+
+	if fallbackField != "" {
+		logger.Debug("No join key match for '%s' (localKey: %s), using first type match: '%s'", nameOrTable, localKey, fallbackField)
+		return fallbackField
+	}
+	return h.resolveRelationName(model, nameOrTable)
 }
 
 // addXFilesPreload converts an XFiles relation into a PreloadOption

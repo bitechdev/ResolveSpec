@@ -46,7 +46,7 @@ func getCursorFilter(
 	reverse := direction < 0
 
 	for _, s := range sortItems {
-		col := strings.TrimSpace(s.Column)
+		col := strings.Trim(strings.TrimSpace(s.Column), "()")
 		if col == "" {
 			continue
 		}

@@ -64,7 +64,7 @@ func (opts *ExtendedRequestOptions) GetCursorFilter(
 	// 4. Process each sort column
 	// --------------------------------------------------------------------- //
 	for _, s := range sortItems {
-		col := strings.TrimSpace(s.Column)
+		col := strings.Trim(strings.TrimSpace(s.Column), "()")
 		if col == "" {
 			continue
 		}

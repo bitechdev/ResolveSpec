@@ -11,7 +11,9 @@ import (
 )
 
 // 1. Create a handler
-handler := resolvemcp.NewHandlerWithGORM(db)
+handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{
+    BaseURL: "http://localhost:8080",
+})
 
 // 2. Register models
 handler.RegisterModel("public", "users", &User{})
@@ -19,19 +21,35 @@ handler.RegisterModel("public", "orders", &Order{})
 
 // 3. Mount routes
 r := mux.NewRouter()
-resolvemcp.SetupMuxRoutes(r, handler, "http://localhost:8080")
+resolvemcp.SetupMuxRoutes(r, handler)
 ```
 
 ---
+
+## Config
+
+```go
+type Config struct {
+    // BaseURL is the public-facing base URL of the server (e.g. "http://localhost:8080").
+    // Sent to MCP clients during the SSE handshake so they know where to POST messages.
+    // If empty, it is detected from each incoming request using the Host header and
+    // TLS state (X-Forwarded-Proto is honoured for reverse-proxy deployments).
+    BaseURL string
+
+    // BasePath is the URL path prefix where MCP endpoints are mounted (e.g. "/mcp").
+    // Required.
+    BasePath string
+}
+```
 
 ## Handler Creation
 
 | Function | Description |
 |---|---|
-| `NewHandlerWithGORM(db *gorm.DB) *Handler` | Backed by GORM |
-| `NewHandlerWithBun(db *bun.DB) *Handler` | Backed by Bun |
-| `NewHandlerWithDB(db common.Database) *Handler` | Backed by any `common.Database` |
-| `NewHandler(db common.Database, registry common.ModelRegistry) *Handler` | Full control over registry |
+| `NewHandlerWithGORM(db *gorm.DB, cfg Config) *Handler` | Backed by GORM |
+| `NewHandlerWithBun(db *bun.DB, cfg Config) *Handler` | Backed by Bun |
+| `NewHandlerWithDB(db common.Database, cfg Config) *Handler` | Backed by any `common.Database` |
+| `NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *Handler` | Full control over registry |
 
 ---
 
@@ -53,40 +71,43 @@ Each call immediately creates four MCP **tools** and one MCP **resource** for th
 
 The `*server.SSEServer` returned by any of the helpers below implements `http.Handler`, so it works with every Go HTTP framework.
 
+`Config.BasePath` is required and used for all route registration.
+`Config.BaseURL` is optional — when empty it is detected from each request.
+
 ### Gorilla Mux
 
 ```go
-resolvemcp.SetupMuxRoutes(r, handler, "http://localhost:8080")
+resolvemcp.SetupMuxRoutes(r, handler)
 ```
 
 Registers:
 
 | Route | Method | Description |
 |---|---|---|
-| `/mcp/sse` | GET | SSE connection — clients subscribe here |
-| `/mcp/message` | POST | JSON-RPC — clients send requests here |
-| `/mcp/*` | any | Full SSE server (convenience prefix) |
+| `{BasePath}/sse` | GET | SSE connection — clients subscribe here |
+| `{BasePath}/message` | POST | JSON-RPC — clients send requests here |
+| `{BasePath}/*` | any | Full SSE server (convenience prefix) |
 
 ### bunrouter
 
 ```go
-resolvemcp.SetupBunRouterRoutes(router, handler, "http://localhost:8080", "/mcp")
+resolvemcp.SetupBunRouterRoutes(router, handler)
 ```
 
-Registers `GET /mcp/sse` and `POST /mcp/message` on the provided `*bunrouter.Router`.
+Registers `GET {BasePath}/sse` and `POST {BasePath}/message` on the provided `*bunrouter.Router`.
 
 ### Gin (or any `http.Handler`-compatible framework)
 
-Use `handler.SSEServer` to get a pre-bound `*server.SSEServer` and wrap it with the framework's adapter:
+Use `handler.SSEServer()` to get an `http.Handler` and wrap it with the framework's adapter:
 
 ```go
-sse := handler.SSEServer("http://localhost:8080", "/mcp")
+sse := handler.SSEServer()
 
 // Gin
 engine.Any("/mcp/*path", gin.WrapH(sse))
 
 // net/http
-http.Handle("/mcp/", http.StripPrefix("/mcp", sse))
+http.Handle("/mcp/", sse)
 
 // Echo
 e.Any("/mcp/*", echo.WrapHandler(sse))

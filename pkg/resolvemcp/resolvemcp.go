@@ -8,18 +8,17 @@
 //
 // Usage:
 //
-//	handler := resolvemcp.NewHandlerWithGORM(db)
+//	handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{BaseURL: "http://localhost:8080"})
 //	handler.RegisterModel("public", "users", &User{})
 //
 //	r := mux.NewRouter()
-//	resolvemcp.SetupMuxRoutes(r, handler, "http://localhost:8080")
+//	resolvemcp.SetupMuxRoutes(r, handler)
 package resolvemcp
 
 import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/mark3labs/mcp-go/server"
 	"github.com/uptrace/bun"
 	bunrouter "github.com/uptrace/bunrouter"
 	"gorm.io/gorm"
@@ -29,72 +28,73 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
 
+// Config holds configuration for the resolvemcp handler.
+type Config struct {
+	// BaseURL is the public-facing base URL of the server (e.g. "http://localhost:8080").
+	// It is sent to MCP clients during the SSE handshake so they know where to POST messages.
+	BaseURL string
+
+	// BasePath is the URL path prefix where the MCP endpoints are mounted (e.g. "/mcp").
+	// If empty, the path is detected from each incoming request automatically.
+	BasePath string
+}
+
 // NewHandlerWithGORM creates a Handler backed by a GORM database connection.
-func NewHandlerWithGORM(db *gorm.DB) *Handler {
-	return NewHandler(database.NewGormAdapter(db), modelregistry.NewModelRegistry())
+func NewHandlerWithGORM(db *gorm.DB, cfg Config) *Handler {
+	return NewHandler(database.NewGormAdapter(db), modelregistry.NewModelRegistry(), cfg)
 }
 
 // NewHandlerWithBun creates a Handler backed by a Bun database connection.
-func NewHandlerWithBun(db *bun.DB) *Handler {
-	return NewHandler(database.NewBunAdapter(db), modelregistry.NewModelRegistry())
+func NewHandlerWithBun(db *bun.DB, cfg Config) *Handler {
+	return NewHandler(database.NewBunAdapter(db), modelregistry.NewModelRegistry(), cfg)
 }
 
 // NewHandlerWithDB creates a Handler using an existing common.Database and a new registry.
-func NewHandlerWithDB(db common.Database) *Handler {
-	return NewHandler(db, modelregistry.NewModelRegistry())
+func NewHandlerWithDB(db common.Database, cfg Config) *Handler {
+	return NewHandler(db, modelregistry.NewModelRegistry(), cfg)
 }
 
-// SetupMuxRoutes mounts the MCP HTTP/SSE endpoints on the given Gorilla Mux router.
-//
-// baseURL is the public-facing base URL of the server (e.g. "http://localhost:8080").
-// It is sent to MCP clients during the SSE handshake so they know where to POST messages.
+// SetupMuxRoutes mounts the MCP HTTP/SSE endpoints on the given Gorilla Mux router
+// using the base path from Config.BasePath (falls back to "/mcp" if empty).
 //
 // Two routes are registered:
-//   - GET  /mcp/sse     — SSE connection endpoint (client subscribes here)
-//   - POST /mcp/message — JSON-RPC message endpoint (client sends requests here)
+//   - GET  {basePath}/sse     — SSE connection endpoint (client subscribes here)
+//   - POST {basePath}/message — JSON-RPC message endpoint (client sends requests here)
 //
 // To protect these routes with authentication, wrap the mux router or apply middleware
 // before calling SetupMuxRoutes.
-func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, baseURL string) {
-	sseServer := server.NewSSEServer(
-		handler.mcpServer,
-		server.WithBaseURL(baseURL),
-		server.WithBasePath("/mcp"),
-	)
+func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
+	basePath := handler.config.BasePath
+	h := handler.SSEServer()
 
-	muxRouter.Handle("/mcp/sse", sseServer.SSEHandler()).Methods("GET", "OPTIONS")
-	muxRouter.Handle("/mcp/message", sseServer.MessageHandler()).Methods("POST", "OPTIONS")
+	muxRouter.Handle(basePath+"/sse", h).Methods("GET", "OPTIONS")
+	muxRouter.Handle(basePath+"/message", h).Methods("POST", "OPTIONS")
 
-	// Convenience: also expose the full SSE server at /mcp for clients that
+	// Convenience: also expose the full SSE server at basePath for clients that
 	// use ServeHTTP directly (e.g. net/http default mux).
-	muxRouter.PathPrefix("/mcp").Handler(http.StripPrefix("/mcp", sseServer))
+	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, h))
 }
 
-// NewSSEServer creates an *server.SSEServer that can be mounted manually,
-// useful when integrating with non-Mux routers or adding extra middleware.
+// SetupBunRouterRoutes mounts the MCP HTTP/SSE endpoints on a bunrouter router
+// using the base path from Config.BasePath.
 //
-//	sseServer := resolvemcp.NewSSEServer(handler, "http://localhost:8080", "/mcp")
-//	http.Handle("/mcp/", http.StripPrefix("/mcp", sseServer))
-func NewSSEServer(handler *Handler, baseURL, basePath string) *server.SSEServer {
-	return server.NewSSEServer(
-		handler.mcpServer,
-		server.WithBaseURL(baseURL),
-		server.WithBasePath(basePath),
-	)
-}
-
-// SetupBunRouterRoutes mounts the MCP HTTP/SSE endpoints on a bunrouter router.
-//
-// Two routes are registered under the given basePath prefix:
+// Two routes are registered:
 //   - GET  {basePath}/sse     — SSE connection endpoint
 //   - POST {basePath}/message — JSON-RPC message endpoint
-func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler, baseURL, basePath string) {
-	sseServer := server.NewSSEServer(
-		handler.mcpServer,
-		server.WithBaseURL(baseURL),
-		server.WithBasePath(basePath),
-	)
+func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler) {
+	basePath := handler.config.BasePath
+	h := handler.SSEServer()
 
-	router.GET(basePath+"/sse", bunrouter.HTTPHandler(sseServer.SSEHandler()))
-	router.POST(basePath+"/message", bunrouter.HTTPHandler(sseServer.MessageHandler()))
+	router.GET(basePath+"/sse", bunrouter.HTTPHandler(h))
+	router.POST(basePath+"/message", bunrouter.HTTPHandler(h))
+}
+
+// NewSSEServer returns an http.Handler that serves MCP over SSE.
+// If Config.BasePath is set it is used directly; otherwise the base path is
+// detected from each incoming request (by stripping the "/sse" or "/message" suffix).
+//
+//	h := resolvemcp.NewSSEServer(handler)
+//	http.Handle("/api/mcp/", h)
+func NewSSEServer(handler *Handler) http.Handler {
+	return handler.SSEServer()
 }

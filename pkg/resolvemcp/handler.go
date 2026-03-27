@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/server"
 
@@ -21,17 +23,19 @@ type Handler struct {
 	registry  common.ModelRegistry
 	hooks     *HookRegistry
 	mcpServer *server.MCPServer
+	config    Config
 	name      string
 	version   string
 }
 
-// NewHandler creates a Handler with the given database and model registry.
-func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
+// NewHandler creates a Handler with the given database, model registry, and config.
+func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *Handler {
 	return &Handler{
 		db:        db,
 		registry:  registry,
 		hooks:     NewHookRegistry(),
 		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0"),
+		config:    cfg,
 		name:      "resolvemcp",
 		version:   "1.0.0",
 	}
@@ -52,17 +56,61 @@ func (h *Handler) MCPServer() *server.MCPServer {
 	return h.mcpServer
 }
 
-// SSEServer creates an *server.SSEServer bound to this handler.
-// Use it to mount MCP on any HTTP framework that accepts http.Handler.
-//
-//	sse := handler.SSEServer("http://localhost:8080", "/mcp")
-//	ginEngine.Any("/mcp/*path", gin.WrapH(sse))
-func (h *Handler) SSEServer(baseURL, basePath string) *server.SSEServer {
+// SSEServer returns an http.Handler that serves MCP over SSE.
+// Config.BasePath must be set. Config.BaseURL is used when set; if empty it is
+// detected automatically from each incoming request.
+func (h *Handler) SSEServer() http.Handler {
+	if h.config.BaseURL != "" {
+		return h.newSSEServer(h.config.BaseURL, h.config.BasePath)
+	}
+	return &dynamicSSEHandler{h: h}
+}
+
+// newSSEServer creates a concrete *server.SSEServer for known baseURL and basePath values.
+func (h *Handler) newSSEServer(baseURL, basePath string) *server.SSEServer {
 	return server.NewSSEServer(
 		h.mcpServer,
 		server.WithBaseURL(baseURL),
 		server.WithBasePath(basePath),
 	)
+}
+
+// dynamicSSEHandler detects BaseURL from each request and delegates to a cached
+// *server.SSEServer per detected baseURL. Used when Config.BaseURL is empty.
+type dynamicSSEHandler struct {
+	h    *Handler
+	mu   sync.Mutex
+	pool map[string]*server.SSEServer
+}
+
+func (d *dynamicSSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	baseURL := requestBaseURL(r)
+
+	d.mu.Lock()
+	if d.pool == nil {
+		d.pool = make(map[string]*server.SSEServer)
+	}
+	s, ok := d.pool[baseURL]
+	if !ok {
+		s = d.h.newSSEServer(baseURL, d.h.config.BasePath)
+		d.pool[baseURL] = s
+	}
+	d.mu.Unlock()
+
+	s.ServeHTTP(w, r)
+}
+
+// requestBaseURL builds the base URL from an incoming request.
+// It honours the X-Forwarded-Proto header for deployments behind a proxy.
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	return scheme + "://" + r.Host
 }
 
 // RegisterModel registers a model and immediately exposes it as MCP tools and a resource.

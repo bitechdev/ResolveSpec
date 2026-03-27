@@ -30,22 +30,22 @@ const (
 
 // HookContext contains all the data available to a hook
 type HookContext struct {
-	Context   context.Context
-	Handler   *Handler
-	Schema    string
-	Entity    string
-	Model     interface{}
-	Options   common.RequestOptions
-	Operation string
-	ID        string
-	Data      interface{}
-	Result    interface{}
-	Error     error
-	Query     common.SelectQuery
-	Abort     bool
+	Context      context.Context
+	Handler      *Handler
+	Schema       string
+	Entity       string
+	Model        interface{}
+	Options      common.RequestOptions
+	Operation    string
+	ID           string
+	Data         interface{}
+	Result       interface{}
+	Error        error
+	Query        common.SelectQuery
+	Abort        bool
 	AbortMessage string
 	AbortCode    int
-	Tx        common.Database
+	Tx           common.Database
 }
 
 // HookFunc is the signature for hook functions

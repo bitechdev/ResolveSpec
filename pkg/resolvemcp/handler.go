@@ -52,6 +52,19 @@ func (h *Handler) MCPServer() *server.MCPServer {
 	return h.mcpServer
 }
 
+// SSEServer creates an *server.SSEServer bound to this handler.
+// Use it to mount MCP on any HTTP framework that accepts http.Handler.
+//
+//	sse := handler.SSEServer("http://localhost:8080", "/mcp")
+//	ginEngine.Any("/mcp/*path", gin.WrapH(sse))
+func (h *Handler) SSEServer(baseURL, basePath string) *server.SSEServer {
+	return server.NewSSEServer(
+		h.mcpServer,
+		server.WithBaseURL(baseURL),
+		server.WithBasePath(basePath),
+	)
+}
+
 // RegisterModel registers a model and immediately exposes it as MCP tools and a resource.
 func (h *Handler) RegisterModel(schema, entity string, model interface{}) error {
 	fullName := buildModelName(schema, entity)

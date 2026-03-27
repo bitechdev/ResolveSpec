@@ -21,6 +21,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/uptrace/bun"
+	bunrouter "github.com/uptrace/bunrouter"
 	"gorm.io/gorm"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
@@ -80,4 +81,20 @@ func NewSSEServer(handler *Handler, baseURL, basePath string) *server.SSEServer 
 		server.WithBaseURL(baseURL),
 		server.WithBasePath(basePath),
 	)
+}
+
+// SetupBunRouterRoutes mounts the MCP HTTP/SSE endpoints on a bunrouter router.
+//
+// Two routes are registered under the given basePath prefix:
+//   - GET  {basePath}/sse     — SSE connection endpoint
+//   - POST {basePath}/message — JSON-RPC message endpoint
+func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler, baseURL, basePath string) {
+	sseServer := server.NewSSEServer(
+		handler.mcpServer,
+		server.WithBaseURL(baseURL),
+		server.WithBasePath(basePath),
+	)
+
+	router.GET(basePath+"/sse", bunrouter.HTTPHandler(sseServer.SSEHandler()))
+	router.POST(basePath+"/message", bunrouter.HTTPHandler(sseServer.MessageHandler()))
 }

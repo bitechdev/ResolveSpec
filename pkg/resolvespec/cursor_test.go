@@ -20,7 +20,7 @@ func TestGetCursorFilter_Forward(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "title", "created_at", "user_id"}
 
-	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err != nil {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestGetCursorFilter_Backward(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "title", "created_at", "user_id"}
 
-	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err != nil {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestGetCursorFilter_NoCursor(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "title", "created_at"}
 
-	_, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	_, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err == nil {
 		t.Error("Expected error when no cursor is provided")
 	}
@@ -116,7 +116,7 @@ func TestGetCursorFilter_NoSort(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "title"}
 
-	_, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	_, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err == nil {
 		t.Error("Expected error when no sort columns are defined")
 	}
@@ -140,7 +140,7 @@ func TestGetCursorFilter_MultiColumnSort(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "title", "priority", "created_at"}
 
-	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err != nil {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestGetCursorFilter_WithSchemaPrefix(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "name", "email"}
 
-	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err != nil {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}
@@ -181,6 +181,37 @@ func TestGetCursorFilter_WithSchemaPrefix(t *testing.T) {
 	}
 
 	t.Logf("Generated cursor filter with schema: %s", filter)
+}
+
+func TestGetCursorFilter_LateralJoin(t *testing.T) {
+	lateralJoin := "inner join lateral  (\nselect string_agg(a.name, '.') as sortorder\nfrom tree(account.rid_account) r\ninner join account a on a.id = r.id\n) fn on true"
+
+	options := common.RequestOptions{
+		Sort:          []common.SortOption{{Column: "fn.sortorder", Direction: "ASC"}},
+		CursorForward: "8975",
+	}
+
+	tableName := "core.account"
+	pkName := "rid_account"
+	modelColumns := []string{"rid_account", "description", "pastelno"}
+	expandJoins := map[string]string{"fn": lateralJoin}
+
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, expandJoins)
+	if err != nil {
+		t.Fatalf("GetCursorFilter failed: %v", err)
+	}
+
+	t.Logf("Generated lateral cursor filter: %s", filter)
+
+	if !strings.Contains(filter, "cursor_select_fn") {
+		t.Errorf("Filter should reference cursor_select_fn alias, got: %s", filter)
+	}
+	if !strings.Contains(filter, "sortorder") {
+		t.Errorf("Filter should reference sortorder column, got: %s", filter)
+	}
+	if strings.Contains(filter, " <  ") || strings.Contains(filter, " >  ") {
+		t.Errorf("Filter should not contain empty comparison operators, got: %s", filter)
+	}
 }
 
 func TestGetActiveCursor(t *testing.T) {
@@ -288,18 +319,19 @@ func TestResolveColumn(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name:         "Joined column (not supported)",
+			name:         "Joined column (isJoin=true, no error)",
 			field:        "name",
 			prefix:       "user",
 			tableName:    "posts",
 			modelColumns: []string{"id", "title"},
-			wantErr:      true,
+			wantErr:      false,
+			// cursorCol and targetCol are empty when isJoin=true; handled by caller
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cursor, target, err := resolveColumn(tt.field, tt.prefix, tt.tableName, tt.modelColumns)
+			cursor, target, isJoin, err := resolveColumn(tt.field, tt.prefix, tt.tableName, tt.modelColumns)
 
 			if tt.wantErr {
 				if err == nil {
@@ -310,6 +342,14 @@ func TestResolveColumn(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			// For join columns, cursor/target are empty and isJoin=true
+			if isJoin {
+				if cursor != "" || target != "" {
+					t.Errorf("Expected empty cursor/target for join column, got %q / %q", cursor, target)
+				}
+				return
 			}
 
 			if cursor != tt.wantCursor {
@@ -362,7 +402,7 @@ func TestCursorFilter_SQL_Safety(t *testing.T) {
 	pkName := "id"
 	modelColumns := []string{"id", "created_at"}
 
-	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+	filter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 	if err != nil {
 		t.Fatalf("GetCursorFilter failed: %v", err)
 	}

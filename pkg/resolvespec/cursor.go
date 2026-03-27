@@ -24,6 +24,7 @@ const (
 //   - pkName: primary key column (e.g. "id")
 //   - modelColumns: optional list of valid main-table columns (for validation). Pass nil to skip.
 //   - options: the request options containing sort and cursor information
+//   - expandJoins: optional map[alias]string of JOIN clauses for join-column sort support
 //
 // Returns SQL snippet to embed in WHERE clause.
 func GetCursorFilter(
@@ -31,6 +32,7 @@ func GetCursorFilter(
 	pkName string,
 	modelColumns []string,
 	options common.RequestOptions,
+	expandJoins map[string]string,
 ) (string, error) {
 	// Separate schema prefix from bare table name
 	fullTableName := tableName
@@ -58,6 +60,7 @@ func GetCursorFilter(
 	// 3. Prepare
 	// --------------------------------------------------------------------- //
 	var whereClauses []string
+	joinSQL := ""
 	reverse := direction < 0
 
 	// --------------------------------------------------------------------- //
@@ -69,7 +72,7 @@ func GetCursorFilter(
 			continue
 		}
 
-		// Parse: "created_at", "user.name", etc.
+		// Parse: "created_at", "user.name", "fn.sortorder", etc.
 		parts := strings.Split(col, ".")
 		field := strings.TrimSpace(parts[len(parts)-1])
 		prefix := strings.Join(parts[:len(parts)-1], ".")
@@ -82,12 +85,28 @@ func GetCursorFilter(
 		}
 
 		// Resolve column
-		cursorCol, targetCol, err := resolveColumn(
+		cursorCol, targetCol, isJoin, err := resolveColumn(
 			field, prefix, tableName, modelColumns,
 		)
 		if err != nil {
 			logger.Warn("Skipping invalid sort column %q: %v", col, err)
 			continue
+		}
+
+		// Handle joins
+		if isJoin {
+			if expandJoins != nil {
+				if joinClause, ok := expandJoins[prefix]; ok {
+					jSQL, cRef := rewriteJoin(joinClause, tableName, prefix)
+					joinSQL = jSQL
+					cursorCol = cRef + "." + field
+					targetCol = prefix + "." + field
+				}
+			}
+			if cursorCol == "" {
+				logger.Warn("Skipping cursor sort column %q: join alias %q not in expandJoins", col, prefix)
+				continue
+			}
 		}
 
 		// Build inequality
@@ -113,10 +132,12 @@ func GetCursorFilter(
 	query := fmt.Sprintf(`EXISTS (
   SELECT 1
   FROM %s cursor_select
+  %s
   WHERE cursor_select.%s = %s
     AND (%s)
 )`,
 		fullTableName,
+		joinSQL,
 		pkName,
 		cursorID,
 		orSQL,
@@ -137,35 +158,44 @@ func getActiveCursor(options common.RequestOptions) (id string, direction Cursor
 	return "", 0
 }
 
-// Helper: resolve column (main table only for now)
+// Helper: resolve column (main table or join)
 func resolveColumn(
 	field, prefix, tableName string,
 	modelColumns []string,
-) (cursorCol, targetCol string, err error) {
+) (cursorCol, targetCol string, isJoin bool, err error) {
 
 	// JSON field
 	if strings.Contains(field, "->") {
-		return "cursor_select." + field, tableName + "." + field, nil
+		return "cursor_select." + field, tableName + "." + field, false, nil
 	}
 
 	// Main table column
 	if modelColumns != nil {
 		for _, col := range modelColumns {
 			if strings.EqualFold(col, field) {
-				return "cursor_select." + field, tableName + "." + field, nil
+				return "cursor_select." + field, tableName + "." + field, false, nil
 			}
 		}
 	} else {
 		// No validation → allow all main-table fields
-		return "cursor_select." + field, tableName + "." + field, nil
+		return "cursor_select." + field, tableName + "." + field, false, nil
 	}
 
-	// Joined column (not supported in resolvespec yet)
+	// Joined column
 	if prefix != "" && prefix != tableName {
-		return "", "", fmt.Errorf("joined columns not supported in cursor pagination: %s", field)
+		return "", "", true, nil
 	}
 
-	return "", "", fmt.Errorf("invalid column: %s", field)
+	return "", "", false, fmt.Errorf("invalid column: %s", field)
+}
+
+// Helper: rewrite JOIN clause for cursor subquery
+func rewriteJoin(joinClause, mainTable, alias string) (joinSQL, cursorAlias string) {
+	joinSQL = strings.ReplaceAll(joinClause, mainTable+".", "cursor_select.")
+	cursorAlias = "cursor_select_" + alias
+	joinSQL = strings.ReplaceAll(joinSQL, " "+alias+" ", " "+cursorAlias+" ")
+	joinSQL = strings.ReplaceAll(joinSQL, " "+alias+".", " "+cursorAlias+".")
+	return joinSQL, cursorAlias
 }
 
 // ------------------------------------------------------------------------- //

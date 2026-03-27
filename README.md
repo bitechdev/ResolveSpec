@@ -9,6 +9,7 @@ ResolveSpec is a flexible and powerful REST API specification and implementation
 3. **FuncSpec** - Header-based API to map and call API's to sql functions
 4. **WebSocketSpec** - Real-time bidirectional communication with full CRUD operations
 5. **MQTTSpec** - MQTT-based API ideal for IoT and mobile applications
+6. **ResolveMCP** - Model Context Protocol (MCP) server that exposes models as AI-consumable tools and resources over HTTP/SSE
 
 All share the same core architecture and provide dynamic data querying, relationship preloading, and complex filtering.
 
@@ -21,6 +22,7 @@ All share the same core architecture and provide dynamic data querying, relation
 * [Quick Start](#quick-start)
   * [ResolveSpec (Body-Based API)](#resolvespec---body-based-api)
   * [RestHeadSpec (Header-Based API)](#restheadspec---header-based-api)
+  * [ResolveMCP (MCP Server)](#resolvemcp---mcp-server)
 * [Architecture](#architecture)
 * [API Structure](#api-structure)
 * [RestHeadSpec Overview](#restheadspec-header-based-api)
@@ -49,6 +51,15 @@ All share the same core architecture and provide dynamic data querying, relation
 * **🆕 Router Flexible**: Integrates with Gorilla Mux, Gin, Echo, or custom routers
 * **🆕 Backward Compatible**: Existing code works without changes
 * **🆕 Better Testing**: Mockable interfaces for easy unit testing
+
+### ResolveMCP (v3.2+)
+
+* **🆕 MCP Server**: Expose any registered database model as Model Context Protocol tools and resources
+* **🆕 AI-Ready Descriptions**: Tool descriptions include the full column schema, primary key, nullable flags, and relations — giving AI models everything they need to query correctly without guessing
+* **🆕 Four Tools Per Model**: `read_`, `create_`, `update_`, `delete_` tools auto-registered per model
+* **🆕 Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
+* **🆕 HTTP/SSE Transport**: Standards-compliant SSE transport for use with Claude Desktop, Cursor, and any MCP-compatible client
+* **🆕 Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth and side-effects
 
 ### RestHeadSpec (v2.1+)
 
@@ -189,6 +200,40 @@ restheadspec.SetupMuxRoutes(router, handler, nil)
 ```
 
 For complete documentation, see [pkg/restheadspec/README.md](pkg/restheadspec/README.md).
+
+### ResolveMCP (MCP Server)
+
+ResolveMCP exposes registered models as Model Context Protocol tools so AI models (Claude, Cursor, etc.) can query and mutate your database directly:
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/resolvemcp"
+
+// Create handler
+handler := resolvemcp.NewHandlerWithGORM(db)
+
+// Register models — must be done BEFORE Build()
+handler.RegisterModel("public", "users", &User{})
+handler.RegisterModel("public", "posts", &Post{})
+
+// Finalize: registers MCP tools and resources
+handler.Build()
+
+// Mount SSE transport on your existing router
+router := mux.NewRouter()
+resolvemcp.SetupMuxRoutes(router, handler, "http://localhost:8080")
+
+// MCP clients connect to:
+//   SSE stream:  GET  http://localhost:8080/mcp/sse
+//   Messages:    POST http://localhost:8080/mcp/message
+//
+// Auto-registered tools per model:
+//   read_public_users   — filter, sort, paginate, preload
+//   create_public_users — insert a new record
+//   update_public_users — update a record by ID
+//   delete_public_users — delete a record by ID
+```
+
+For complete documentation, see [pkg/resolvemcp/README.md](pkg/resolvemcp/README.md) (if present) or the package source.
 
 ## Architecture
 
@@ -343,6 +388,19 @@ Alternative REST API where query options are passed via HTTP headers.
 - Ideal for GET requests and caching
 
 For complete documentation, see [pkg/restheadspec/README.md](pkg/restheadspec/README.md).
+
+#### ResolveMCP - MCP Server
+
+Expose any registered model as Model Context Protocol tools and resources consumable by AI models over HTTP/SSE.
+
+**Key Features**:
+- Four tools per model: `read_`, `create_`, `update_`, `delete_`
+- Rich AI-readable descriptions: column names, types, primary key, nullable flags, and preloadable relations
+- Full query support: filters, sort, limit/offset, cursor pagination, column selection, preloads
+- HTTP/SSE transport compatible with Claude Desktop, Cursor, and any MCP client
+- Same Before/After lifecycle hooks as ResolveSpec
+
+For complete documentation, see [pkg/resolvemcp/](pkg/resolvemcp/).
 
 #### FuncSpec - Function-Based SQL API
 
@@ -529,7 +587,18 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## What's New
 
-### v3.1 (Latest - February 2026)
+### v3.2 (Latest - March 2026)
+
+**ResolveMCP - Model Context Protocol Server (🆕)**:
+
+* **MCP Tools**: Four tools auto-registered per model (`read_`, `create_`, `update_`, `delete_`) over HTTP/SSE transport
+* **AI-Ready Descriptions**: Full column schema, primary key, nullable flags, and relation names surfaced in tool descriptions so AI models can query without guessing
+* **Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
+* **HTTP/SSE Transport**: Standards-compliant transport compatible with Claude Desktop, Cursor, and any MCP 2024-11-05 client
+* **Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth, auditing, and side-effects
+* **MCP Resources**: Each model also exposed as a named resource for direct data access by AI clients
+
+### v3.1 (February 2026)
 
 **SQLite Schema Translation (🆕)**:
 

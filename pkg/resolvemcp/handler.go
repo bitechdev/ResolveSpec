@@ -191,7 +191,8 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
 		}
 
-		cursorFilter, err := getCursorFilter(tableName, pkName, modelColumns, options)
+		// expandJoins is empty for resolvemcp — no custom SQL join support yet
+		cursorFilter, err := getCursorFilter(tableName, pkName, modelColumns, options, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("cursor error: %w", err)
 		}

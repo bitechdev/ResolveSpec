@@ -334,8 +334,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
 		}
 
-		// Get cursor filter SQL
-		cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options)
+		// Get cursor filter SQL (expandJoins is empty for resolvespec — no custom SQL join support yet)
+		cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
 		if err != nil {
 			logger.Error("Error building cursor filter: %v", err)
 			h.sendError(w, http.StatusBadRequest, "cursor_error", "Invalid cursor pagination", err)

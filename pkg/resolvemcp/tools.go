@@ -245,7 +245,7 @@ func registerReadTool(h *Handler, schema, entity string, info modelInfo) {
 
 	description := strings.Join(descParts, "\n\n")
 
-	filterDesc := fmt.Sprintf(`Array of filter objects. Example: [{"column":"status","operator":"=","value":"active"},{"column":"age","operator":">","value":18,"logic_operator":"AND"}]`)
+	filterDesc := `Array of filter objects. Example: [{"column":"status","operator":"=","value":"active"},{"column":"age","operator":">","value":18,"logic_operator":"AND"}]`
 	if len(info.columns) > 0 {
 		filterDesc += fmt.Sprintf(" Available columns: %s.", columnNameList(info.columns))
 	}
@@ -494,9 +494,9 @@ func registerModelResource(h *Handler, schema, entity string, info modelInfo) {
 	resourceURI := info.fullName
 
 	var resourceDesc strings.Builder
-	resourceDesc.WriteString(fmt.Sprintf("Database table: %s", info.fullName))
+	fmt.Fprintf(&resourceDesc, "Database table: %s", info.fullName)
 	if info.pkName != "" {
-		resourceDesc.WriteString(fmt.Sprintf(" (primary key: %s)", info.pkName))
+		fmt.Fprintf(&resourceDesc, " (primary key: %s)", info.pkName)
 	}
 	if info.schemaDoc != "" {
 		resourceDesc.WriteString("\n\n")

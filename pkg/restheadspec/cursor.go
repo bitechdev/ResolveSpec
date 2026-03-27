@@ -93,12 +93,18 @@ func (opts *ExtendedRequestOptions) GetCursorFilter(
 		}
 
 		// Handle joins
-		if isJoin && expandJoins != nil {
-			if joinClause, ok := expandJoins[prefix]; ok {
-				jSQL, cRef := rewriteJoin(joinClause, tableName, prefix)
-				joinSQL = jSQL
-				cursorCol = cRef + "." + field
-				targetCol = prefix + "." + field
+		if isJoin {
+			if expandJoins != nil {
+				if joinClause, ok := expandJoins[prefix]; ok {
+					jSQL, cRef := rewriteJoin(joinClause, tableName, prefix)
+					joinSQL = jSQL
+					cursorCol = cRef + "." + field
+					targetCol = prefix + "." + field
+				}
+			}
+			if cursorCol == "" {
+				logger.Warn("Skipping cursor sort column %q: join alias %q not in expandJoins", col, prefix)
+				continue
 			}
 		}
 

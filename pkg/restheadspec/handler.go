@@ -723,13 +723,15 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Extract model columns for validation using the generic database function
 		modelColumns := reflection.GetModelColumns(model)
 
-		// Build expand joins map (if needed in future)
-		var expandJoins map[string]string
-		if len(options.Expand) > 0 {
-			expandJoins = make(map[string]string)
-			// TODO: Build actual JOIN SQL for each expand relation
-			// For now, pass empty map as joins are handled via Preload
+		// Build expand joins map: custom SQL joins are available in cursor subquery
+		expandJoins := make(map[string]string)
+		for _, joinClause := range options.CustomSQLJoin {
+			alias := extractJoinAlias(joinClause)
+			if alias != "" {
+				expandJoins[alias] = joinClause
+			}
 		}
+		// TODO: also add Expand relation JOINs when those are built as SQL rather than Preload
 
 		// Default sort to primary key when none provided
 		if len(options.Sort) == 0 {

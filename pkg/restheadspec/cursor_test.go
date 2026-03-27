@@ -278,6 +278,47 @@ func TestCleanSortField(t *testing.T) {
 	}
 }
 
+func TestGetCursorFilter_LateralJoin(t *testing.T) {
+	lateralJoin := "inner join lateral  (\nselect string_agg(a.name, '.') as sortorder\nfrom tree(account.rid_account) r\ninner join account a on a.id = r.id\n) fn on true"
+
+	opts := &ExtendedRequestOptions{
+		RequestOptions: common.RequestOptions{
+			Sort: []common.SortOption{
+				{Column: "fn.sortorder", Direction: "ASC"},
+			},
+		},
+	}
+	opts.CursorForward = "8975"
+
+	tableName := "core.account"
+	pkName := "rid_account"
+	// modelColumns does not contain "sortorder" - it's a lateral join computed column
+	modelColumns := []string{"rid_account", "description", "pastelno"}
+	expandJoins := map[string]string{"fn": lateralJoin}
+
+	filter, err := opts.GetCursorFilter(tableName, pkName, modelColumns, expandJoins)
+	if err != nil {
+		t.Fatalf("GetCursorFilter failed: %v", err)
+	}
+
+	t.Logf("Generated lateral cursor filter: %s", filter)
+
+	// Should contain the rewritten lateral join inside the EXISTS subquery
+	if !strings.Contains(filter, "cursor_select_fn") {
+		t.Errorf("Filter should reference cursor_select_fn alias, got: %s", filter)
+	}
+
+	// Should compare fn.sortorder values
+	if !strings.Contains(filter, "sortorder") {
+		t.Errorf("Filter should reference sortorder column, got: %s", filter)
+	}
+
+	// Should NOT contain empty comparison like "< "
+	if strings.Contains(filter, " <  ") || strings.Contains(filter, " >  ") {
+		t.Errorf("Filter should not contain empty comparison operators, got: %s", filter)
+	}
+}
+
 func TestBuildPriorityChain(t *testing.T) {
 	clauses := []string{
 		"cursor_select.priority > posts.priority",

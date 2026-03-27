@@ -552,10 +552,8 @@ func (h *Handler) parseCustomSQLJoin(options *ExtendedRequestOptions, value stri
 //   - "LEFT JOIN departments d ON ..." -> "d"
 //   - "INNER JOIN users AS u ON ..." -> "u"
 //   - "JOIN roles r ON ..." -> "r"
+//   - "INNER JOIN LATERAL (...) fn ON true" -> "fn"
 func extractJoinAlias(joinClause string) string {
-	// Pattern: JOIN table_name [AS] alias ON ...
-	// We need to extract the alias (word before ON)
-
 	upperJoin := strings.ToUpper(joinClause)
 
 	// Find the "JOIN" keyword position
@@ -564,7 +562,20 @@ func extractJoinAlias(joinClause string) string {
 		return ""
 	}
 
-	// Find the "ON" keyword position
+	// Lateral joins: alias is the word after the closing ) and before ON
+	if strings.Contains(upperJoin, "LATERAL") {
+		lastClose := strings.LastIndex(joinClause, ")")
+		if lastClose != -1 {
+			words := strings.Fields(joinClause[lastClose+1:])
+			// words should be like ["fn", "on", "true"] or ["on", "true"]
+			if len(words) >= 1 && !strings.EqualFold(words[0], "on") {
+				return words[0]
+			}
+		}
+		return ""
+	}
+
+	// Regular joins: find the "ON" keyword position (first occurrence)
 	onIdx := strings.Index(upperJoin, " ON ")
 	if onIdx == -1 {
 		return ""

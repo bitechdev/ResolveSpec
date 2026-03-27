@@ -142,6 +142,16 @@ func TestExtractJoinAlias(t *testing.T) {
 			joinClause: "LEFT JOIN departments",
 			expected:   "",
 		},
+		{
+			name:       "LATERAL join with alias",
+			joinClause: "inner join lateral (select sortorder from compute_fn(t.id)) fn on true",
+			expected:   "fn",
+		},
+		{
+			name: "LATERAL join with multiline subquery containing inner ON",
+			joinClause: "inner join lateral  (\nselect string_agg(a.name, '.') as sortorder\nfrom tree(t.id) r\ninner join account a on a.id = r.id\n) fn on true",
+			expected:   "fn",
+		},
 	}
 
 	for _, tt := range tests {

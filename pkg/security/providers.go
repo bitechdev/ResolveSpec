@@ -58,8 +58,7 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 
 // DatabaseAuthenticator provides session-based authentication with database storage
 // All database operations go through stored procedures for security and consistency
-// Requires stored procedures: resolvespec_login, resolvespec_logout, resolvespec_session,
-// resolvespec_session_update, resolvespec_refresh_token
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 // See database_schema.sql for procedure definitions
 // Also supports multiple OAuth2 providers configured with WithOAuth2()
 // Also supports passkey authentication configured with WithPasskey()
@@ -67,6 +66,7 @@ type DatabaseAuthenticator struct {
 	db       *sql.DB
 	cache    *cache.Cache
 	cacheTTL time.Duration
+	sqlNames *SQLNames
 
 	// OAuth2 providers registry (multiple providers supported)
 	oauth2Providers      map[string]*OAuth2Provider
@@ -85,6 +85,9 @@ type DatabaseAuthenticatorOptions struct {
 	Cache *cache.Cache
 	// PasskeyProvider is an optional passkey provider for WebAuthn/FIDO2 authentication
 	PasskeyProvider PasskeyProvider
+	// SQLNames provides custom SQL procedure/function names. If nil, uses DefaultSQLNames().
+	// Partial overrides are supported: only set the fields you want to change.
+	SQLNames *SQLNames
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
@@ -103,10 +106,13 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 		cacheInstance = cache.GetDefaultCache()
 	}
 
+	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
+
 	return &DatabaseAuthenticator{
 		db:              db,
 		cache:           cacheInstance,
 		cacheTTL:        opts.CacheTTL,
+		sqlNames:        sqlNames,
 		passkeyProvider: opts.PasskeyProvider,
 	}
 }
@@ -118,12 +124,11 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 		return nil, fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
-	// Call resolvespec_login stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var dataJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_login($1::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Login)
 	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
@@ -153,12 +158,11 @@ func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterReques
 		return nil, fmt.Errorf("failed to marshal register request: %w", err)
 	}
 
-	// Call resolvespec_register stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var dataJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_register($1::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Register)
 	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return nil, fmt.Errorf("register query failed: %w", err)
@@ -187,12 +191,11 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 		return fmt.Errorf("failed to marshal logout request: %w", err)
 	}
 
-	// Call resolvespec_logout stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var dataJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_data::text FROM resolvespec_logout($1::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Logout)
 	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
@@ -266,7 +269,7 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 			var errorMsg sql.NullString
 			var userJSON sql.NullString
 
-			query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
+			query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2)`, a.sqlNames.Session)
 			err := a.db.QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON)
 			if err != nil {
 				return nil, fmt.Errorf("session query failed: %w", err)
@@ -338,24 +341,22 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 		return
 	}
 
-	// Call resolvespec_session_update stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var updatedUserJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session_update($1, $2::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2::jsonb)`, a.sqlNames.SessionUpdate)
 	_ = a.db.QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON)
 }
 
 // RefreshToken implements Refreshable interface
 func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken string) (*LoginResponse, error) {
-	// Call api_refresh_token stored procedure
 	// First, we need to get the current user context for the refresh token
 	var success bool
 	var errorMsg sql.NullString
 	var userJSON sql.NullString
 	// Get current session to pass to refresh
-	query := `SELECT p_success, p_error, p_user::text FROM resolvespec_session($1, $2)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2)`, a.sqlNames.Session)
 	err := a.db.QueryRowContext(ctx, query, refreshToken, "refresh").Scan(&success, &errorMsg, &userJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token query failed: %w", err)
@@ -368,12 +369,11 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 		return nil, fmt.Errorf("invalid refresh token")
 	}
 
-	// Call resolvespec_refresh_token to generate new token
 	var newSuccess bool
 	var newErrorMsg sql.NullString
 	var newUserJSON sql.NullString
 
-	refreshQuery := `SELECT p_success, p_error, p_user::text FROM resolvespec_refresh_token($1, $2::jsonb)`
+	refreshQuery := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2::jsonb)`, a.sqlNames.RefreshToken)
 	err = a.db.QueryRowContext(ctx, refreshQuery, refreshToken, userJSON).Scan(&newSuccess, &newErrorMsg, &newUserJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token generation failed: %w", err)
@@ -401,27 +401,28 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 
 // JWTAuthenticator provides JWT token-based authentication
 // All database operations go through stored procedures
-// Requires stored procedures: resolvespec_jwt_login, resolvespec_jwt_logout
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 // NOTE: JWT signing/verification requires github.com/golang-jwt/jwt/v5 to be installed and imported
 type JWTAuthenticator struct {
 	secretKey []byte
 	db        *sql.DB
+	sqlNames  *SQLNames
 }
 
-func NewJWTAuthenticator(secretKey string, db *sql.DB) *JWTAuthenticator {
+func NewJWTAuthenticator(secretKey string, db *sql.DB, names ...*SQLNames) *JWTAuthenticator {
 	return &JWTAuthenticator{
 		secretKey: []byte(secretKey),
 		db:        db,
+		sqlNames:  resolveSQLNames(names...),
 	}
 }
 
 func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
-	// Call resolvespec_jwt_login stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var userJSON []byte
 
-	query := `SELECT p_success, p_error, p_user FROM resolvespec_jwt_login($1, $2)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_user FROM %s($1, $2)`, a.sqlNames.JWTLogin)
 	err := a.db.QueryRowContext(ctx, query, req.Username, req.Password).Scan(&success, &errorMsg, &userJSON)
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
@@ -471,11 +472,10 @@ func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginR
 }
 
 func (a *JWTAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
-	// Call resolvespec_jwt_logout stored procedure
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_jwt_logout($1, $2)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2)`, a.sqlNames.JWTLogout)
 	err := a.db.QueryRowContext(ctx, query, req.Token, req.UserID).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
@@ -511,24 +511,24 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 
 // DatabaseColumnSecurityProvider loads column security from database
 // All database operations go through stored procedures
-// Requires stored procedure: resolvespec_column_security
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseColumnSecurityProvider struct {
-	db *sql.DB
+	db       *sql.DB
+	sqlNames *SQLNames
 }
 
-func NewDatabaseColumnSecurityProvider(db *sql.DB) *DatabaseColumnSecurityProvider {
-	return &DatabaseColumnSecurityProvider{db: db}
+func NewDatabaseColumnSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseColumnSecurityProvider {
+	return &DatabaseColumnSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
 }
 
 func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
 	var rules []ColumnSecurity
 
-	// Call resolvespec_column_security stored procedure
 	var success bool
 	var errorMsg sql.NullString
 	var rulesJSON []byte
 
-	query := `SELECT p_success, p_error, p_rules FROM resolvespec_column_security($1, $2, $3)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_rules FROM %s($1, $2, $3)`, p.sqlNames.ColumnSecurity)
 	err := p.db.QueryRowContext(ctx, query, userID, schema, table).Scan(&success, &errorMsg, &rulesJSON)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load column security: %w", err)
@@ -576,21 +576,21 @@ func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, 
 
 // DatabaseRowSecurityProvider loads row security from database
 // All database operations go through stored procedures
-// Requires stored procedure: resolvespec_row_security
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseRowSecurityProvider struct {
-	db *sql.DB
+	db       *sql.DB
+	sqlNames *SQLNames
 }
 
-func NewDatabaseRowSecurityProvider(db *sql.DB) *DatabaseRowSecurityProvider {
-	return &DatabaseRowSecurityProvider{db: db}
+func NewDatabaseRowSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseRowSecurityProvider {
+	return &DatabaseRowSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
 }
 
 func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
 	var template string
 	var hasBlock bool
 
-	// Call resolvespec_row_security stored procedure
-	query := `SELECT p_template, p_block FROM resolvespec_row_security($1, $2, $3)`
+	query := fmt.Sprintf(`SELECT p_template, p_block FROM %s($1, $2, $3)`, p.sqlNames.RowSecurity)
 
 	err := p.db.QueryRowContext(ctx, query, schema, table, userID).Scan(&template, &hasBlock)
 	if err != nil {
@@ -758,56 +758,47 @@ func (a *DatabaseAuthenticator) LoginWithPasskey(ctx context.Context, req Passke
 		return nil, fmt.Errorf("passkey authentication failed: %w", err)
 	}
 
-	// Get user data from database
-	var username, email, roles string
-	var userLevel int
-	query := `SELECT username, email, user_level, COALESCE(roles, '') FROM users WHERE id = $1 AND is_active = true`
-	err = a.db.QueryRowContext(ctx, query, userID).Scan(&username, &email, &userLevel, &roles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user data: %w", err)
+	// Build request JSON for passkey login stored procedure
+	reqData := map[string]any{
+		"user_id": userID,
 	}
-
-	// Generate session token
-	sessionToken := "sess_" + generateRandomString(32) + "_" + fmt.Sprintf("%d", time.Now().Unix())
-	expiresAt := time.Now().Add(24 * time.Hour)
-
-	// Extract IP and user agent from claims
-	ipAddress := ""
-	userAgent := ""
 	if req.Claims != nil {
 		if ip, ok := req.Claims["ip_address"].(string); ok {
-			ipAddress = ip
+			reqData["ip_address"] = ip
 		}
 		if ua, ok := req.Claims["user_agent"].(string); ok {
-			userAgent = ua
+			reqData["user_agent"] = ua
 		}
 	}
 
-	// Create session
-	insertQuery := `INSERT INTO user_sessions (session_token, user_id, expires_at, ip_address, user_agent, last_activity_at)
-		VALUES ($1, $2, $3, $4, $5, now())`
-	_, err = a.db.ExecContext(ctx, insertQuery, sessionToken, userID, expiresAt, ipAddress, userAgent)
+	reqJSON, err := json.Marshal(reqData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create session: %w", err)
+		return nil, fmt.Errorf("failed to marshal passkey login request: %w", err)
 	}
 
-	// Update last login
-	updateQuery := `UPDATE users SET last_login_at = now() WHERE id = $1`
-	_, _ = a.db.ExecContext(ctx, updateQuery, userID)
+	var success bool
+	var errorMsg sql.NullString
+	var dataJSON sql.NullString
 
-	// Return login response
-	return &LoginResponse{
-		Token: sessionToken,
-		User: &UserContext{
-			UserID:    userID,
-			UserName:  username,
-			Email:     email,
-			UserLevel: userLevel,
-			SessionID: sessionToken,
-			Roles:     parseRoles(roles),
-		},
-		ExpiresIn: int64(24 * time.Hour.Seconds()),
-	}, nil
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.PasskeyLogin)
+	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	if err != nil {
+		return nil, fmt.Errorf("passkey login query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("passkey login failed")
+	}
+
+	var response LoginResponse
+	if err := json.Unmarshal([]byte(dataJSON.String), &response); err != nil {
+		return nil, fmt.Errorf("failed to parse passkey login response: %w", err)
+	}
+
+	return &response, nil
 }
 
 // GetPasskeyCredentials returns all passkey credentials for a user

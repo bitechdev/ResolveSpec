@@ -244,10 +244,10 @@ func (a *DatabaseAuthenticator) oauth2GetOrCreateUser(ctx context.Context, userC
 	var errMsg *string
 	var userID *int
 
-	err = a.db.QueryRowContext(ctx, `
-		SELECT p_success, p_error, p_user_id 
-		FROM resolvespec_oauth_getorcreateuser($1::jsonb)
-	`, userJSON).Scan(&success, &errMsg, &userID)
+	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT p_success, p_error, p_user_id
+		FROM %s($1::jsonb)
+	`, a.sqlNames.OAuthGetOrCreateUser), userJSON).Scan(&success, &errMsg, &userID)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to get or create user: %w", err)
@@ -287,10 +287,10 @@ func (a *DatabaseAuthenticator) oauth2CreateSession(ctx context.Context, session
 	var success bool
 	var errMsg *string
 
-	err = a.db.QueryRowContext(ctx, `
-		SELECT p_success, p_error 
-		FROM resolvespec_oauth_createsession($1::jsonb)
-	`, sessionJSON).Scan(&success, &errMsg)
+	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT p_success, p_error
+		FROM %s($1::jsonb)
+	`, a.sqlNames.OAuthCreateSession), sessionJSON).Scan(&success, &errMsg)
 
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
@@ -385,10 +385,10 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var errMsg *string
 	var sessionData []byte
 
-	err = a.db.QueryRowContext(ctx, `
+	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error, p_data::text
-		FROM resolvespec_oauth_getrefreshtoken($1)
-	`, refreshToken).Scan(&success, &errMsg, &sessionData)
+		FROM %s($1)
+	`, a.sqlNames.OAuthGetRefreshToken), refreshToken).Scan(&success, &errMsg, &sessionData)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session by refresh token: %w", err)
@@ -451,10 +451,10 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var updateSuccess bool
 	var updateErrMsg *string
 
-	err = a.db.QueryRowContext(ctx, `
+	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error
-		FROM resolvespec_oauth_updaterefreshtoken($1::jsonb)
-	`, updateJSON).Scan(&updateSuccess, &updateErrMsg)
+		FROM %s($1::jsonb)
+	`, a.sqlNames.OAuthUpdateRefreshToken), updateJSON).Scan(&updateSuccess, &updateErrMsg)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to update session: %w", err)
@@ -472,10 +472,10 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var userErrMsg *string
 	var userData []byte
 
-	err = a.db.QueryRowContext(ctx, `
+	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error, p_data::text
-		FROM resolvespec_oauth_getuser($1)
-	`, session.UserID).Scan(&userSuccess, &userErrMsg, &userData)
+		FROM %s($1)
+	`, a.sqlNames.OAuthGetUser), session.UserID).Scan(&userSuccess, &userErrMsg, &userData)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user data: %w", err)

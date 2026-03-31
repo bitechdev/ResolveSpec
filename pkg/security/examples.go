@@ -135,12 +135,6 @@ func (a *JWTAuthenticatorExample) Login(ctx context.Context, req LoginRequest) (
 }
 
 func (a *JWTAuthenticatorExample) Logout(ctx context.Context, req LogoutRequest) error {
-	// For JWT, logout could involve token blacklisting
-	// Add token to blacklist table
-	// err := a.db.WithContext(ctx).Table("token_blacklist").Create(map[string]interface{}{
-	//     "token":      req.Token,
-	//     "expires_at": time.Now().Add(24 * time.Hour),
-	// }).Error
 	return nil
 }
 

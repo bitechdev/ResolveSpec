@@ -9,23 +9,23 @@ import (
 )
 
 // DatabaseTwoFactorProvider implements TwoFactorAuthProvider using PostgreSQL stored procedures
-// Requires stored procedures: resolvespec_totp_enable, resolvespec_totp_disable,
-// resolvespec_totp_get_status, resolvespec_totp_get_secret,
-// resolvespec_totp_regenerate_backup_codes, resolvespec_totp_validate_backup_code
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 // See totp_database_schema.sql for procedure definitions
 type DatabaseTwoFactorProvider struct {
-	db      *sql.DB
-	totpGen *TOTPGenerator
+	db       *sql.DB
+	totpGen  *TOTPGenerator
+	sqlNames *SQLNames
 }
 
 // NewDatabaseTwoFactorProvider creates a new database-backed 2FA provider
-func NewDatabaseTwoFactorProvider(db *sql.DB, config *TwoFactorConfig) *DatabaseTwoFactorProvider {
+func NewDatabaseTwoFactorProvider(db *sql.DB, config *TwoFactorConfig, names ...*SQLNames) *DatabaseTwoFactorProvider {
 	if config == nil {
 		config = DefaultTwoFactorConfig()
 	}
 	return &DatabaseTwoFactorProvider{
-		db:      db,
-		totpGen: NewTOTPGenerator(config),
+		db:       db,
+		totpGen:  NewTOTPGenerator(config),
+		sqlNames: resolveSQLNames(names...),
 	}
 }
 
@@ -76,7 +76,7 @@ func (p *DatabaseTwoFactorProvider) Enable2FA(userID int, secret string, backupC
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_totp_enable($1, $2, $3::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2, $3::jsonb)`, p.sqlNames.TOTPEnable)
 	err = p.db.QueryRow(query, userID, secret, string(codesJSON)).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("enable 2FA query failed: %w", err)
@@ -97,7 +97,7 @@ func (p *DatabaseTwoFactorProvider) Disable2FA(userID int) error {
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_totp_disable($1)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1)`, p.sqlNames.TOTPDisable)
 	err := p.db.QueryRow(query, userID).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("disable 2FA query failed: %w", err)
@@ -119,7 +119,7 @@ func (p *DatabaseTwoFactorProvider) Get2FAStatus(userID int) (bool, error) {
 	var errorMsg sql.NullString
 	var enabled bool
 
-	query := `SELECT p_success, p_error, p_enabled FROM resolvespec_totp_get_status($1)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_enabled FROM %s($1)`, p.sqlNames.TOTPGetStatus)
 	err := p.db.QueryRow(query, userID).Scan(&success, &errorMsg, &enabled)
 	if err != nil {
 		return false, fmt.Errorf("get 2FA status query failed: %w", err)
@@ -141,7 +141,7 @@ func (p *DatabaseTwoFactorProvider) Get2FASecret(userID int) (string, error) {
 	var errorMsg sql.NullString
 	var secret sql.NullString
 
-	query := `SELECT p_success, p_error, p_secret FROM resolvespec_totp_get_secret($1)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_secret FROM %s($1)`, p.sqlNames.TOTPGetSecret)
 	err := p.db.QueryRow(query, userID).Scan(&success, &errorMsg, &secret)
 	if err != nil {
 		return "", fmt.Errorf("get 2FA secret query failed: %w", err)
@@ -185,7 +185,7 @@ func (p *DatabaseTwoFactorProvider) GenerateBackupCodes(userID int, count int) (
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_totp_regenerate_backup_codes($1, $2::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2::jsonb)`, p.sqlNames.TOTPRegenerateBackup)
 	err = p.db.QueryRow(query, userID, string(codesJSON)).Scan(&success, &errorMsg)
 	if err != nil {
 		return nil, fmt.Errorf("regenerate backup codes query failed: %w", err)
@@ -212,7 +212,7 @@ func (p *DatabaseTwoFactorProvider) ValidateBackupCode(userID int, code string) 
 	var errorMsg sql.NullString
 	var valid bool
 
-	query := `SELECT p_success, p_error, p_valid FROM resolvespec_totp_validate_backup_code($1, $2)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_valid FROM %s($1, $2)`, p.sqlNames.TOTPValidateBackupCode)
 	err := p.db.QueryRow(query, userID, codeHash).Scan(&success, &errorMsg, &valid)
 	if err != nil {
 		return false, fmt.Errorf("validate backup code query failed: %w", err)

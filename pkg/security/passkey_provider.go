@@ -11,12 +11,14 @@ import (
 )
 
 // DatabasePasskeyProvider implements PasskeyProvider using database storage
+// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabasePasskeyProvider struct {
 	db       *sql.DB
 	rpID     string // Relying Party ID (domain)
 	rpName   string // Relying Party display name
 	rpOrigin string // Expected origin for WebAuthn
 	timeout  int64  // Timeout in milliseconds (default: 60000)
+	sqlNames *SQLNames
 }
 
 // DatabasePasskeyProviderOptions configures the passkey provider
@@ -29,6 +31,8 @@ type DatabasePasskeyProviderOptions struct {
 	RPOrigin string
 	// Timeout is the timeout for operations in milliseconds (default: 60000)
 	Timeout int64
+	// SQLNames provides custom SQL procedure/function names. If nil, uses DefaultSQLNames().
+	SQLNames *SQLNames
 }
 
 // NewDatabasePasskeyProvider creates a new database-backed passkey provider
@@ -37,12 +41,15 @@ func NewDatabasePasskeyProvider(db *sql.DB, opts DatabasePasskeyProviderOptions)
 		opts.Timeout = 60000 // 60 seconds default
 	}
 
+	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
+
 	return &DatabasePasskeyProvider{
 		db:       db,
 		rpID:     opts.RPID,
 		rpName:   opts.RPName,
 		rpOrigin: opts.RPOrigin,
 		timeout:  opts.Timeout,
+		sqlNames: sqlNames,
 	}
 }
 
@@ -132,7 +139,7 @@ func (p *DatabasePasskeyProvider) CompleteRegistration(ctx context.Context, user
 	var errorMsg sql.NullString
 	var credentialID sql.NullInt64
 
-	query := `SELECT p_success, p_error, p_credential_id FROM resolvespec_passkey_store_credential($1::jsonb)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_credential_id FROM %s($1::jsonb)`, p.sqlNames.PasskeyStoreCredential)
 	err = p.db.QueryRowContext(ctx, query, string(credJSON)).Scan(&success, &errorMsg, &credentialID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store credential: %w", err)
@@ -173,7 +180,7 @@ func (p *DatabasePasskeyProvider) BeginAuthentication(ctx context.Context, usern
 		var userID sql.NullInt64
 		var credentialsJSON sql.NullString
 
-		query := `SELECT p_success, p_error, p_user_id, p_credentials::text FROM resolvespec_passkey_get_credentials_by_username($1)`
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_user_id, p_credentials::text FROM %s($1)`, p.sqlNames.PasskeyGetCredsByUsername)
 		err := p.db.QueryRowContext(ctx, query, username).Scan(&success, &errorMsg, &userID, &credentialsJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get credentials: %w", err)
@@ -233,7 +240,7 @@ func (p *DatabasePasskeyProvider) CompleteAuthentication(ctx context.Context, re
 	var errorMsg sql.NullString
 	var credentialJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_credential::text FROM resolvespec_passkey_get_credential($1)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_credential::text FROM %s($1)`, p.sqlNames.PasskeyGetCredential)
 	err := p.db.QueryRowContext(ctx, query, response.RawID).Scan(&success, &errorMsg, &credentialJSON)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get credential: %w", err)
@@ -264,7 +271,7 @@ func (p *DatabasePasskeyProvider) CompleteAuthentication(ctx context.Context, re
 	var updateError sql.NullString
 	var cloneWarning sql.NullBool
 
-	updateQuery := `SELECT p_success, p_error, p_clone_warning FROM resolvespec_passkey_update_counter($1, $2)`
+	updateQuery := fmt.Sprintf(`SELECT p_success, p_error, p_clone_warning FROM %s($1, $2)`, p.sqlNames.PasskeyUpdateCounter)
 	err = p.db.QueryRowContext(ctx, updateQuery, response.RawID, newCounter).Scan(&updateSuccess, &updateError, &cloneWarning)
 	if err != nil {
 		return 0, fmt.Errorf("failed to update counter: %w", err)
@@ -283,7 +290,7 @@ func (p *DatabasePasskeyProvider) GetCredentials(ctx context.Context, userID int
 	var errorMsg sql.NullString
 	var credentialsJSON sql.NullString
 
-	query := `SELECT p_success, p_error, p_credentials::text FROM resolvespec_passkey_get_user_credentials($1)`
+	query := fmt.Sprintf(`SELECT p_success, p_error, p_credentials::text FROM %s($1)`, p.sqlNames.PasskeyGetUserCredentials)
 	err := p.db.QueryRowContext(ctx, query, userID).Scan(&success, &errorMsg, &credentialsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get credentials: %w", err)
@@ -362,7 +369,7 @@ func (p *DatabasePasskeyProvider) DeleteCredential(ctx context.Context, userID i
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_passkey_delete_credential($1, $2)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2)`, p.sqlNames.PasskeyDeleteCredential)
 	err = p.db.QueryRowContext(ctx, query, userID, credID).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("failed to delete credential: %w", err)
@@ -388,7 +395,7 @@ func (p *DatabasePasskeyProvider) UpdateCredentialName(ctx context.Context, user
 	var success bool
 	var errorMsg sql.NullString
 
-	query := `SELECT p_success, p_error FROM resolvespec_passkey_update_name($1, $2, $3)`
+	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2, $3)`, p.sqlNames.PasskeyUpdateName)
 	err = p.db.QueryRowContext(ctx, query, userID, credID, name).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("failed to update credential name: %w", err)

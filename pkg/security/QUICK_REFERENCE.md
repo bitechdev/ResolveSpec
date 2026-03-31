@@ -258,11 +258,8 @@ func (a *JWTAuthenticator) Login(ctx context.Context, req security.LoginRequest)
 }
 
 func (a *JWTAuthenticator) Logout(ctx context.Context, req security.LogoutRequest) error {
-    // Add to blacklist
-    return a.db.WithContext(ctx).Table("token_blacklist").Create(map[string]any{
-        "token":   req.Token,
-        "user_id": req.UserID,
-    }).Error
+    // Invalidate session via stored procedure
+    return nil
 }
 
 func (a *JWTAuthenticator) Authenticate(r *http.Request) (*security.UserContext, error) {

@@ -26,6 +26,7 @@ type Connection interface {
 	Bun() (*bun.DB, error)
 	GORM() (*gorm.DB, error)
 	Native() (*sql.DB, error)
+	DB() (*sql.DB, error)
 
 	// Common Database interface (for SQL databases)
 	Database() (common.Database, error)
@@ -222,6 +223,11 @@ func (c *sqlConnection) Native() (*sql.DB, error) {
 
 	c.nativeDB = db
 	return c.nativeDB, nil
+}
+
+// DB returns the underlying *sql.DB connection
+func (c *sqlConnection) DB() (*sql.DB, error) {
+	return c.Native()
 }
 
 // Bun returns a Bun ORM instance wrapping the native connection
@@ -642,6 +648,11 @@ func (c *mongoConnection) GORM() (*gorm.DB, error) {
 
 // Native returns an error for MongoDB connections
 func (c *mongoConnection) Native() (*sql.DB, error) {
+	return nil, ErrNotSQLDatabase
+}
+
+// DB returns an error for MongoDB connections
+func (c *mongoConnection) DB() (*sql.DB, error) {
 	return nil, ErrNotSQLDatabase
 }
 

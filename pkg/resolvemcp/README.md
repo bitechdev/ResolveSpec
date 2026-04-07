@@ -119,6 +119,83 @@ Add middleware before the MCP routes. The handler itself has no auth layer.
 
 ---
 
+## Security
+
+`resolvemcp` integrates with the `security` package to provide per-entity access control, row-level security, and column-level security — the same system used by `resolvespec` and `restheadspec`.
+
+### Wiring security hooks
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/security"
+
+securityList := security.NewSecurityList(mySecurityProvider)
+resolvemcp.RegisterSecurityHooks(handler, securityList)
+```
+
+Call `RegisterSecurityHooks` **once**, after creating the handler and before registering models. It installs these controls automatically:
+
+| Hook | Effect |
+|---|---|
+| `BeforeHandle` | Enforces per-entity operation rules (see below) |
+| `BeforeRead` | Loads RLS/CLS rules, then injects a user-scoped WHERE clause |
+| `AfterRead` | Masks/hides columns per column-security rules; writes audit log |
+| `BeforeUpdate` | Blocks update if `CanUpdate` is false |
+| `BeforeDelete` | Blocks delete if `CanDelete` is false |
+
+### Per-entity operation rules
+
+Use `RegisterModelWithRules` instead of `RegisterModel` to set access rules at registration time:
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+
+// Read-only entity
+handler.RegisterModelWithRules("public", "audit_logs", &AuditLog{}, modelregistry.ModelRules{
+    CanRead:   true,
+    CanCreate: false,
+    CanUpdate: false,
+    CanDelete: false,
+})
+
+// Public read, authenticated write
+handler.RegisterModelWithRules("public", "products", &Product{}, modelregistry.ModelRules{
+    CanPublicRead: true,
+    CanRead:       true,
+    CanCreate:     true,
+    CanUpdate:     true,
+    CanDelete:     false,
+})
+```
+
+To update rules for an already-registered model:
+
+```go
+handler.SetModelRules("public", "users", modelregistry.ModelRules{
+    CanRead:   true,
+    CanCreate: true,
+    CanUpdate: true,
+    CanDelete: false,
+})
+```
+
+`RegisterModel` (no rules) registers with all-allowed defaults (`CanRead/Create/Update/Delete = true`).
+
+### ModelRules fields
+
+| Field | Default | Description |
+|---|---|---|
+| `CanPublicRead` | `false` | Allow unauthenticated reads |
+| `CanPublicCreate` | `false` | Allow unauthenticated creates |
+| `CanPublicUpdate` | `false` | Allow unauthenticated updates |
+| `CanPublicDelete` | `false` | Allow unauthenticated deletes |
+| `CanRead` | `true` | Allow authenticated reads |
+| `CanCreate` | `true` | Allow authenticated creates |
+| `CanUpdate` | `true` | Allow authenticated updates |
+| `CanDelete` | `true` | Allow authenticated deletes |
+| `SecurityDisabled` | `false` | Skip all security checks for this model |
+
+---
+
 ## MCP Tools
 
 ### Tool Naming
@@ -203,6 +280,35 @@ Delete a record by primary key. **Irreversible.**
 ```json
 { "success": true, "data": { ...deleted record... } }
 ```
+
+### Annotation Tool — `resolvespec_annotate`
+
+Store or retrieve freeform annotation records for any tool, model, or entity. Registered automatically on every handler.
+
+| Argument | Type | Description |
+|---|---|---|
+| `tool_name` | string (required) | Key to annotate — an MCP tool name (e.g. `read_public_users`), a model name (e.g. `public.users`), or any other identifier. |
+| `annotations` | object | Annotation data to persist. Omit to retrieve existing annotations instead. |
+
+**Set annotations** (calls `resolvespec_set_annotation(tool_name, annotations)`):
+```json
+{ "tool_name": "read_public_users", "annotations": { "description": "Returns active users", "owner": "platform-team" } }
+```
+**Response:**
+```json
+{ "success": true, "tool_name": "read_public_users", "action": "set" }
+```
+
+**Get annotations** (calls `resolvespec_get_annotation(tool_name)`):
+```json
+{ "tool_name": "read_public_users" }
+```
+**Response:**
+```json
+{ "success": true, "tool_name": "read_public_users", "action": "get", "annotations": { ... } }
+```
+
+---
 
 ### Resource — `{schema}.{entity}`
 

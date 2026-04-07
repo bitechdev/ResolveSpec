@@ -14,6 +14,7 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
@@ -30,7 +31,7 @@ type Handler struct {
 
 // NewHandler creates a Handler with the given database, model registry, and config.
 func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:        db,
 		registry:  registry,
 		hooks:     NewHookRegistry(),
@@ -39,6 +40,8 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		name:      "resolvemcp",
 		version:   "1.0.0",
 	}
+	registerAnnotationTool(h)
+	return h
 }
 
 // Hooks returns the hook registry.
@@ -121,6 +124,32 @@ func (h *Handler) RegisterModel(schema, entity string, model interface{}) error 
 	}
 	registerModelTools(h, schema, entity, model)
 	return nil
+}
+
+// RegisterModelWithRules registers a model and sets per-entity operation rules
+// (CanRead, CanCreate, CanUpdate, CanDelete, CanPublic*, SecurityDisabled).
+// Requires RegisterSecurityHooks to have been called for the rules to be enforced.
+func (h *Handler) RegisterModelWithRules(schema, entity string, model interface{}, rules modelregistry.ModelRules) error {
+	reg, ok := h.registry.(*modelregistry.DefaultModelRegistry)
+	if !ok {
+		return fmt.Errorf("resolvemcp: registry does not support model rules (use NewHandlerWithGORM/Bun/DB)")
+	}
+	fullName := buildModelName(schema, entity)
+	if err := reg.RegisterModelWithRules(fullName, model, rules); err != nil {
+		return err
+	}
+	registerModelTools(h, schema, entity, model)
+	return nil
+}
+
+// SetModelRules updates the operation rules for an already-registered model.
+// Requires RegisterSecurityHooks to have been called for the rules to be enforced.
+func (h *Handler) SetModelRules(schema, entity string, rules modelregistry.ModelRules) error {
+	reg, ok := h.registry.(*modelregistry.DefaultModelRegistry)
+	if !ok {
+		return fmt.Errorf("resolvemcp: registry does not support model rules (use NewHandlerWithGORM/Bun/DB)")
+	}
+	return reg.SetModelRules(buildModelName(schema, entity), rules)
 }
 
 // buildModelName builds the registry key for a model (same format as resolvespec).

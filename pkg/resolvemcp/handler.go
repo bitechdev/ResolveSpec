@@ -82,7 +82,7 @@ func (h *Handler) newSSEServer(baseURL, basePath string) *server.SSEServer {
 	return server.NewSSEServer(
 		h.mcpServer,
 		server.WithBaseURL(baseURL),
-		server.WithBasePath(basePath),
+		server.WithStaticBasePath(basePath),
 	)
 }
 

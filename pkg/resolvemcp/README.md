@@ -142,9 +142,137 @@ e.Any("/mcp", echo.WrapHandler(h))     // Echo
 
 ---
 
-### Authentication
+## OAuth2 Authentication
 
-Add middleware before the MCP routes. The handler itself has no auth layer.
+`resolvemcp` ships a full **MCP-standard OAuth2 authorization server** (`pkg/security.OAuthServer`) that MCP clients (Claude Desktop, Cursor, etc.) can discover and use automatically.
+
+It can operate as:
+- **Its own identity provider** — shows a login form, validates via `DatabaseAuthenticator.Login()`
+- **An OAuth2 federation layer** — delegates to external providers (Google, GitHub, Microsoft, etc.)
+- **Both simultaneously**
+
+### Standard endpoints served
+
+| Path | Spec | Purpose |
+|---|---|---|
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 | MCP client auto-discovery |
+| `POST /oauth/register` | RFC 7591 | Dynamic client registration |
+| `GET /oauth/authorize` | OAuth 2.1 + PKCE | Start login (form or provider redirect) |
+| `POST /oauth/authorize` | — | Login form submission |
+| `POST /oauth/token` | OAuth 2.1 | Auth code → Bearer token exchange |
+| `POST /oauth/token` (refresh) | OAuth 2.1 | Refresh token rotation |
+| `GET /oauth/provider/callback` | Internal | External provider redirect target |
+
+MCP clients send `Authorization: Bearer <token>` on all subsequent requests.
+
+---
+
+### Mode 1 — Direct login (server as identity provider)
+
+```go
+import "github.com/bitechdev/ResolveSpec/pkg/security"
+
+db, _ := sql.Open("postgres", dsn)
+auth := security.NewDatabaseAuthenticator(db)
+
+handler := resolvemcp.NewHandlerWithGORM(gormDB, resolvemcp.Config{
+    BaseURL:  "https://api.example.com",
+    BasePath: "/mcp",
+})
+
+// Enable the OAuth2 server — auth enables the login form
+handler.EnableOAuthServer(security.OAuthServerConfig{
+    Issuer: "https://api.example.com",
+}, auth)
+
+provider, _ := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
+securityList, _ := security.NewSecurityList(provider)
+security.RegisterSecurityHooks(handler, securityList)
+
+http.ListenAndServe(":8080", handler.HTTPHandler(securityList))
+```
+
+MCP client flow:
+1. Discovers server at `/.well-known/oauth-authorization-server`
+2. Registers itself at `/oauth/register`
+3. Redirects user to `/oauth/authorize` → login form appears
+4. On submit, exchanges code at `/oauth/token` → receives `Authorization: Bearer` token
+5. Uses token on all MCP tool calls
+
+---
+
+### Mode 2 — External provider (Google, GitHub, etc.)
+
+The `RedirectURL` in the provider config must point to `/oauth/provider/callback` on this server.
+
+```go
+auth := security.NewDatabaseAuthenticator(db).WithOAuth2(security.OAuth2Config{
+    ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+    ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+    RedirectURL:  "https://api.example.com/oauth/provider/callback",
+    Scopes:       []string{"openid", "profile", "email"},
+    AuthURL:      "https://accounts.google.com/o/oauth2/auth",
+    TokenURL:     "https://oauth2.googleapis.com/token",
+    UserInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
+    ProviderName: "google",
+})
+
+// nil = no password login; Google handles auth
+handler.EnableOAuthServer(security.OAuthServerConfig{
+    Issuer: "https://api.example.com",
+}, nil)
+handler.RegisterOAuth2Provider(auth, "google")
+```
+
+---
+
+### Mode 3 — Both (login form + external providers)
+
+```go
+handler.EnableOAuthServer(security.OAuthServerConfig{
+    Issuer:     "https://api.example.com",
+    LoginTitle: "My App Login",
+}, auth) // auth enables the username/password form
+
+handler.RegisterOAuth2Provider(googleAuth, "google")
+handler.RegisterOAuth2Provider(githubAuth, "github")
+```
+
+When external providers are registered they take priority; the login form is used as fallback when no providers are configured.
+
+---
+
+### Using `security.OAuthServer` standalone
+
+The authorization server lives in `pkg/security` and can be used with any HTTP framework independently of `resolvemcp`:
+
+```go
+oauthSrv := security.NewOAuthServer(security.OAuthServerConfig{
+    Issuer: "https://api.example.com",
+}, auth)
+oauthSrv.RegisterExternalProvider(googleAuth, "google")
+
+mux := http.NewServeMux()
+mux.Handle("/", oauthSrv.HTTPHandler())   // mounts all OAuth2 routes
+mux.Handle("/mcp/", myMCPHandler)
+http.ListenAndServe(":8080", mux)
+```
+
+---
+
+### Cookie-based flow (legacy)
+
+For simple setups without full MCP OAuth2 compliance, use the legacy helpers that set a session cookie after external provider login:
+
+```go
+resolvemcp.SetupMuxOAuth2Routes(r, auth, resolvemcp.OAuth2RouteConfig{
+    ProviderName:       "google",
+    LoginPath:          "/auth/google/login",
+    CallbackPath:       "/auth/google/callback",
+    AfterLoginRedirect: "/",
+})
+resolvemcp.SetupMuxRoutesWithAuth(r, handler, securityList)
+```
 
 ---
 

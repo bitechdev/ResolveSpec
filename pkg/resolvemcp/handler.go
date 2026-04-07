@@ -69,6 +69,14 @@ func (h *Handler) SSEServer() http.Handler {
 	return &dynamicSSEHandler{h: h}
 }
 
+// StreamableHTTPServer returns an http.Handler that serves MCP over the streamable HTTP transport.
+// Unlike SSE (which requires two endpoints), streamable HTTP uses a single endpoint for all
+// client-server communication (POST for requests, GET for server-initiated messages).
+// Mount the returned handler at the desired path; the path itself becomes the MCP endpoint.
+func (h *Handler) StreamableHTTPServer() http.Handler {
+	return server.NewStreamableHTTPServer(h.mcpServer)
+}
+
 // newSSEServer creates a concrete *server.SSEServer for known baseURL and basePath values.
 func (h *Handler) newSSEServer(baseURL, basePath string) *server.SSEServer {
 	return server.NewSSEServer(

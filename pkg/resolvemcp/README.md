@@ -67,51 +67,80 @@ Each call immediately creates four MCP **tools** and one MCP **resource** for th
 
 ---
 
-## HTTP / SSE Transport
-
-The `*server.SSEServer` returned by any of the helpers below implements `http.Handler`, so it works with every Go HTTP framework.
+## HTTP Transports
 
 `Config.BasePath` is required and used for all route registration.
 `Config.BaseURL` is optional — when empty it is detected from each request.
 
-### Gorilla Mux
+Two transports are supported: **SSE** (legacy, two-endpoint) and **Streamable HTTP** (recommended, single-endpoint).
+
+---
+
+### SSE Transport
+
+Two endpoints: `GET {BasePath}/sse` (subscribe) + `POST {BasePath}/message` (send).
+
+#### Gorilla Mux
 
 ```go
 resolvemcp.SetupMuxRoutes(r, handler)
 ```
 
-Registers:
-
 | Route | Method | Description |
 |---|---|---|
 | `{BasePath}/sse` | GET | SSE connection — clients subscribe here |
 | `{BasePath}/message` | POST | JSON-RPC — clients send requests here |
-| `{BasePath}/*` | any | Full SSE server (convenience prefix) |
 
-### bunrouter
+#### bunrouter
 
 ```go
 resolvemcp.SetupBunRouterRoutes(router, handler)
 ```
 
-Registers `GET {BasePath}/sse` and `POST {BasePath}/message` on the provided `*bunrouter.Router`.
-
-### Gin (or any `http.Handler`-compatible framework)
-
-Use `handler.SSEServer()` to get an `http.Handler` and wrap it with the framework's adapter:
+#### Gin / net/http / Echo
 
 ```go
 sse := handler.SSEServer()
 
-// Gin
-engine.Any("/mcp/*path", gin.WrapH(sse))
-
-// net/http
-http.Handle("/mcp/", sse)
-
-// Echo
-e.Any("/mcp/*", echo.WrapHandler(sse))
+engine.Any("/mcp/*path", gin.WrapH(sse))  // Gin
+http.Handle("/mcp/", sse)                  // net/http
+e.Any("/mcp/*", echo.WrapHandler(sse))     // Echo
 ```
+
+---
+
+### Streamable HTTP Transport
+
+Single endpoint at `{BasePath}`. Handles POST (client→server) and GET (server→client streaming). Preferred for new integrations.
+
+#### Gorilla Mux
+
+```go
+resolvemcp.SetupMuxStreamableHTTPRoutes(r, handler)
+```
+
+Mounts the handler at `{BasePath}` (all methods).
+
+#### bunrouter
+
+```go
+resolvemcp.SetupBunRouterStreamableHTTPRoutes(router, handler)
+```
+
+Registers GET, POST, DELETE on `{BasePath}`.
+
+#### Gin / net/http / Echo
+
+```go
+h := handler.StreamableHTTPServer()
+// or: h := resolvemcp.NewStreamableHTTPHandler(handler)
+
+engine.Any("/mcp", gin.WrapH(h))      // Gin
+http.Handle("/mcp", h)                 // net/http
+e.Any("/mcp", echo.WrapHandler(h))     // Echo
+```
+
+---
 
 ### Authentication
 

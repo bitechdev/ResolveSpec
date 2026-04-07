@@ -3,6 +3,7 @@ package providers_test
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/dbmanager"
@@ -29,14 +30,14 @@ func ExamplePostgresListener_basic() {
 	ctx := context.Background()
 
 	if err := provider.Connect(ctx, cfg); err != nil {
-		panic(fmt.Sprintf("Failed to connect: %v", err))
+		log.Fatalf("Failed to connect: %v", err)
 	}
 	defer provider.Close()
 
 	// Get listener
 	listener, err := provider.GetListener(ctx)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to get listener: %v", err))
+		log.Fatalf("Failed to get listener: %v", err)
 	}
 
 	// Subscribe to a channel with a handler
@@ -44,13 +45,13 @@ func ExamplePostgresListener_basic() {
 		fmt.Printf("Received notification on %s: %s\n", channel, payload)
 	})
 	if err != nil {
-		panic(fmt.Sprintf("Failed to listen: %v", err))
+		log.Fatalf("Failed to listen: %v", err)
 	}
 
 	// Send a notification
 	err = listener.Notify(ctx, "user_events", `{"event":"user_created","user_id":123}`)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to notify: %v", err))
+		log.Fatalf("Failed to notify: %v", err)
 	}
 
 	// Wait for notification to be processed
@@ -58,7 +59,7 @@ func ExamplePostgresListener_basic() {
 
 	// Unsubscribe from the channel
 	if err := listener.Unlisten("user_events"); err != nil {
-		panic(fmt.Sprintf("Failed to unlisten: %v", err))
+		log.Fatalf("Failed to unlisten: %v", err)
 	}
 }
 
@@ -80,13 +81,13 @@ func ExamplePostgresListener_multipleChannels() {
 	ctx := context.Background()
 
 	if err := provider.Connect(ctx, cfg); err != nil {
-		panic(fmt.Sprintf("Failed to connect: %v", err))
+		log.Fatalf("Failed to connect: %v", err)
 	}
 	defer provider.Close()
 
 	listener, err := provider.GetListener(ctx)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to get listener: %v", err))
+		log.Fatalf("Failed to get listener: %v", err)
 	}
 
 	// Listen to multiple channels
@@ -97,7 +98,7 @@ func ExamplePostgresListener_multipleChannels() {
 			fmt.Printf("[%s] %s\n", ch, payload)
 		})
 		if err != nil {
-			panic(fmt.Sprintf("Failed to listen on %s: %v", channel, err))
+			log.Fatalf("Failed to listen on %s: %v", channel, err)
 		}
 	}
 
@@ -140,14 +141,14 @@ func ExamplePostgresListener_withDBManager() {
 
 	provider := providers.NewPostgresProvider()
 	if err := provider.Connect(ctx, cfg); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	defer provider.Close()
 
 	// Get listener
 	listener, err := provider.GetListener(ctx)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Subscribe to application events
@@ -186,13 +187,13 @@ func ExamplePostgresListener_errorHandling() {
 	ctx := context.Background()
 
 	if err := provider.Connect(ctx, cfg); err != nil {
-		panic(fmt.Sprintf("Failed to connect: %v", err))
+		log.Fatalf("Failed to connect: %v", err)
 	}
 	defer provider.Close()
 
 	listener, err := provider.GetListener(ctx)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to get listener: %v", err))
+		log.Fatalf("Failed to get listener: %v", err)
 	}
 
 	// The listener automatically reconnects if the connection is lost

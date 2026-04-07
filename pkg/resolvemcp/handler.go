@@ -197,8 +197,19 @@ func (h *Handler) getSchemaAndTable(defaultSchema, entity string, model interfac
 	return defaultSchema, entity
 }
 
+// recoverPanic catches a panic from the current goroutine and returns it as an error.
+// Usage: defer recoverPanic(&returnedErr)
+func recoverPanic(err *error) {
+	if r := recover(); r != nil {
+		msg := fmt.Sprintf("%v", r)
+		logger.Error("[resolvemcp] panic recovered: %s", msg)
+		*err = fmt.Errorf("internal error: %s", msg)
+	}
+}
+
 // executeRead reads records from the database and returns raw data + metadata.
-func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, options common.RequestOptions) (interface{}, *common.Metadata, error) {
+func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, options common.RequestOptions) (_ interface{}, _ *common.Metadata, retErr error) {
+	defer recoverPanic(&retErr)
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
 		return nil, nil, fmt.Errorf("model not found: %w", err)
@@ -254,15 +265,6 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 		query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
 	}
 
-	// Preloads
-	if len(options.Preload) > 0 {
-		var err error
-		query, err = h.applyPreloads(model, query, options.Preload)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to apply preloads: %w", err)
-		}
-	}
-
 	// Filters
 	query = h.applyFilters(query, options.Filters)
 
@@ -304,7 +306,7 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 		}
 	}
 
-	// Count
+	// Count — must happen before preloads are applied; Bun panics when counting with relations.
 	total, err := query.Count(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error counting records: %w", err)
@@ -316,6 +318,15 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 	}
 	if options.Offset != nil && *options.Offset > 0 {
 		query = query.Offset(*options.Offset)
+	}
+
+	// Preloads — applied after count to avoid Bun panic when counting with relations.
+	if len(options.Preload) > 0 {
+		var preloadErr error
+		query, preloadErr = h.applyPreloads(model, query, options.Preload)
+		if preloadErr != nil {
+			return nil, nil, fmt.Errorf("failed to apply preloads: %w", preloadErr)
+		}
 	}
 
 	// BeforeRead hook
@@ -378,7 +389,8 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 }
 
 // executeCreate inserts one or more records.
-func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data interface{}) (interface{}, error) {
+func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data interface{}) (_ interface{}, retErr error) {
+	defer recoverPanic(&retErr)
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
 		return nil, fmt.Errorf("model not found: %w", err)
@@ -462,7 +474,8 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 }
 
 // executeUpdate updates a record by ID.
-func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, data interface{}) (interface{}, error) {
+func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, data interface{}) (_ interface{}, retErr error) {
+	defer recoverPanic(&retErr)
 	model, err := h.registry.GetModelByEntity(schema, entity)
 	if err != nil {
 		return nil, fmt.Errorf("model not found: %w", err)
@@ -572,7 +585,8 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 }
 
 // executeDelete deletes a record by ID.
-func (h *Handler) executeDelete(ctx context.Context, schema, entity, id string) (interface{}, error) {
+func (h *Handler) executeDelete(ctx context.Context, schema, entity, id string) (_ interface{}, retErr error) {
+	defer recoverPanic(&retErr)
 	if id == "" {
 		return nil, fmt.Errorf("delete requires an ID")
 	}

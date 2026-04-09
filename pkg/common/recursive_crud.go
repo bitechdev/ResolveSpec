@@ -227,7 +227,6 @@ func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, mode
 	return filteredData
 }
 
-
 // injectForeignKeys injects parent IDs into data for foreign key fields.
 // data is expected to be keyed by DB column names (as returned by filterValidFields).
 func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, modelType reflect.Type, parentIDs map[string]interface{}) {

@@ -244,7 +244,7 @@ func (a *DatabaseAuthenticator) oauth2GetOrCreateUser(ctx context.Context, userC
 	var errMsg *string
 	var userID *int
 
-	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error, p_user_id
 		FROM %s($1::jsonb)
 	`, a.sqlNames.OAuthGetOrCreateUser), userJSON).Scan(&success, &errMsg, &userID)
@@ -287,7 +287,7 @@ func (a *DatabaseAuthenticator) oauth2CreateSession(ctx context.Context, session
 	var success bool
 	var errMsg *string
 
-	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error
 		FROM %s($1::jsonb)
 	`, a.sqlNames.OAuthCreateSession), sessionJSON).Scan(&success, &errMsg)
@@ -385,7 +385,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var errMsg *string
 	var sessionData []byte
 
-	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error, p_data::text
 		FROM %s($1)
 	`, a.sqlNames.OAuthGetRefreshToken), refreshToken).Scan(&success, &errMsg, &sessionData)
@@ -451,7 +451,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var updateSuccess bool
 	var updateErrMsg *string
 
-	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error
 		FROM %s($1::jsonb)
 	`, a.sqlNames.OAuthUpdateRefreshToken), updateJSON).Scan(&updateSuccess, &updateErrMsg)
@@ -472,7 +472,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	var userErrMsg *string
 	var userData []byte
 
-	err = a.db.QueryRowContext(ctx, fmt.Sprintf(`
+	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT p_success, p_error, p_data::text
 		FROM %s($1)
 	`, a.sqlNames.OAuthGetUser), session.UserID).Scan(&userSuccess, &userErrMsg, &userData)

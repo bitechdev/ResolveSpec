@@ -74,7 +74,7 @@ func (h *Handler) newSSEServer(baseURL, basePath string) *server.SSEServer {
 	return server.NewSSEServer(
 		h.mcpServer,
 		server.WithBaseURL(baseURL),
-		server.WithBasePath(basePath),
+		server.WithStaticBasePath(basePath),
 	)
 }
 
@@ -695,7 +695,7 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 	return query.Where("("+strings.Join(conditions, " OR ")+")", args...)
 }
 
-func (h *Handler) buildFilterCondition(filter common.FilterOption) (string, []interface{}) {
+func (h *Handler) buildFilterCondition(filter common.FilterOption) (condition string, args []interface{}) {
 	switch filter.Operator {
 	case "eq", "=":
 		return fmt.Sprintf("%s = ?", filter.Column), []interface{}{filter.Value}
@@ -725,7 +725,8 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (string, []in
 }
 
 func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, preloads []common.PreloadOption) (common.SelectQuery, error) {
-	for _, preload := range preloads {
+	for i := range preloads {
+		preload := &preloads[i]
 		if preload.Relation == "" {
 			continue
 		}

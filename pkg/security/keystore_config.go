@@ -81,7 +81,8 @@ func (s *ConfigKeyStore) GetUserKeys(_ context.Context, userID int, keyType KeyT
 	defer s.mu.RUnlock()
 
 	var result []UserKey
-	for _, k := range s.keys {
+	for i := range s.keys {
+		k := &s.keys[i]
 		if k.UserID != userID || !k.IsActive {
 			continue
 		}
@@ -91,7 +92,7 @@ func (s *ConfigKeyStore) GetUserKeys(_ context.Context, userID int, keyType KeyT
 		if keyType != "" && k.KeyType != keyType {
 			continue
 		}
-		result = append(result, k)
+		result = append(result, *k)
 	}
 	return result, nil
 }

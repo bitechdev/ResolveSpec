@@ -98,8 +98,8 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		}
 	}
 
-	// Filter regularData to only include fields that exist in the model
-	// Use MapToStruct to validate and filter fields
+	// Filter regularData to only include fields that exist in the model,
+	// and translate JSON keys to their actual database column names.
 	regularData = p.filterValidFields(regularData, model)
 
 	// Inject parent IDs for foreign key resolution
@@ -191,14 +191,15 @@ func (p *NestedCUDProcessor) extractCRUDRequest(data map[string]interface{}) str
 	return ""
 }
 
-// filterValidFields filters input data to only include fields that exist in the model
-// Uses reflection.MapToStruct to validate fields and extract only those that match the model
+// filterValidFields filters input data to only include fields that exist in the model,
+// and translates JSON key names to their actual database column names.
+// For example, a field tagged `json:"_changed_date" bun:"changed_date"` will be
+// included in the result as "changed_date", not "_changed_date".
 func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, model interface{}) map[string]interface{} {
 	if len(data) == 0 {
 		return data
 	}
 
-	// Create a new instance of the model to use with MapToStruct
 	modelType := reflect.TypeOf(model)
 	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
@@ -208,25 +209,16 @@ func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, mode
 		return data
 	}
 
-	// Create a new instance of the model
-	tempModel := reflect.New(modelType).Interface()
+	// Build a mapping from JSON key -> DB column name for all writable fields.
+	// This both validates which fields belong to the model and translates their names
+	// to the correct column names for use in SQL insert/update queries.
+	jsonToDBCol := reflection.BuildJSONToDBColumnMap(modelType)
 
-	// Use MapToStruct to map the data - this will only map valid fields
-	err := reflection.MapToStruct(data, tempModel)
-	if err != nil {
-		logger.Debug("Error mapping data to model: %v", err)
-		return data
-	}
-
-	// Extract the mapped fields back into a map
-	// This effectively filters out any fields that don't exist in the model
 	filteredData := make(map[string]interface{})
-	tempModelValue := reflect.ValueOf(tempModel).Elem()
-
 	for key, value := range data {
-		// Check if the field was successfully mapped
-		if fieldWasMapped(tempModelValue, modelType, key) {
-			filteredData[key] = value
+		dbColName, exists := jsonToDBCol[key]
+		if exists {
+			filteredData[dbColName] = value
 		} else {
 			logger.Debug("Skipping invalid field '%s' - not found in model %v", key, modelType)
 		}
@@ -235,72 +227,8 @@ func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, mode
 	return filteredData
 }
 
-// fieldWasMapped checks if a field with the given key was mapped to the model
-func fieldWasMapped(modelValue reflect.Value, modelType reflect.Type, key string) bool {
-	// Look for the field by JSON tag or field name
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-
-		// Skip unexported fields
-		if !field.IsExported() {
-			continue
-		}
-
-		// Check JSON tag
-		jsonTag := field.Tag.Get("json")
-		if jsonTag != "" && jsonTag != "-" {
-			parts := strings.Split(jsonTag, ",")
-			if len(parts) > 0 && parts[0] == key {
-				return true
-			}
-		}
-
-		// Check bun tag
-		bunTag := field.Tag.Get("bun")
-		if bunTag != "" && bunTag != "-" {
-			if colName := reflection.ExtractColumnFromBunTag(bunTag); colName == key {
-				return true
-			}
-		}
-
-		// Check gorm tag
-		gormTag := field.Tag.Get("gorm")
-		if gormTag != "" && gormTag != "-" {
-			if colName := reflection.ExtractColumnFromGormTag(gormTag); colName == key {
-				return true
-			}
-		}
-
-		// Check lowercase field name
-		if strings.EqualFold(field.Name, key) {
-			return true
-		}
-
-		// Handle embedded structs recursively
-		if field.Anonymous {
-			fieldType := field.Type
-			if fieldType.Kind() == reflect.Ptr {
-				fieldType = fieldType.Elem()
-			}
-			if fieldType.Kind() == reflect.Struct {
-				embeddedValue := modelValue.Field(i)
-				if embeddedValue.Kind() == reflect.Ptr {
-					if embeddedValue.IsNil() {
-						continue
-					}
-					embeddedValue = embeddedValue.Elem()
-				}
-				if fieldWasMapped(embeddedValue, fieldType, key) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// injectForeignKeys injects parent IDs into data for foreign key fields
+// injectForeignKeys injects parent IDs into data for foreign key fields.
+// data is expected to be keyed by DB column names (as returned by filterValidFields).
 func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, modelType reflect.Type, parentIDs map[string]interface{}) {
 	if len(parentIDs) == 0 {
 		return
@@ -319,10 +247,11 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 			if strings.EqualFold(jsonName, parentKey+"_id") ||
 				strings.EqualFold(jsonName, parentKey+"id") ||
 				strings.EqualFold(field.Name, parentKey+"ID") {
-				// Only inject if not already present
-				if _, exists := data[jsonName]; !exists {
-					logger.Debug("Injecting foreign key: %s = %v", jsonName, parentID)
-					data[jsonName] = parentID
+				// Use the DB column name as the key, since data is keyed by DB column names
+				dbColName := reflection.GetColumnName(field)
+				if _, exists := data[dbColName]; !exists {
+					logger.Debug("Injecting foreign key: %s = %v", dbColName, parentID)
+					data[dbColName] = parentID
 				}
 			}
 		}

@@ -4,10 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )
+
+// isDBClosed reports whether err indicates the *sql.DB has been closed.
+func isDBClosed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "sql: database is closed")
+}
 
 // Common errors
 var (

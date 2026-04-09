@@ -196,6 +196,92 @@ func collectColumnsFromType(typ reflect.Type, columns *[]string) {
 	}
 }
 
+// GetColumnName extracts the database column name from a struct field.
+// Priority: bun tag -> gorm tag -> json tag -> lowercase field name.
+// This is the exported version for use by other packages.
+func GetColumnName(field reflect.StructField) string {
+	return getColumnNameFromField(field)
+}
+
+// BuildJSONToDBColumnMap returns a map from JSON key names to database column names
+// for the given model type. Only writable, non-relation fields are included.
+// This is used to translate incoming request data (keyed by JSON names) into
+// properly named database columns before insert/update operations.
+func BuildJSONToDBColumnMap(modelType reflect.Type) map[string]string {
+	result := make(map[string]string)
+	buildJSONToDBMap(modelType, result, false)
+	return result
+}
+
+func buildJSONToDBMap(modelType reflect.Type, result map[string]string, scanOnly bool) {
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		bunTag := field.Tag.Get("bun")
+		gormTag := field.Tag.Get("gorm")
+
+		// Handle embedded structs
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			isScanOnly := scanOnly
+			if bunTag != "" && isBunFieldScanOnly(bunTag) {
+				isScanOnly = true
+			}
+			if ft.Kind() == reflect.Struct {
+				buildJSONToDBMap(ft, result, isScanOnly)
+				continue
+			}
+		}
+
+		if scanOnly {
+			continue
+		}
+
+		// Skip explicitly excluded fields
+		if bunTag == "-" || gormTag == "-" {
+			continue
+		}
+
+		// Skip scan-only fields
+		if bunTag != "" && isBunFieldScanOnly(bunTag) {
+			continue
+		}
+
+		// Skip bun relation fields
+		if bunTag != "" && (strings.Contains(bunTag, "rel:") || strings.Contains(bunTag, "join:") || strings.Contains(bunTag, "m2m:")) {
+			continue
+		}
+
+		// Skip gorm relation fields
+		if gormTag != "" && (strings.Contains(gormTag, "foreignKey:") || strings.Contains(gormTag, "references:") || strings.Contains(gormTag, "many2many:")) {
+			continue
+		}
+
+		// Get JSON key (how the field appears in incoming request data)
+		jsonKey := ""
+		if jsonTag := field.Tag.Get("json"); jsonTag != "" && jsonTag != "-" {
+			parts := strings.Split(jsonTag, ",")
+			if len(parts) > 0 && parts[0] != "" {
+				jsonKey = parts[0]
+			}
+		}
+		if jsonKey == "" {
+			jsonKey = strings.ToLower(field.Name)
+		}
+
+		// Get the actual DB column name (bun > gorm > json > field name)
+		dbColName := getColumnNameFromField(field)
+
+		result[jsonKey] = dbColName
+	}
+}
+
 // getColumnNameFromField extracts the column name from a struct field
 // Priority: bun tag -> gorm tag -> json tag -> lowercase field name
 func getColumnNameFromField(field reflect.StructField) string {

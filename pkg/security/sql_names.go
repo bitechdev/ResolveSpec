@@ -54,6 +54,13 @@ type SQLNames struct {
 	OAuthUpdateRefreshToken string // default: "resolvespec_oauth_updaterefreshtoken"
 	OAuthGetUser            string // default: "resolvespec_oauth_getuser"
 
+	// OAuth2 server procedures (OAuthServer persistence)
+	OAuthRegisterClient string // default: "resolvespec_oauth_register_client"
+	OAuthGetClient      string // default: "resolvespec_oauth_get_client"
+	OAuthSaveCode       string // default: "resolvespec_oauth_save_code"
+	OAuthExchangeCode   string // default: "resolvespec_oauth_exchange_code"
+	OAuthIntrospect     string // default: "resolvespec_oauth_introspect"
+	OAuthRevoke         string // default: "resolvespec_oauth_revoke"
 }
 
 // DefaultSQLNames returns an SQLNames with all default resolvespec_* values.
@@ -93,6 +100,13 @@ func DefaultSQLNames() *SQLNames {
 		OAuthGetRefreshToken:    "resolvespec_oauth_getrefreshtoken",
 		OAuthUpdateRefreshToken: "resolvespec_oauth_updaterefreshtoken",
 		OAuthGetUser:            "resolvespec_oauth_getuser",
+
+		OAuthRegisterClient: "resolvespec_oauth_register_client",
+		OAuthGetClient:      "resolvespec_oauth_get_client",
+		OAuthSaveCode:       "resolvespec_oauth_save_code",
+		OAuthExchangeCode:   "resolvespec_oauth_exchange_code",
+		OAuthIntrospect:     "resolvespec_oauth_introspect",
+		OAuthRevoke:         "resolvespec_oauth_revoke",
 	}
 }
 
@@ -190,6 +204,24 @@ func MergeSQLNames(base, override *SQLNames) *SQLNames {
 	}
 	if override.OAuthGetUser != "" {
 		merged.OAuthGetUser = override.OAuthGetUser
+	}
+	if override.OAuthRegisterClient != "" {
+		merged.OAuthRegisterClient = override.OAuthRegisterClient
+	}
+	if override.OAuthGetClient != "" {
+		merged.OAuthGetClient = override.OAuthGetClient
+	}
+	if override.OAuthSaveCode != "" {
+		merged.OAuthSaveCode = override.OAuthSaveCode
+	}
+	if override.OAuthExchangeCode != "" {
+		merged.OAuthExchangeCode = override.OAuthExchangeCode
+	}
+	if override.OAuthIntrospect != "" {
+		merged.OAuthIntrospect = override.OAuthIntrospect
+	}
+	if override.OAuthRevoke != "" {
+		merged.OAuthRevoke = override.OAuthRevoke
 	}
 	return &merged
 }

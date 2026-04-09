@@ -12,6 +12,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 - ✅ **Testable** - Easy to mock and test
 - ✅ **Extensible** - Implement custom providers for your needs
 - ✅ **Stored Procedures** - All database operations use PostgreSQL stored procedures for security and maintainability
+- ✅ **OAuth2 Authorization Server** - Built-in OAuth 2.1 + PKCE server (RFC 8414, 7591, 7009, 7662) with login form and external provider federation
 
 ## Stored Procedure Architecture
 
@@ -38,6 +39,12 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 | `resolvespec_jwt_logout` | JWT token blacklist | JWTAuthenticator |
 | `resolvespec_column_security` | Load column rules | DatabaseColumnSecurityProvider |
 | `resolvespec_row_security` | Load row templates | DatabaseRowSecurityProvider |
+| `resolvespec_oauth_register_client` | Persist OAuth2 client (RFC 7591) | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_oauth_get_client` | Retrieve OAuth2 client by ID | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_oauth_save_code` | Persist authorization code | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_oauth_exchange_code` | Consume authorization code (single-use) | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_oauth_introspect` | Token introspection (RFC 7662) | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_oauth_revoke` | Token revocation (RFC 7009) | OAuthServer / DatabaseAuthenticator |
 
 See `database_schema.sql` for complete stored procedure definitions and examples.
 
@@ -895,6 +902,156 @@ securityList := security.SetupSecurityProvider(handler, provider)
 ```go
 securityList := security.NewSecurityList(provider)
 restheadspec.RegisterSecurityHooks(handler, securityList) // or funcspec/resolvespec
+```
+
+## OAuth2 Authorization Server
+
+`OAuthServer` is a generic OAuth 2.1 + PKCE authorization server. It is not tied to any spec — `pkg/resolvemcp` uses it, but it can be used standalone with any `http.ServeMux`.
+
+### Endpoints
+
+| Method | Path | RFC |
+|--------|------|-----|
+| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414 — server metadata |
+| `POST` | `/oauth/register` | RFC 7591 — dynamic client registration |
+| `GET` | `/oauth/authorize` | OAuth 2.1 — start authorization / provider selection |
+| `POST` | `/oauth/authorize` | OAuth 2.1 — login form submission |
+| `POST` | `/oauth/token` | OAuth 2.1 — code exchange + refresh |
+| `POST` | `/oauth/revoke` | RFC 7009 — token revocation |
+| `POST` | `/oauth/introspect` | RFC 7662 — token introspection |
+| `GET` | `{ProviderCallbackPath}` | External provider redirect target |
+
+### Config
+
+```go
+cfg := security.OAuthServerConfig{
+    Issuer:               "https://example.com",      // Required — token issuer URL
+    ProviderCallbackPath: "/oauth/provider/callback", // External provider redirect target
+    LoginTitle:           "My App Login",             // HTML login page title
+    PersistClients:       true,  // Store clients in DB (multi-instance safe)
+    PersistCodes:         true,  // Store codes in DB (multi-instance safe)
+    DefaultScopes:        []string{"openid", "profile"}, // Returned when no scope requested
+    AccessTokenTTL:       time.Hour,
+    AuthCodeTTL:          5 * time.Minute,
+}
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `Issuer` | — | Required; trailing slash is trimmed automatically |
+| `ProviderCallbackPath` | `/oauth/provider/callback` | |
+| `LoginTitle` | `"Sign in"` | |
+| `PersistClients` | `false` | Set `true` for multi-instance |
+| `PersistCodes` | `false` | Set `true` for multi-instance; does not require `PersistClients` |
+| `DefaultScopes` | `["openid","profile","email"]` | |
+| `AccessTokenTTL` | `24h` | Also used as `expires_in` in token responses |
+| `AuthCodeTTL` | `2m` | |
+
+### Operating Modes
+
+**Mode 1 — Direct login (username/password form)**
+
+Pass a `*DatabaseAuthenticator` to `NewOAuthServer`. The server renders a login form at `GET /oauth/authorize` and issues tokens via the stored session after login.
+
+```go
+auth := security.NewDatabaseAuthenticator(db)
+srv := security.NewOAuthServer(cfg, auth)
+```
+
+**Mode 2 — External provider federation**
+
+Pass a `*DatabaseAuthenticator` for persistence (authorization codes, revoke, introspect) and register external providers. The authorize endpoint redirects to the specified provider (via the `provider` query param) or to the first registered provider by default.
+
+```go
+auth := security.NewDatabaseAuthenticator(db)
+srv := security.NewOAuthServer(cfg, auth)
+srv.RegisterExternalProvider(googleAuth, "google")
+srv.RegisterExternalProvider(githubAuth, "github")
+```
+
+**Mode 3 — Both**
+
+Pass auth for the login form and also register external providers. The authorize page shows both a login form and provider buttons.
+
+```go
+srv := security.NewOAuthServer(cfg, auth)
+srv.RegisterExternalProvider(googleAuth, "google")
+```
+
+### Standalone Usage
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/.well-known/", srv.HTTPHandler())
+mux.Handle("/oauth/", srv.HTTPHandler())
+mux.Handle(cfg.ProviderCallbackPath, srv.HTTPHandler())
+
+http.ListenAndServe(":8080", mux)
+```
+
+### DB Persistence
+
+When `PersistClients: true` or `PersistCodes: true`, the server calls the corresponding `DatabaseAuthenticator` methods. Both flags default to `false` (in-memory maps). Enable both for multi-instance deployments.
+
+Requires `oauth_clients` and `oauth_codes` tables + 6 stored procedures from `database_schema.sql`.
+
+#### New DB Types
+
+```go
+type OAuthServerClient struct {
+    ClientID      string   `json:"client_id"`
+    RedirectURIs  []string `json:"redirect_uris"`
+    ClientName    string   `json:"client_name,omitempty"`
+    GrantTypes    []string `json:"grant_types"`
+    AllowedScopes []string `json:"allowed_scopes,omitempty"`
+}
+
+type OAuthCode struct {
+    Code                string    `json:"code"`
+    ClientID            string    `json:"client_id"`
+    RedirectURI         string    `json:"redirect_uri"`
+    ClientState         string    `json:"client_state,omitempty"`
+    CodeChallenge       string    `json:"code_challenge"`
+    CodeChallengeMethod string    `json:"code_challenge_method"`
+    SessionToken        string    `json:"session_token"`
+    Scopes              []string  `json:"scopes,omitempty"`
+    ExpiresAt           time.Time `json:"expires_at"`
+}
+
+type OAuthTokenInfo struct {
+    Active   bool     `json:"active"`
+    Sub      string   `json:"sub,omitempty"`
+    Username string   `json:"username,omitempty"`
+    Email    string   `json:"email,omitempty"`
+    Roles    []string `json:"roles,omitempty"`
+    Exp      int64    `json:"exp,omitempty"`
+    Iat      int64    `json:"iat,omitempty"`
+}
+```
+
+#### DatabaseAuthenticator OAuth Methods
+
+```go
+auth.OAuthRegisterClient(ctx, client)  // RFC 7591 — persist client
+auth.OAuthGetClient(ctx, clientID)     // retrieve client
+auth.OAuthSaveCode(ctx, code)          // persist authorization code
+auth.OAuthExchangeCode(ctx, code)      // consume code (single-use, deletes on read)
+auth.OAuthIntrospectToken(ctx, token)  // RFC 7662 — returns OAuthTokenInfo
+auth.OAuthRevokeToken(ctx, token)      // RFC 7009 — revoke session
+```
+
+#### SQLNames Fields
+
+```go
+type SQLNames struct {
+    // ... existing fields ...
+    OAuthRegisterClient string // default: "resolvespec_oauth_register_client"
+    OAuthGetClient      string // default: "resolvespec_oauth_get_client"
+    OAuthSaveCode       string // default: "resolvespec_oauth_save_code"
+    OAuthExchangeCode   string // default: "resolvespec_oauth_exchange_code"
+    OAuthIntrospect     string // default: "resolvespec_oauth_introspect"
+    OAuthRevoke         string // default: "resolvespec_oauth_revoke"
+}
 ```
 
 The main changes:

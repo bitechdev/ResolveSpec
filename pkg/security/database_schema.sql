@@ -1397,3 +1397,180 @@ $$ LANGUAGE plpgsql;
 
 -- Get credentials by username
 -- SELECT * FROM resolvespec_passkey_get_credentials_by_username('admin');
+
+-- ============================================
+-- OAuth2 Server Tables (OAuthServer persistence)
+-- ============================================
+
+-- oauth_clients: persistent RFC 7591 registered clients
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id SERIAL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL UNIQUE,
+    redirect_uris TEXT[] NOT NULL,
+    client_name VARCHAR(255),
+    grant_types TEXT[] DEFAULT ARRAY['authorization_code'],
+    allowed_scopes TEXT[] DEFAULT ARRAY['openid','profile','email'],
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- oauth_codes: short-lived authorization codes (for multi-instance deployments)
+-- Note: client_id is stored without a foreign key so codes can be persisted even
+-- when OAuth clients are managed in memory rather than persisted in oauth_clients.
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    client_state TEXT,
+    code_challenge VARCHAR(255) NOT NULL,
+    code_challenge_method VARCHAR(10) DEFAULT 'S256',
+    session_token TEXT NOT NULL,
+    refresh_token TEXT,
+    scopes TEXT[],
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_code ON oauth_codes(code);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_codes(expires_at);
+
+-- ============================================
+-- OAuth2 Server Stored Procedures
+-- ============================================
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_register_client(p_data jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_client_id   text;
+    v_row         jsonb;
+BEGIN
+    v_client_id := p_data->>'client_id';
+
+    INSERT INTO oauth_clients (client_id, redirect_uris, client_name, grant_types, allowed_scopes)
+    VALUES (
+        v_client_id,
+        ARRAY(SELECT jsonb_array_elements_text(p_data->'redirect_uris')),
+        p_data->>'client_name',
+        COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_data->'grant_types')), ARRAY['authorization_code']),
+        COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_data->'allowed_scopes')), ARRAY['openid','profile','email'])
+    )
+    RETURNING to_jsonb(oauth_clients.*) INTO v_row;
+
+    RETURN QUERY SELECT true, null::text, v_row;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_get_client(p_client_id text)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    SELECT to_jsonb(oauth_clients.*)
+    INTO v_row
+    FROM oauth_clients
+    WHERE client_id = p_client_id AND is_active = true;
+
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'client not found'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_save_code(p_data jsonb)
+RETURNS TABLE(p_success bool, p_error text)
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO oauth_codes (code, client_id, redirect_uri, client_state, code_challenge, code_challenge_method, session_token, refresh_token, scopes, expires_at)
+    VALUES (
+        p_data->>'code',
+        p_data->>'client_id',
+        p_data->>'redirect_uri',
+        p_data->>'client_state',
+        p_data->>'code_challenge',
+        COALESCE(p_data->>'code_challenge_method', 'S256'),
+        p_data->>'session_token',
+        p_data->>'refresh_token',
+        ARRAY(SELECT jsonb_array_elements_text(p_data->'scopes')),
+        (p_data->>'expires_at')::timestamp
+    );
+
+    RETURN QUERY SELECT true, null::text;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_exchange_code(p_code text)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    DELETE FROM oauth_codes
+    WHERE code = p_code AND expires_at > now()
+    RETURNING jsonb_build_object(
+        'client_id',             client_id,
+        'redirect_uri',          redirect_uri,
+        'client_state',          client_state,
+        'code_challenge',        code_challenge,
+        'code_challenge_method', code_challenge_method,
+        'session_token',         session_token,
+        'refresh_token',         refresh_token,
+        'scopes',                to_jsonb(scopes)
+    ) INTO v_row;
+
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'invalid or expired code'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_introspect(p_token text)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    SELECT jsonb_build_object(
+        'active',     true,
+        'sub',        u.id::text,
+        'username',   u.username,
+        'email',      u.email,
+        'user_level', u.user_level,
+        -- NULLIF converts empty string to NULL; string_to_array(NULL) returns NULL;
+        -- to_jsonb(NULL) returns NULL; COALESCE then returns '[]' for NULL/empty roles.
+        'roles',      COALESCE(to_jsonb(string_to_array(NULLIF(u.roles, ''), ',')), '[]'::jsonb),
+        'exp',        EXTRACT(EPOCH FROM s.expires_at)::bigint,
+        'iat',        EXTRACT(EPOCH FROM s.created_at)::bigint
+    )
+    INTO v_row
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.session_token = p_token
+      AND s.expires_at > now()
+      AND u.is_active = true;
+
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT true, null::text, '{"active":false}'::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_revoke(p_token text)
+RETURNS TABLE(p_success bool, p_error text)
+LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM user_sessions WHERE session_token = p_token;
+    RETURN QUERY SELECT true, null::text;
+END;
+$$;

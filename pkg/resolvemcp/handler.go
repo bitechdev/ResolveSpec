@@ -16,17 +16,20 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
+	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
 // Handler exposes registered database models as MCP tools and resources.
 type Handler struct {
-	db        common.Database
-	registry  common.ModelRegistry
-	hooks     *HookRegistry
-	mcpServer *server.MCPServer
-	config    Config
-	name      string
-	version   string
+	db         common.Database
+	registry   common.ModelRegistry
+	hooks      *HookRegistry
+	mcpServer  *server.MCPServer
+	config     Config
+	name       string
+	version    string
+	oauth2Regs []oauth2Registration
+	oauthSrv   *security.OAuthServer
 }
 
 // NewHandler creates a Handler with the given database, model registry, and config.

@@ -823,12 +823,12 @@ func TestToSnakeCase(t *testing.T) {
 		{
 			name:     "UserID",
 			input:    "UserID",
-			expected: "user_i_d",
+			expected: "user_id",
 		},
 		{
 			name:     "HTTPServer",
 			input:    "HTTPServer",
-			expected: "h_t_t_p_server",
+			expected: "http_server",
 		},
 		{
 			name:     "lowercase",
@@ -838,7 +838,7 @@ func TestToSnakeCase(t *testing.T) {
 		{
 			name:     "UPPERCASE",
 			input:    "UPPERCASE",
-			expected: "u_p_p_e_r_c_a_s_e",
+			expected: "uppercase",
 		},
 		{
 			name:     "Single",

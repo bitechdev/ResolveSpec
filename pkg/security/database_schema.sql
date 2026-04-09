@@ -1545,6 +1545,8 @@ BEGIN
         'username',   u.username,
         'email',      u.email,
         'user_level', u.user_level,
+        -- NULLIF converts empty string to NULL; string_to_array(NULL) returns NULL;
+        -- to_jsonb(NULL) returns NULL; COALESCE then returns '[]' for NULL/empty roles.
         'roles',      COALESCE(to_jsonb(string_to_array(NULLIF(u.roles, ''), ',')), '[]'::jsonb),
         'exp',        EXTRACT(EPOCH FROM s.expires_at)::bigint,
         'iat',        EXTRACT(EPOCH FROM s.created_at)::bigint

@@ -128,8 +128,8 @@ func NewOAuthServer(cfg OAuthServerConfig, auth *DatabaseAuthenticator) *OAuthSe
 	if cfg.AuthCodeTTL == 0 {
 		cfg.AuthCodeTTL = 2 * time.Minute
 	}
-	// Normalize issuer: trim trailing slash to ensure consistent endpoint URL construction.
-	cfg.Issuer = strings.TrimRight(cfg.Issuer, "/")
+	// Normalize issuer: remove trailing slash to ensure consistent endpoint URL construction.
+	cfg.Issuer = strings.TrimSuffix(cfg.Issuer, "/")
 	s := &OAuthServer{
 		cfg:     cfg,
 		auth:    auth,
@@ -704,9 +704,17 @@ func (s *OAuthServer) revokeHandler(w http.ResponseWriter, r *http.Request) {
 
 	if s.auth != nil {
 		s.auth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck
-	} else if len(s.providers) > 0 {
+	} else {
 		// In external-provider-only mode, attempt revocation via the first provider's auth.
-		s.providers[0].auth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck
+		s.mu.RLock()
+		var providerAuth *DatabaseAuthenticator
+		if len(s.providers) > 0 {
+			providerAuth = s.providers[0].auth
+		}
+		s.mu.RUnlock()
+		if providerAuth != nil {
+			providerAuth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -735,8 +743,12 @@ func (s *OAuthServer) introspectHandler(w http.ResponseWriter, r *http.Request) 
 
 	// Resolve the authenticator to use: prefer the primary auth, then the first provider's auth.
 	authToUse := s.auth
-	if authToUse == nil && len(s.providers) > 0 {
-		authToUse = s.providers[0].auth
+	if authToUse == nil {
+		s.mu.RLock()
+		if len(s.providers) > 0 {
+			authToUse = s.providers[0].auth
+		}
+		s.mu.RUnlock()
 	}
 	if authToUse == nil {
 		w.Write([]byte(`{"active":false}`)) //nolint:errcheck

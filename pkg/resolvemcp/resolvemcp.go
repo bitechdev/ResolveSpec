@@ -98,3 +98,36 @@ func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler) {
 func NewSSEServer(handler *Handler) http.Handler {
 	return handler.SSEServer()
 }
+
+// SetupMuxStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on the given Gorilla Mux router.
+// The streamable HTTP transport uses a single endpoint (Config.BasePath) for all communication:
+// POST for client→server messages, GET for server→client streaming.
+//
+// Example:
+//
+//	resolvemcp.SetupMuxStreamableHTTPRoutes(r, handler) // mounts at Config.BasePath
+func SetupMuxStreamableHTTPRoutes(muxRouter *mux.Router, handler *Handler) {
+	basePath := handler.config.BasePath
+	h := handler.StreamableHTTPServer()
+	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, h))
+}
+
+// SetupBunRouterStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on a bunrouter router.
+// The streamable HTTP transport uses a single endpoint (Config.BasePath).
+func SetupBunRouterStreamableHTTPRoutes(router *bunrouter.Router, handler *Handler) {
+	basePath := handler.config.BasePath
+	h := handler.StreamableHTTPServer()
+	router.GET(basePath, bunrouter.HTTPHandler(h))
+	router.POST(basePath, bunrouter.HTTPHandler(h))
+	router.DELETE(basePath, bunrouter.HTTPHandler(h))
+}
+
+// NewStreamableHTTPHandler returns an http.Handler that serves MCP over the streamable HTTP transport.
+// Mount it at the desired path; that path becomes the MCP endpoint.
+//
+//	h := resolvemcp.NewStreamableHTTPHandler(handler)
+//	http.Handle("/mcp", h)
+//	engine.Any("/mcp", gin.WrapH(h))
+func NewStreamableHTTPHandler(handler *Handler) http.Handler {
+	return handler.StreamableHTTPServer()
+}

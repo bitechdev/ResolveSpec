@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -29,18 +30,18 @@ func ExampleManager_basic() {
 		GZIP:    true, // Enable GZIP compression
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Start all servers
 	if err := mgr.StartAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Server is now running...
 	// When done, stop gracefully
 	if err := mgr.StopAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 }
 
@@ -61,7 +62,7 @@ func ExampleManager_https() {
 		SSLKey:  "/path/to/key.pem",
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Option 2: Self-signed certificate (for development)
@@ -73,27 +74,27 @@ func ExampleManager_https() {
 		SelfSignedSSL: true,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Option 3: Let's Encrypt / AutoTLS (for production)
 	_, err = mgr.Add(server.Config{
-		Name:           "https-server-letsencrypt",
-		Host:           "0.0.0.0",
-		Port:           443,
-		Handler:        handler,
-		AutoTLS:        true,
-		AutoTLSDomains: []string{"example.com", "www.example.com"},
-		AutoTLSEmail:   "admin@example.com",
+		Name:            "https-server-letsencrypt",
+		Host:            "0.0.0.0",
+		Port:            443,
+		Handler:         handler,
+		AutoTLS:         true,
+		AutoTLSDomains:  []string{"example.com", "www.example.com"},
+		AutoTLSEmail:    "admin@example.com",
 		AutoTLSCacheDir: "./certs-cache",
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Start all servers
 	if err := mgr.StartAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Cleanup
@@ -136,7 +137,7 @@ func ExampleManager_gracefulShutdown() {
 		IdleTimeout:     120 * time.Second,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Start servers and block until shutdown signal (SIGINT/SIGTERM)
@@ -164,7 +165,7 @@ func ExampleManager_healthChecks() {
 		Handler: mux,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Add health and readiness endpoints
@@ -173,7 +174,7 @@ func ExampleManager_healthChecks() {
 
 	// Start the server
 	if err := mgr.StartAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Health check returns:
@@ -204,7 +205,7 @@ func ExampleManager_multipleServers() {
 		GZIP:    true,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Admin API server (different port)
@@ -218,7 +219,7 @@ func ExampleManager_multipleServers() {
 		Handler: adminHandler,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Metrics server (internal only)
@@ -232,18 +233,18 @@ func ExampleManager_multipleServers() {
 		Handler: metricsHandler,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Start all servers at once
 	if err := mgr.StartAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Get specific server instance
 	publicInstance, err := mgr.Get("public-api")
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	fmt.Printf("Public API running on: %s\n", publicInstance.Addr())
 
@@ -253,7 +254,7 @@ func ExampleManager_multipleServers() {
 
 	// Stop all servers gracefully (in parallel)
 	if err := mgr.StopAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 }
 
@@ -273,11 +274,11 @@ func ExampleManager_monitoring() {
 		Handler: handler,
 	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	if err := mgr.StartAll(); err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
 	// Check server status

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "github.com/glebarez/sqlite" // Pure Go SQLite driver
@@ -14,8 +15,10 @@ import (
 
 // SQLiteProvider implements Provider for SQLite databases
 type SQLiteProvider struct {
-	db     *sql.DB
-	config ConnectionConfig
+	db        *sql.DB
+	dbMu      sync.RWMutex
+	dbFactory func() (*sql.DB, error)
+	config    ConnectionConfig
 }
 
 // NewSQLiteProvider creates a new SQLite provider
@@ -129,7 +132,13 @@ func (p *SQLiteProvider) HealthCheck(ctx context.Context) error {
 
 	// Execute a simple query to verify the database is accessible
 	var result int
-	err := p.db.QueryRowContext(healthCtx, "SELECT 1").Scan(&result)
+	run := func() error { return p.getDB().QueryRowContext(healthCtx, "SELECT 1").Scan(&result) }
+	err := run()
+	if isDBClosed(err) {
+		if reconnErr := p.reconnectDB(); reconnErr == nil {
+			err = run()
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
@@ -138,6 +147,32 @@ func (p *SQLiteProvider) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("health check returned unexpected result: %d", result)
 	}
 
+	return nil
+}
+
+// WithDBFactory configures a factory used to reopen the database connection if it is closed.
+func (p *SQLiteProvider) WithDBFactory(factory func() (*sql.DB, error)) *SQLiteProvider {
+	p.dbFactory = factory
+	return p
+}
+
+func (p *SQLiteProvider) getDB() *sql.DB {
+	p.dbMu.RLock()
+	defer p.dbMu.RUnlock()
+	return p.db
+}
+
+func (p *SQLiteProvider) reconnectDB() error {
+	if p.dbFactory == nil {
+		return fmt.Errorf("no db factory configured for reconnect")
+	}
+	newDB, err := p.dbFactory()
+	if err != nil {
+		return err
+	}
+	p.dbMu.Lock()
+	p.db = newDB
+	p.dbMu.Unlock()
 	return nil
 }
 

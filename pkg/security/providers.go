@@ -63,10 +63,12 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 // Also supports multiple OAuth2 providers configured with WithOAuth2()
 // Also supports passkey authentication configured with WithPasskey()
 type DatabaseAuthenticator struct {
-	db       *sql.DB
-	cache    *cache.Cache
-	cacheTTL time.Duration
-	sqlNames *SQLNames
+	db        *sql.DB
+	dbMu      sync.RWMutex
+	dbFactory func() (*sql.DB, error)
+	cache     *cache.Cache
+	cacheTTL  time.Duration
+	sqlNames  *SQLNames
 
 	// OAuth2 providers registry (multiple providers supported)
 	oauth2Providers      map[string]*OAuth2Provider
@@ -88,6 +90,9 @@ type DatabaseAuthenticatorOptions struct {
 	// SQLNames provides custom SQL procedure/function names. If nil, uses DefaultSQLNames().
 	// Partial overrides are supported: only set the fields you want to change.
 	SQLNames *SQLNames
+	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
+	// If nil, reconnection is disabled.
+	DBFactory func() (*sql.DB, error)
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
@@ -110,11 +115,32 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 
 	return &DatabaseAuthenticator{
 		db:              db,
+		dbFactory:       opts.DBFactory,
 		cache:           cacheInstance,
 		cacheTTL:        opts.CacheTTL,
 		sqlNames:        sqlNames,
 		passkeyProvider: opts.PasskeyProvider,
 	}
+}
+
+func (a *DatabaseAuthenticator) getDB() *sql.DB {
+	a.dbMu.RLock()
+	defer a.dbMu.RUnlock()
+	return a.db
+}
+
+func (a *DatabaseAuthenticator) reconnectDB() error {
+	if a.dbFactory == nil {
+		return fmt.Errorf("no db factory configured for reconnect")
+	}
+	newDB, err := a.dbFactory()
+	if err != nil {
+		return err
+	}
+	a.dbMu.Lock()
+	a.db = newDB
+	a.dbMu.Unlock()
+	return nil
 }
 
 func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
@@ -128,8 +154,16 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 	var errorMsg sql.NullString
 	var dataJSON sql.NullString
 
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Login)
-	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	runLoginQuery := func() error {
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Login)
+		return a.getDB().QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	}
+	err = runLoginQuery()
+	if isDBClosed(err) {
+		if reconnErr := a.reconnectDB(); reconnErr == nil {
+			err = runLoginQuery()
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
 	}
@@ -163,7 +197,7 @@ func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterReques
 	var dataJSON sql.NullString
 
 	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Register)
-	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	err = a.getDB().QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return nil, fmt.Errorf("register query failed: %w", err)
 	}
@@ -196,7 +230,7 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 	var dataJSON sql.NullString
 
 	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.Logout)
-	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	err = a.getDB().QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
 	}
@@ -270,7 +304,7 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 			var userJSON sql.NullString
 
 			query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2)`, a.sqlNames.Session)
-			err := a.db.QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON)
+			err := a.getDB().QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON)
 			if err != nil {
 				return nil, fmt.Errorf("session query failed: %w", err)
 			}
@@ -346,7 +380,7 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 	var updatedUserJSON sql.NullString
 
 	query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2::jsonb)`, a.sqlNames.SessionUpdate)
-	_ = a.db.QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON)
+	_ = a.getDB().QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON)
 }
 
 // RefreshToken implements Refreshable interface
@@ -357,7 +391,7 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 	var userJSON sql.NullString
 	// Get current session to pass to refresh
 	query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2)`, a.sqlNames.Session)
-	err := a.db.QueryRowContext(ctx, query, refreshToken, "refresh").Scan(&success, &errorMsg, &userJSON)
+	err := a.getDB().QueryRowContext(ctx, query, refreshToken, "refresh").Scan(&success, &errorMsg, &userJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token query failed: %w", err)
 	}
@@ -374,7 +408,7 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 	var newUserJSON sql.NullString
 
 	refreshQuery := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2::jsonb)`, a.sqlNames.RefreshToken)
-	err = a.db.QueryRowContext(ctx, refreshQuery, refreshToken, userJSON).Scan(&newSuccess, &newErrorMsg, &newUserJSON)
+	err = a.getDB().QueryRowContext(ctx, refreshQuery, refreshToken, userJSON).Scan(&newSuccess, &newErrorMsg, &newUserJSON)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token generation failed: %w", err)
 	}
@@ -406,6 +440,8 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 type JWTAuthenticator struct {
 	secretKey []byte
 	db        *sql.DB
+	dbMu      sync.RWMutex
+	dbFactory func() (*sql.DB, error)
 	sqlNames  *SQLNames
 }
 
@@ -417,13 +453,47 @@ func NewJWTAuthenticator(secretKey string, db *sql.DB, names ...*SQLNames) *JWTA
 	}
 }
 
+// WithDBFactory configures a factory used to reopen the database connection if it is closed.
+func (a *JWTAuthenticator) WithDBFactory(factory func() (*sql.DB, error)) *JWTAuthenticator {
+	a.dbFactory = factory
+	return a
+}
+
+func (a *JWTAuthenticator) getDB() *sql.DB {
+	a.dbMu.RLock()
+	defer a.dbMu.RUnlock()
+	return a.db
+}
+
+func (a *JWTAuthenticator) reconnectDB() error {
+	if a.dbFactory == nil {
+		return fmt.Errorf("no db factory configured for reconnect")
+	}
+	newDB, err := a.dbFactory()
+	if err != nil {
+		return err
+	}
+	a.dbMu.Lock()
+	a.db = newDB
+	a.dbMu.Unlock()
+	return nil
+}
+
 func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
 	var success bool
 	var errorMsg sql.NullString
 	var userJSON []byte
 
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_user FROM %s($1, $2)`, a.sqlNames.JWTLogin)
-	err := a.db.QueryRowContext(ctx, query, req.Username, req.Password).Scan(&success, &errorMsg, &userJSON)
+	runLoginQuery := func() error {
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_user FROM %s($1, $2)`, a.sqlNames.JWTLogin)
+		return a.getDB().QueryRowContext(ctx, query, req.Username, req.Password).Scan(&success, &errorMsg, &userJSON)
+	}
+	err := runLoginQuery()
+	if isDBClosed(err) {
+		if reconnErr := a.reconnectDB(); reconnErr == nil {
+			err = runLoginQuery()
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("login query failed: %w", err)
 	}
@@ -476,7 +546,7 @@ func (a *JWTAuthenticator) Logout(ctx context.Context, req LogoutRequest) error 
 	var errorMsg sql.NullString
 
 	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2)`, a.sqlNames.JWTLogout)
-	err := a.db.QueryRowContext(ctx, query, req.Token, req.UserID).Scan(&success, &errorMsg)
+	err := a.getDB().QueryRowContext(ctx, query, req.Token, req.UserID).Scan(&success, &errorMsg)
 	if err != nil {
 		return fmt.Errorf("logout query failed: %w", err)
 	}
@@ -513,12 +583,39 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 // All database operations go through stored procedures
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseColumnSecurityProvider struct {
-	db       *sql.DB
-	sqlNames *SQLNames
+	db        *sql.DB
+	dbMu      sync.RWMutex
+	dbFactory func() (*sql.DB, error)
+	sqlNames  *SQLNames
 }
 
 func NewDatabaseColumnSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseColumnSecurityProvider {
 	return &DatabaseColumnSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
+}
+
+func (p *DatabaseColumnSecurityProvider) WithDBFactory(factory func() (*sql.DB, error)) *DatabaseColumnSecurityProvider {
+	p.dbFactory = factory
+	return p
+}
+
+func (p *DatabaseColumnSecurityProvider) getDB() *sql.DB {
+	p.dbMu.RLock()
+	defer p.dbMu.RUnlock()
+	return p.db
+}
+
+func (p *DatabaseColumnSecurityProvider) reconnectDB() error {
+	if p.dbFactory == nil {
+		return fmt.Errorf("no db factory configured for reconnect")
+	}
+	newDB, err := p.dbFactory()
+	if err != nil {
+		return err
+	}
+	p.dbMu.Lock()
+	p.db = newDB
+	p.dbMu.Unlock()
+	return nil
 }
 
 func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
@@ -528,8 +625,16 @@ func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, 
 	var errorMsg sql.NullString
 	var rulesJSON []byte
 
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_rules FROM %s($1, $2, $3)`, p.sqlNames.ColumnSecurity)
-	err := p.db.QueryRowContext(ctx, query, userID, schema, table).Scan(&success, &errorMsg, &rulesJSON)
+	runQuery := func() error {
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_rules FROM %s($1, $2, $3)`, p.sqlNames.ColumnSecurity)
+		return p.getDB().QueryRowContext(ctx, query, userID, schema, table).Scan(&success, &errorMsg, &rulesJSON)
+	}
+	err := runQuery()
+	if isDBClosed(err) {
+		if reconnErr := p.reconnectDB(); reconnErr == nil {
+			err = runQuery()
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load column security: %w", err)
 	}
@@ -578,21 +683,55 @@ func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, 
 // All database operations go through stored procedures
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseRowSecurityProvider struct {
-	db       *sql.DB
-	sqlNames *SQLNames
+	db        *sql.DB
+	dbMu      sync.RWMutex
+	dbFactory func() (*sql.DB, error)
+	sqlNames  *SQLNames
 }
 
 func NewDatabaseRowSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseRowSecurityProvider {
 	return &DatabaseRowSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
 }
 
+func (p *DatabaseRowSecurityProvider) WithDBFactory(factory func() (*sql.DB, error)) *DatabaseRowSecurityProvider {
+	p.dbFactory = factory
+	return p
+}
+
+func (p *DatabaseRowSecurityProvider) getDB() *sql.DB {
+	p.dbMu.RLock()
+	defer p.dbMu.RUnlock()
+	return p.db
+}
+
+func (p *DatabaseRowSecurityProvider) reconnectDB() error {
+	if p.dbFactory == nil {
+		return fmt.Errorf("no db factory configured for reconnect")
+	}
+	newDB, err := p.dbFactory()
+	if err != nil {
+		return err
+	}
+	p.dbMu.Lock()
+	p.db = newDB
+	p.dbMu.Unlock()
+	return nil
+}
+
 func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
 	var template string
 	var hasBlock bool
 
-	query := fmt.Sprintf(`SELECT p_template, p_block FROM %s($1, $2, $3)`, p.sqlNames.RowSecurity)
-
-	err := p.db.QueryRowContext(ctx, query, schema, table, userID).Scan(&template, &hasBlock)
+	runQuery := func() error {
+		query := fmt.Sprintf(`SELECT p_template, p_block FROM %s($1, $2, $3)`, p.sqlNames.RowSecurity)
+		return p.getDB().QueryRowContext(ctx, query, schema, table, userID).Scan(&template, &hasBlock)
+	}
+	err := runQuery()
+	if isDBClosed(err) {
+		if reconnErr := p.reconnectDB(); reconnErr == nil {
+			err = runQuery()
+		}
+	}
 	if err != nil {
 		return RowSecurity{}, fmt.Errorf("failed to load row security: %w", err)
 	}
@@ -661,6 +800,11 @@ func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userID i
 
 // Helper functions
 // ================
+
+// isDBClosed reports whether err indicates the *sql.DB has been closed.
+func isDBClosed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "sql: database is closed")
+}
 
 func parseRoles(rolesStr string) []string {
 	if rolesStr == "" {
@@ -780,8 +924,16 @@ func (a *DatabaseAuthenticator) LoginWithPasskey(ctx context.Context, req Passke
 	var errorMsg sql.NullString
 	var dataJSON sql.NullString
 
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.PasskeyLogin)
-	err = a.db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	runPasskeyQuery := func() error {
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.PasskeyLogin)
+		return a.getDB().QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	}
+	err = runPasskeyQuery()
+	if isDBClosed(err) {
+		if reconnErr := a.reconnectDB(); reconnErr == nil {
+			err = runPasskeyQuery()
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("passkey login query failed: %w", err)
 	}

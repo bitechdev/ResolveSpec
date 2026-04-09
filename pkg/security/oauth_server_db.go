@@ -25,19 +25,21 @@ type OAuthCode struct {
 	CodeChallenge       string    `json:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method"`
 	SessionToken        string    `json:"session_token"`
+	RefreshToken        string    `json:"refresh_token,omitempty"`
 	Scopes              []string  `json:"scopes,omitempty"`
 	ExpiresAt           time.Time `json:"expires_at"`
 }
 
 // OAuthTokenInfo is the RFC 7662 token introspection response.
 type OAuthTokenInfo struct {
-	Active   bool     `json:"active"`
-	Sub      string   `json:"sub,omitempty"`
-	Username string   `json:"username,omitempty"`
-	Email    string   `json:"email,omitempty"`
-	Roles    []string `json:"roles,omitempty"`
-	Exp      int64    `json:"exp,omitempty"`
-	Iat      int64    `json:"iat,omitempty"`
+	Active    bool     `json:"active"`
+	Sub       string   `json:"sub,omitempty"`
+	Username  string   `json:"username,omitempty"`
+	Email     string   `json:"email,omitempty"`
+	UserLevel int      `json:"user_level,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
+	Exp       int64    `json:"exp,omitempty"`
+	Iat       int64    `json:"iat,omitempty"`
 }
 
 // OAuthRegisterClient persists an OAuth2 client registration.

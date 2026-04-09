@@ -217,10 +217,11 @@ auth := security.NewDatabaseAuthenticator(db).WithOAuth2(security.OAuth2Config{
     ProviderName: "google",
 })
 
-// nil = no password login; Google handles auth
+// Pass `auth` so the OAuth server supports persistence, introspection, and revocation.
+// Google handles the end-user authentication flow via redirect.
 handler.EnableOAuthServer(security.OAuthServerConfig{
     Issuer: "https://api.example.com",
-}, nil)
+}, auth)
 handler.RegisterOAuth2Provider(auth, "google")
 ```
 

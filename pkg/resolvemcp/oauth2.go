@@ -45,7 +45,7 @@ func (h *Handler) RegisterOAuth2(auth *security.DatabaseAuthenticator, cfg OAuth
 //
 //	auth := security.NewGoogleAuthenticator(...)
 //	handler.RegisterOAuth2(auth, cfg)
-//	handler.EnableOAuthServer(resolvemcp.OAuthServerConfig{Issuer: "https://api.example.com"})
+//	handler.EnableOAuthServer(security.OAuthServerConfig{Issuer: "https://api.example.com"})
 //	security.RegisterSecurityHooks(handler, securityList)
 //	http.ListenAndServe(":8080", handler.HTTPHandler(securityList))
 func (h *Handler) HTTPHandler(securityList *security.SecurityList) http.Handler {

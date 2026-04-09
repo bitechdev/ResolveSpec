@@ -938,14 +938,14 @@ cfg := security.OAuthServerConfig{
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `Issuer` | — | Required |
+| `Issuer` | — | Required; trailing slash is trimmed automatically |
 | `ProviderCallbackPath` | `/oauth/provider/callback` | |
-| `LoginTitle` | `"Login"` | |
+| `LoginTitle` | `"Sign in"` | |
 | `PersistClients` | `false` | Set `true` for multi-instance |
-| `PersistCodes` | `false` | Set `true` for multi-instance |
-| `DefaultScopes` | `nil` | |
-| `AccessTokenTTL` | `1h` | |
-| `AuthCodeTTL` | `5m` | |
+| `PersistCodes` | `false` | Set `true` for multi-instance; does not require `PersistClients` |
+| `DefaultScopes` | `["openid","profile","email"]` | |
+| `AccessTokenTTL` | `24h` | Also used as `expires_in` in token responses |
+| `AuthCodeTTL` | `2m` | |
 
 ### Operating Modes
 
@@ -960,10 +960,11 @@ srv := security.NewOAuthServer(cfg, auth)
 
 **Mode 2 — External provider federation**
 
-Pass `nil` as auth and register external providers. The authorize page shows a provider selection UI.
+Pass a `*DatabaseAuthenticator` for persistence (authorization codes, revoke, introspect) and register external providers. The authorize endpoint redirects to the specified provider (via the `provider` query param) or to the first registered provider by default.
 
 ```go
-srv := security.NewOAuthServer(cfg, nil)
+auth := security.NewDatabaseAuthenticator(db)
+srv := security.NewOAuthServer(cfg, auth)
 srv.RegisterExternalProvider(googleAuth, "google")
 srv.RegisterExternalProvider(githubAuth, "github")
 ```

@@ -1415,15 +1415,18 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 );
 
 -- oauth_codes: short-lived authorization codes (for multi-instance deployments)
+-- Note: client_id is stored without a foreign key so codes can be persisted even
+-- when OAuth clients are managed in memory rather than persisted in oauth_clients.
 CREATE TABLE IF NOT EXISTS oauth_codes (
     id SERIAL PRIMARY KEY,
     code VARCHAR(255) NOT NULL UNIQUE,
-    client_id VARCHAR(255) NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    client_id VARCHAR(255) NOT NULL,
     redirect_uri TEXT NOT NULL,
     client_state TEXT,
     code_challenge VARCHAR(255) NOT NULL,
     code_challenge_method VARCHAR(10) DEFAULT 'S256',
     session_token TEXT NOT NULL,
+    refresh_token TEXT,
     scopes TEXT[],
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1483,7 +1486,7 @@ CREATE OR REPLACE FUNCTION resolvespec_oauth_save_code(p_data jsonb)
 RETURNS TABLE(p_success bool, p_error text)
 LANGUAGE plpgsql AS $$
 BEGIN
-    INSERT INTO oauth_codes (code, client_id, redirect_uri, client_state, code_challenge, code_challenge_method, session_token, scopes, expires_at)
+    INSERT INTO oauth_codes (code, client_id, redirect_uri, client_state, code_challenge, code_challenge_method, session_token, refresh_token, scopes, expires_at)
     VALUES (
         p_data->>'code',
         p_data->>'client_id',
@@ -1492,6 +1495,7 @@ BEGIN
         p_data->>'code_challenge',
         COALESCE(p_data->>'code_challenge_method', 'S256'),
         p_data->>'session_token',
+        p_data->>'refresh_token',
         ARRAY(SELECT jsonb_array_elements_text(p_data->'scopes')),
         (p_data->>'expires_at')::timestamp
     );
@@ -1517,6 +1521,7 @@ BEGIN
         'code_challenge',        code_challenge,
         'code_challenge_method', code_challenge_method,
         'session_token',         session_token,
+        'refresh_token',         refresh_token,
         'scopes',                to_jsonb(scopes)
     ) INTO v_row;
 
@@ -1540,7 +1545,7 @@ BEGIN
         'username',   u.username,
         'email',      u.email,
         'user_level', u.user_level,
-        'roles',      to_jsonb(string_to_array(COALESCE(u.roles, ''), ',')),
+        'roles',      COALESCE(to_jsonb(string_to_array(NULLIF(u.roles, ''), ',')), '[]'::jsonb),
         'exp',        EXTRACT(EPOCH FROM s.expires_at)::bigint,
         'iat',        EXTRACT(EPOCH FROM s.created_at)::bigint
     )

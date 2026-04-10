@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -786,6 +787,211 @@ func TestDatabaseAuthenticatorRefreshToken(t *testing.T) {
 
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
+}
+
+func TestDatabaseAuthenticatorReconnectsClosedDBPaths(t *testing.T) {
+	newAuthWithReconnect := func(t *testing.T) (*DatabaseAuthenticator, sqlmock.Sqlmock, sqlmock.Sqlmock, func()) {
+		t.Helper()
+
+		primaryDB, primaryMock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create primary mock db: %v", err)
+		}
+
+		reconnectDB, reconnectMock, err := sqlmock.New()
+		if err != nil {
+			primaryDB.Close()
+			t.Fatalf("failed to create reconnect mock db: %v", err)
+		}
+
+		cacheProvider := cache.NewMemoryProvider(&cache.Options{
+			DefaultTTL: 1 * time.Minute,
+			MaxSize:    1000,
+		})
+
+		auth := NewDatabaseAuthenticatorWithOptions(primaryDB, DatabaseAuthenticatorOptions{
+			Cache: cache.NewCache(cacheProvider),
+			DBFactory: func() (*sql.DB, error) {
+				return reconnectDB, nil
+			},
+		})
+
+		cleanup := func() {
+			_ = primaryDB.Close()
+			_ = reconnectDB.Close()
+		}
+
+		return auth, primaryMock, reconnectMock, cleanup
+	}
+
+	t.Run("Authenticate reconnects after closed database", func(t *testing.T) {
+		auth, primaryMock, reconnectMock, cleanup := newAuthWithReconnect(t)
+		defer cleanup()
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer reconnect-auth-token")
+
+		primaryMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("reconnect-auth-token", "authenticate").
+			WillReturnError(fmt.Errorf("sql: database is closed"))
+
+		reconnectRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":7,"user_name":"reconnect-user","session_id":"reconnect-auth-token"}`)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs("reconnect-auth-token", "authenticate").
+			WillReturnRows(reconnectRows)
+
+		userCtx, err := auth.Authenticate(req)
+		if err != nil {
+			t.Fatalf("expected authenticate to reconnect, got %v", err)
+		}
+		if userCtx.UserID != 7 {
+			t.Fatalf("expected user ID 7, got %d", userCtx.UserID)
+		}
+
+		if err := primaryMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("primary db expectations not met: %v", err)
+		}
+		if err := reconnectMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("reconnect db expectations not met: %v", err)
+		}
+	})
+
+	t.Run("Register reconnects after closed database", func(t *testing.T) {
+		auth, primaryMock, reconnectMock, cleanup := newAuthWithReconnect(t)
+		defer cleanup()
+
+		req := RegisterRequest{
+			Username:  "reconnect-register",
+			Password:  "password123",
+			Email:     "reconnect@example.com",
+			UserLevel: 1,
+			Roles:     []string{"user"},
+		}
+
+		primaryMock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_register`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnError(fmt.Errorf("sql: database is closed"))
+
+		reconnectRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(true, nil, `{"token":"reconnected-register-token","user":{"user_id":8,"user_name":"reconnect-register"},"expires_in":86400}`)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_register`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(reconnectRows)
+
+		resp, err := auth.Register(context.Background(), req)
+		if err != nil {
+			t.Fatalf("expected register to reconnect, got %v", err)
+		}
+		if resp.Token != "reconnected-register-token" {
+			t.Fatalf("expected refreshed token, got %s", resp.Token)
+		}
+
+		if err := primaryMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("primary db expectations not met: %v", err)
+		}
+		if err := reconnectMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("reconnect db expectations not met: %v", err)
+		}
+	})
+
+	t.Run("Logout reconnects after closed database", func(t *testing.T) {
+		auth, primaryMock, reconnectMock, cleanup := newAuthWithReconnect(t)
+		defer cleanup()
+
+		req := LogoutRequest{Token: "logout-reconnect-token", UserID: 9}
+
+		primaryMock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_logout`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnError(fmt.Errorf("sql: database is closed"))
+
+		reconnectRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_data"}).
+			AddRow(true, nil, nil)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_data::text FROM resolvespec_logout`).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(reconnectRows)
+
+		if err := auth.Logout(context.Background(), req); err != nil {
+			t.Fatalf("expected logout to reconnect, got %v", err)
+		}
+
+		if err := primaryMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("primary db expectations not met: %v", err)
+		}
+		if err := reconnectMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("reconnect db expectations not met: %v", err)
+		}
+	})
+
+	t.Run("RefreshToken reconnects after closed database", func(t *testing.T) {
+		auth, primaryMock, reconnectMock, cleanup := newAuthWithReconnect(t)
+		defer cleanup()
+
+		refreshToken := "refresh-reconnect-token"
+
+		primaryMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs(refreshToken, "refresh").
+			WillReturnError(fmt.Errorf("sql: database is closed"))
+
+		sessionRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":10,"user_name":"refresh-user"}`)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs(refreshToken, "refresh").
+			WillReturnRows(sessionRows)
+
+		refreshRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":10,"user_name":"refresh-user","session_id":"refreshed-token"}`)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_refresh_token`).
+			WithArgs(refreshToken, sqlmock.AnyArg()).
+			WillReturnRows(refreshRows)
+
+		resp, err := auth.RefreshToken(context.Background(), refreshToken)
+		if err != nil {
+			t.Fatalf("expected refresh token to reconnect, got %v", err)
+		}
+		if resp.Token != "refreshed-token" {
+			t.Fatalf("expected refreshed-token, got %s", resp.Token)
+		}
+
+		if err := primaryMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("primary db expectations not met: %v", err)
+		}
+		if err := reconnectMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("reconnect db expectations not met: %v", err)
+		}
+	})
+
+	t.Run("updateSessionActivity reconnects after closed database", func(t *testing.T) {
+		auth, primaryMock, reconnectMock, cleanup := newAuthWithReconnect(t)
+		defer cleanup()
+
+		userCtx := &UserContext{UserID: 11, UserName: "activity-user", SessionID: "activity-token"}
+
+		primaryMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session_update`).
+			WithArgs("activity-token", sqlmock.AnyArg()).
+			WillReturnError(fmt.Errorf("sql: database is closed"))
+
+		reconnectRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":11,"user_name":"activity-user","session_id":"activity-token"}`)
+
+		reconnectMock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session_update`).
+			WithArgs("activity-token", sqlmock.AnyArg()).
+			WillReturnRows(reconnectRows)
+
+		auth.updateSessionActivity(context.Background(), "activity-token", userCtx)
+
+		if err := primaryMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("primary db expectations not met: %v", err)
+		}
+		if err := reconnectMock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("reconnect db expectations not met: %v", err)
 		}
 	})
 }

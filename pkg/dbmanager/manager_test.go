@@ -3,11 +3,37 @@ package dbmanager
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+	"go.mongodb.org/mongo-driver/mongo"
+	"gorm.io/gorm"
+
+	"github.com/bitechdev/ResolveSpec/pkg/common"
+
 	_ "github.com/mattn/go-sqlite3"
 )
+
+type healthCheckStubConnection struct {
+	healthErr      error
+	reconnectCalls int
+}
+
+func (c *healthCheckStubConnection) Name() string                               { return "stub" }
+func (c *healthCheckStubConnection) Type() DatabaseType                         { return DatabaseTypePostgreSQL }
+func (c *healthCheckStubConnection) Bun() (*bun.DB, error)                      { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) GORM() (*gorm.DB, error)                    { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) Native() (*sql.DB, error)                   { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) DB() (*sql.DB, error)                       { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) Database() (common.Database, error)         { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) MongoDB() (*mongo.Client, error)            { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) Connect(ctx context.Context) error          { return nil }
+func (c *healthCheckStubConnection) Close() error                               { return nil }
+func (c *healthCheckStubConnection) HealthCheck(ctx context.Context) error      { return c.healthErr }
+func (c *healthCheckStubConnection) Reconnect(ctx context.Context) error        { c.reconnectCalls++; return nil }
+func (c *healthCheckStubConnection) Stats() *ConnectionStats                    { return &ConnectionStats{} }
 
 func TestBackgroundHealthChecker(t *testing.T) {
 	// Create a SQLite in-memory database
@@ -222,5 +248,43 @@ func TestManagerStatsAfterClose(t *testing.T) {
 	stats := mgr.Stats()
 	if stats.TotalConnections != 0 {
 		t.Errorf("Expected 0 total connections after close, got %d", stats.TotalConnections)
+	}
+}
+
+func TestPerformHealthCheckSkipsReconnectForTransientFailures(t *testing.T) {
+	conn := &healthCheckStubConnection{
+		healthErr: fmt.Errorf("connection 'primary' health check: dial tcp 127.0.0.1:5432: connect: connection refused"),
+	}
+
+	mgr := &connectionManager{
+		connections: map[string]Connection{"primary": conn},
+		config: ManagerConfig{
+			EnableAutoReconnect: true,
+		},
+	}
+
+	mgr.performHealthCheck()
+
+	if conn.reconnectCalls != 0 {
+		t.Fatalf("expected no reconnect attempts for transient health failure, got %d", conn.reconnectCalls)
+	}
+}
+
+func TestPerformHealthCheckReconnectsClosedConnections(t *testing.T) {
+	conn := &healthCheckStubConnection{
+		healthErr: NewConnectionError("primary", "health check", fmt.Errorf("sql: database is closed")),
+	}
+
+	mgr := &connectionManager{
+		connections: map[string]Connection{"primary": conn},
+		config: ManagerConfig{
+			EnableAutoReconnect: true,
+		},
+	}
+
+	mgr.performHealthCheck()
+
+	if conn.reconnectCalls != 1 {
+		t.Fatalf("expected reconnect attempt for closed database handle, got %d", conn.reconnectCalls)
 	}
 }

@@ -359,6 +359,42 @@ func (c *sqlConnection) Stats() *ConnectionStats {
 	return stats
 }
 
+func (c *sqlConnection) reconnectForAdapter() error {
+	timeout := c.config.ConnectTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return c.Reconnect(ctx)
+}
+
+func (c *sqlConnection) reopenNativeForAdapter() (*sql.DB, error) {
+	if err := c.reconnectForAdapter(); err != nil {
+		return nil, err
+	}
+
+	return c.Native()
+}
+
+func (c *sqlConnection) reopenBunForAdapter() (*bun.DB, error) {
+	if err := c.reconnectForAdapter(); err != nil {
+		return nil, err
+	}
+
+	return c.Bun()
+}
+
+func (c *sqlConnection) reopenGORMForAdapter() (*gorm.DB, error) {
+	if err := c.reconnectForAdapter(); err != nil {
+		return nil, err
+	}
+
+	return c.GORM()
+}
+
 // getBunAdapter returns or creates the Bun adapter
 func (c *sqlConnection) getBunAdapter() (common.Database, error) {
 	if c == nil {
@@ -391,7 +427,7 @@ func (c *sqlConnection) getBunAdapter() (common.Database, error) {
 		c.bunDB = bun.NewDB(native, dialect)
 	}
 
-	c.bunAdapter = database.NewBunAdapter(c.bunDB)
+	c.bunAdapter = database.NewBunAdapter(c.bunDB).WithDBFactory(c.reopenBunForAdapter)
 	return c.bunAdapter, nil
 }
 
@@ -432,7 +468,7 @@ func (c *sqlConnection) getGORMAdapter() (common.Database, error) {
 		c.gormDB = db
 	}
 
-	c.gormAdapter = database.NewGormAdapter(c.gormDB)
+	c.gormAdapter = database.NewGormAdapter(c.gormDB).WithDBFactory(c.reopenGORMForAdapter)
 	return c.gormAdapter, nil
 }
 
@@ -473,11 +509,11 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 	// Create a native adapter based on database type
 	switch c.dbType {
 	case DatabaseTypePostgreSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
 	case DatabaseTypeSQLite:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
 	case DatabaseTypeMSSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType))
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
 	default:
 		return nil, ErrUnsupportedDatabase
 	}

@@ -2,7 +2,9 @@ package dbmanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -366,8 +368,11 @@ func (m *connectionManager) performHealthCheck() {
 				"connection", item.name,
 				"error", err)
 
-			// Attempt reconnection if enabled
-			if m.config.EnableAutoReconnect {
+			// Only reconnect when the client handle itself is closed/disconnected.
+			// For transient database restarts or network blips, *sql.DB can recover
+			// on its own; forcing Close()+Connect() here invalidates any cached ORM
+			// wrappers and callers that still hold the old handle.
+			if m.config.EnableAutoReconnect && shouldReconnectAfterHealthCheck(err) {
 				logger.Info("Attempting reconnection: connection=%s", item.name)
 				if err := item.conn.Reconnect(ctx); err != nil {
 					logger.Error("Reconnection failed",
@@ -376,7 +381,21 @@ func (m *connectionManager) performHealthCheck() {
 				} else {
 					logger.Info("Reconnection successful: connection=%s", item.name)
 				}
+			} else if m.config.EnableAutoReconnect {
+				logger.Info("Skipping reconnect for transient health check failure: connection=%s", item.name)
 			}
 		}
 	}
+}
+
+func shouldReconnectAfterHealthCheck(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, ErrConnectionClosed) {
+		return true
+	}
+
+	return strings.Contains(err.Error(), "sql: database is closed")
 }

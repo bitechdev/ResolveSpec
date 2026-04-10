@@ -4,8 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"gorm.io/gorm"
+
+	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
+	"github.com/bitechdev/ResolveSpec/pkg/dbmanager/providers"
 )
 
 func TestNewConnectionFromDB(t *testing.T) {
@@ -206,5 +211,159 @@ func TestNewConnectionFromDB_PostgreSQL(t *testing.T) {
 
 	if conn.Type() != DatabaseTypePostgreSQL {
 		t.Errorf("Expected type DatabaseTypePostgreSQL, got '%s'", conn.Type())
+	}
+}
+
+func TestDatabaseNativeAdapterReconnectFactory(t *testing.T) {
+	conn := newSQLConnection("test-native", DatabaseTypeSQLite, ConnectionConfig{
+		Name:           "test-native",
+		Type:           DatabaseTypeSQLite,
+		FilePath:       ":memory:",
+		DefaultORM:     string(ORMTypeNative),
+		ConnectTimeout: 2 * time.Second,
+	}, providers.NewSQLiteProvider())
+
+	ctx := context.Background()
+	if err := conn.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	db, err := conn.Database()
+	if err != nil {
+		t.Fatalf("Failed to get database adapter: %v", err)
+	}
+
+	adapter, ok := db.(*database.PgSQLAdapter)
+	if !ok {
+		t.Fatalf("Expected PgSQLAdapter, got %T", db)
+	}
+
+	underlyingBefore, ok := adapter.GetUnderlyingDB().(*sql.DB)
+	if !ok {
+		t.Fatalf("Expected underlying *sql.DB, got %T", adapter.GetUnderlyingDB())
+	}
+
+	if err := underlyingBefore.Close(); err != nil {
+		t.Fatalf("Failed to close underlying database: %v", err)
+	}
+
+	if _, err := db.Exec(ctx, "SELECT 1"); err != nil {
+		t.Fatalf("Expected native adapter to reconnect, got error: %v", err)
+	}
+
+	underlyingAfter, ok := adapter.GetUnderlyingDB().(*sql.DB)
+	if !ok {
+		t.Fatalf("Expected reconnected *sql.DB, got %T", adapter.GetUnderlyingDB())
+	}
+
+	if underlyingAfter == underlyingBefore {
+		t.Fatal("Expected adapter to swap to a fresh *sql.DB after reconnect")
+	}
+}
+
+func TestDatabaseBunAdapterReconnectFactory(t *testing.T) {
+	conn := newSQLConnection("test-bun", DatabaseTypeSQLite, ConnectionConfig{
+		Name:           "test-bun",
+		Type:           DatabaseTypeSQLite,
+		FilePath:       ":memory:",
+		DefaultORM:     string(ORMTypeBun),
+		ConnectTimeout: 2 * time.Second,
+	}, providers.NewSQLiteProvider())
+
+	ctx := context.Background()
+	if err := conn.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	db, err := conn.Database()
+	if err != nil {
+		t.Fatalf("Failed to get database adapter: %v", err)
+	}
+
+	adapter, ok := db.(*database.BunAdapter)
+	if !ok {
+		t.Fatalf("Expected BunAdapter, got %T", db)
+	}
+
+	underlyingBefore, ok := adapter.GetUnderlyingDB().(interface{ Close() error })
+	if !ok {
+		t.Fatalf("Expected underlying Bun DB with Close method, got %T", adapter.GetUnderlyingDB())
+	}
+
+	if err := underlyingBefore.Close(); err != nil {
+		t.Fatalf("Failed to close underlying Bun database: %v", err)
+	}
+
+	if _, err := db.Exec(ctx, "SELECT 1"); err != nil {
+		t.Fatalf("Expected Bun adapter to reconnect, got error: %v", err)
+	}
+
+	underlyingAfter := adapter.GetUnderlyingDB()
+	if underlyingAfter == underlyingBefore {
+		t.Fatal("Expected adapter to swap to a fresh Bun DB after reconnect")
+	}
+}
+
+func TestDatabaseGormAdapterReconnectFactory(t *testing.T) {
+	conn := newSQLConnection("test-gorm", DatabaseTypeSQLite, ConnectionConfig{
+		Name:           "test-gorm",
+		Type:           DatabaseTypeSQLite,
+		FilePath:       ":memory:",
+		DefaultORM:     string(ORMTypeGORM),
+		ConnectTimeout: 2 * time.Second,
+	}, providers.NewSQLiteProvider())
+
+	ctx := context.Background()
+	if err := conn.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	db, err := conn.Database()
+	if err != nil {
+		t.Fatalf("Failed to get database adapter: %v", err)
+	}
+
+	adapter, ok := db.(*database.GormAdapter)
+	if !ok {
+		t.Fatalf("Expected GormAdapter, got %T", db)
+	}
+
+	gormBefore, ok := adapter.GetUnderlyingDB().(*gorm.DB)
+	if !ok {
+		t.Fatalf("Expected underlying *gorm.DB, got %T", adapter.GetUnderlyingDB())
+	}
+
+	sqlBefore, err := gormBefore.DB()
+	if err != nil {
+		t.Fatalf("Failed to get underlying *sql.DB: %v", err)
+	}
+
+	if err := sqlBefore.Close(); err != nil {
+		t.Fatalf("Failed to close underlying database: %v", err)
+	}
+
+	count, err := db.NewSelect().Table("sqlite_master").Count(ctx)
+	if err != nil {
+		t.Fatalf("Expected GORM query builder to reconnect, got error: %v", err)
+	}
+	if count < 0 {
+		t.Fatalf("Expected non-negative count, got %d", count)
+	}
+
+	gormAfter, ok := adapter.GetUnderlyingDB().(*gorm.DB)
+	if !ok {
+		t.Fatalf("Expected reconnected *gorm.DB, got %T", adapter.GetUnderlyingDB())
+	}
+
+	sqlAfter, err := gormAfter.DB()
+	if err != nil {
+		t.Fatalf("Failed to get reconnected *sql.DB: %v", err)
+	}
+
+	if sqlAfter == sqlBefore {
+		t.Fatal("Expected GORM adapter to use a fresh *sql.DB after reconnect")
 	}
 }

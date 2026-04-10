@@ -10,6 +10,8 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
+const maxMetricFallbackEntityLength = 120
+
 func recordQueryMetrics(enabled bool, operation, schema, entity, table string, startedAt time.Time, err error) {
 	if !enabled {
 		return
@@ -136,12 +138,139 @@ func metricTargetFromRawQuery(query, driverName string) (operation, schema, enti
 	operation = normalizeMetricOperation(firstQueryKeyword(query))
 	tableRef := tableFromRawQuery(query, operation)
 	if tableRef == "" {
-		return operation, "", "unknown", "unknown"
+		return operation, "", fallbackMetricEntityFromQuery(query), "unknown"
 	}
 
 	schema, table = parseTableName(tableRef, driverName)
 	entity = cleanMetricIdentifier(table)
 	return operation, schema, entity, table
+}
+
+func fallbackMetricEntityFromQuery(query string) string {
+	query = sanitizeMetricQueryShape(query)
+	if query == "" {
+		return "unknown"
+	}
+
+	if len(query) > maxMetricFallbackEntityLength {
+		return query[:maxMetricFallbackEntityLength-3] + "..."
+	}
+
+	return query
+}
+
+func sanitizeMetricQueryShape(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return ""
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(query); {
+		if query[i] == '\'' {
+			out.WriteByte('?')
+			i++
+			for i < len(query) {
+				if query[i] == '\'' {
+					if i+1 < len(query) && query[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		if query[i] == '?' {
+			out.WriteByte('?')
+			i++
+			continue
+		}
+
+		if query[i] == '$' && i+1 < len(query) && isASCIIDigit(query[i+1]) {
+			out.WriteByte('?')
+			i++
+			for i < len(query) && isASCIIDigit(query[i]) {
+				i++
+			}
+			continue
+		}
+
+		if query[i] == ':' && (i == 0 || query[i-1] != ':') && i+1 < len(query) && isIdentifierStart(query[i+1]) {
+			out.WriteByte('?')
+			i++
+			for i < len(query) && isIdentifierPart(query[i]) {
+				i++
+			}
+			continue
+		}
+
+		if query[i] == '@' && (i == 0 || query[i-1] != '@') && i+1 < len(query) && isIdentifierStart(query[i+1]) {
+			out.WriteByte('?')
+			i++
+			for i < len(query) && isIdentifierPart(query[i]) {
+				i++
+			}
+			continue
+		}
+
+		if startsNumericLiteral(query, i) {
+			out.WriteByte('?')
+			i++
+			for i < len(query) && (isASCIIDigit(query[i]) || query[i] == '.') {
+				i++
+			}
+			continue
+		}
+
+		out.WriteByte(query[i])
+		i++
+	}
+
+	return strings.Join(strings.Fields(out.String()), " ")
+}
+
+func startsNumericLiteral(query string, idx int) bool {
+	if idx >= len(query) {
+		return false
+	}
+
+	start := idx
+	if query[idx] == '-' {
+		if idx+1 >= len(query) || !isASCIIDigit(query[idx+1]) {
+			return false
+		}
+		start++
+	}
+
+	if !isASCIIDigit(query[start]) {
+		return false
+	}
+
+	if idx > 0 && isIdentifierPart(query[idx-1]) {
+		return false
+	}
+
+	if start+1 < len(query) && query[start] == '0' && (query[start+1] == 'x' || query[start+1] == 'X') {
+		return false
+	}
+
+	return true
+}
+
+func isASCIIDigit(ch byte) bool {
+	return ch >= '0' && ch <= '9'
+}
+
+func isIdentifierStart(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'
+}
+
+func isIdentifierPart(ch byte) bool {
+	return isIdentifierStart(ch) || isASCIIDigit(ch)
 }
 
 func firstQueryKeyword(query string) string {

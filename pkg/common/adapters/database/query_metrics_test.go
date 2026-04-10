@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -266,6 +267,47 @@ func TestPgSQLAdapterRawExecRecordsMetric(t *testing.T) {
 	assert.Equal(t, "UPDATE", calls[0].operation)
 	assert.Equal(t, "public", calls[0].schema)
 	assert.Equal(t, "orders", calls[0].table)
+}
+
+func TestPgSQLAdapterRawExecUsesSQLAsEntityWhenTargetUnknown(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	provider := &capturingMetricsProvider{}
+	prev := metrics.GetProvider()
+	metrics.SetProvider(provider)
+	defer metrics.SetProvider(prev)
+
+	query := `select core.c_setuserid($1)`
+	mock.ExpectExec(`select core\.c_setuserid\(\$1\)`).
+		WithArgs(42).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	adapter := NewPgSQLAdapter(db)
+	_, err = adapter.Exec(context.Background(), query, 42)
+
+	require.NoError(t, err)
+
+	calls := provider.snapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "SELECT", calls[0].operation)
+	assert.Equal(t, "default", calls[0].schema)
+	assert.Equal(t, "select core.c_setuserid(?)", calls[0].entity)
+	assert.Equal(t, "unknown", calls[0].table)
+}
+
+func TestFallbackMetricEntityFromQuerySanitizesAndTruncates(t *testing.T) {
+	entity := fallbackMetricEntityFromQuery(" \n SELECT   some_function(1, 'abc', $2, ?, :name, @p1, true, null)   \t ")
+	assert.Equal(t, "SELECT some_function(?, ?, ?, ?, ?, ?, true, null)", entity)
+
+	entity = fallbackMetricEntityFromQuery("SELECT price::numeric, id FROM logs WHERE code = -42")
+	assert.Equal(t, "SELECT price::numeric, id FROM logs WHERE code = ?", entity)
+
+	longQuery := "SELECT " + strings.Repeat("x", maxMetricFallbackEntityLength)
+	entity = fallbackMetricEntityFromQuery(longQuery)
+	assert.Len(t, entity, maxMetricFallbackEntityLength)
+	assert.True(t, strings.HasSuffix(entity, "..."))
 }
 
 func TestBunAdapterRecordsEntityAndTableMetrics(t *testing.T) {

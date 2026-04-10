@@ -77,14 +77,14 @@ func syncGormConnPool(target, fresh *gorm.DB) {
 	}
 
 	if target.Config != nil && fresh.Config != nil {
-		target.Config.ConnPool = fresh.Config.ConnPool
+		target.ConnPool = fresh.ConnPool
 	}
 
 	if target.Statement != nil {
 		if fresh.Statement != nil && fresh.Statement.ConnPool != nil {
 			target.Statement.ConnPool = fresh.Statement.ConnPool
 		} else if fresh.Config != nil {
-			target.Statement.ConnPool = fresh.Config.ConnPool
+			target.Statement.ConnPool = fresh.ConnPool
 		}
 		target.Statement.DB = target
 	}
@@ -653,10 +653,10 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 
 // GormInsertQuery implements InsertQuery for GORM
 type GormInsertQuery struct {
-	db     *gorm.DB
+	db        *gorm.DB
 	reconnect func(...*gorm.DB) error
-	model  interface{}
-	values map[string]interface{}
+	model     interface{}
+	values    map[string]interface{}
 }
 
 func (g *GormInsertQuery) Model(model interface{}) common.InsertQuery {
@@ -715,10 +715,10 @@ func (g *GormInsertQuery) Exec(ctx context.Context) (res common.Result, err erro
 
 // GormUpdateQuery implements UpdateQuery for GORM
 type GormUpdateQuery struct {
-	db      *gorm.DB
+	db        *gorm.DB
 	reconnect func(...*gorm.DB) error
-	model   interface{}
-	updates interface{}
+	model     interface{}
+	updates   interface{}
 }
 
 func (g *GormUpdateQuery) Model(model interface{}) common.UpdateQuery {
@@ -815,9 +815,9 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 
 // GormDeleteQuery implements DeleteQuery for GORM
 type GormDeleteQuery struct {
-	db    *gorm.DB
+	db        *gorm.DB
 	reconnect func(...*gorm.DB) error
-	model interface{}
+	model     interface{}
 }
 
 func (g *GormDeleteQuery) Model(model interface{}) common.DeleteQuery {

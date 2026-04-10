@@ -83,14 +83,14 @@ func NewPrometheusProvider(cfg *Config) *PrometheusProvider {
 				Help:    "Database query duration in seconds",
 				Buckets: cfg.DBQueryBuckets,
 			},
-			[]string{"operation", "table"},
+			[]string{"operation", "schema", "entity", "table"},
 		),
 		dbQueryTotal: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: metricName("db_queries_total"),
 				Help: "Total number of database queries",
 			},
-			[]string{"operation", "table", "status"},
+			[]string{"operation", "schema", "entity", "table", "status"},
 		),
 		cacheHits: promauto.NewCounterVec(
 			prometheus.CounterOpts{
@@ -204,13 +204,13 @@ func (p *PrometheusProvider) DecRequestsInFlight() {
 }
 
 // RecordDBQuery implements Provider interface
-func (p *PrometheusProvider) RecordDBQuery(operation, table string, duration time.Duration, err error) {
+func (p *PrometheusProvider) RecordDBQuery(operation, schema, entity, table string, duration time.Duration, err error) {
 	status := "success"
 	if err != nil {
 		status = "error"
 	}
-	p.dbQueryDuration.WithLabelValues(operation, table).Observe(duration.Seconds())
-	p.dbQueryTotal.WithLabelValues(operation, table, status).Inc()
+	p.dbQueryDuration.WithLabelValues(operation, schema, entity, table).Observe(duration.Seconds())
+	p.dbQueryTotal.WithLabelValues(operation, schema, entity, table, status).Inc()
 }
 
 // RecordCacheHit implements Provider interface

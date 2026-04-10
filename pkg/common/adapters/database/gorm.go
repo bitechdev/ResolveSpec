@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -16,15 +17,16 @@ import (
 
 // GormAdapter adapts GORM to work with our Database interface
 type GormAdapter struct {
-	dbMu       sync.RWMutex
-	db         *gorm.DB
-	dbFactory  func() (*gorm.DB, error)
-	driverName string
+	dbMu           sync.RWMutex
+	db             *gorm.DB
+	dbFactory      func() (*gorm.DB, error)
+	driverName     string
+	metricsEnabled bool
 }
 
 // NewGormAdapter creates a new GORM adapter
 func NewGormAdapter(db *gorm.DB) *GormAdapter {
-	adapter := &GormAdapter{db: db}
+	adapter := &GormAdapter{db: db, metricsEnabled: true}
 	// Initialize driver name
 	adapter.driverName = adapter.DriverName()
 	return adapter
@@ -34,6 +36,22 @@ func NewGormAdapter(db *gorm.DB) *GormAdapter {
 func (g *GormAdapter) WithDBFactory(factory func() (*gorm.DB, error)) *GormAdapter {
 	g.dbFactory = factory
 	return g
+}
+
+// SetMetricsEnabled enables or disables query metrics for this adapter.
+func (g *GormAdapter) SetMetricsEnabled(enabled bool) *GormAdapter {
+	g.metricsEnabled = enabled
+	return g
+}
+
+// EnableMetrics enables query metrics for this adapter.
+func (g *GormAdapter) EnableMetrics() *GormAdapter {
+	return g.SetMetricsEnabled(true)
+}
+
+// DisableMetrics disables query metrics for this adapter.
+func (g *GormAdapter) DisableMetrics() *GormAdapter {
+	return g.SetMetricsEnabled(false)
 }
 
 func (g *GormAdapter) getDB() *gorm.DB {
@@ -109,19 +127,19 @@ func (g *GormAdapter) DisableQueryDebug() *GormAdapter {
 }
 
 func (g *GormAdapter) NewSelect() common.SelectQuery {
-	return &GormSelectQuery{db: g.getDB(), driverName: g.driverName, reconnect: g.reconnectDB}
+	return &GormSelectQuery{db: g.getDB(), driverName: g.driverName, reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) NewInsert() common.InsertQuery {
-	return &GormInsertQuery{db: g.getDB(), reconnect: g.reconnectDB}
+	return &GormInsertQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) NewUpdate() common.UpdateQuery {
-	return &GormUpdateQuery{db: g.getDB(), reconnect: g.reconnectDB}
+	return &GormUpdateQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) NewDelete() common.DeleteQuery {
-	return &GormDeleteQuery{db: g.getDB(), reconnect: g.reconnectDB}
+	return &GormDeleteQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) Exec(ctx context.Context, query string, args ...interface{}) (res common.Result, err error) {
@@ -130,6 +148,8 @@ func (g *GormAdapter) Exec(ctx context.Context, query string, args ...interface{
 			err = logger.HandlePanic("GormAdapter.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, g.driverName)
 	run := func() *gorm.DB {
 		return g.getDB().WithContext(ctx).Exec(query, args...)
 	}
@@ -139,6 +159,7 @@ func (g *GormAdapter) Exec(ctx context.Context, query string, args ...interface{
 			result = run()
 		}
 	}
+	recordQueryMetrics(g.metricsEnabled, operation, schema, entity, table, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
@@ -148,6 +169,8 @@ func (g *GormAdapter) Query(ctx context.Context, dest interface{}, query string,
 			err = logger.HandlePanic("GormAdapter.Query", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, g.driverName)
 	run := func() error {
 		return g.getDB().WithContext(ctx).Raw(query, args...).Find(dest).Error
 	}
@@ -157,6 +180,7 @@ func (g *GormAdapter) Query(ctx context.Context, dest interface{}, query string,
 			err = run()
 		}
 	}
+	recordQueryMetrics(g.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 
@@ -173,7 +197,7 @@ func (g *GormAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
-	return &GormAdapter{db: tx, dbFactory: g.dbFactory, driverName: g.driverName}, nil
+	return &GormAdapter{db: tx, dbFactory: g.dbFactory, driverName: g.driverName, metricsEnabled: g.metricsEnabled}, nil
 }
 
 func (g *GormAdapter) CommitTx(ctx context.Context) error {
@@ -192,7 +216,7 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 	}()
 	run := func() error {
 		return g.getDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			adapter := &GormAdapter{db: tx, dbFactory: g.dbFactory, driverName: g.driverName}
+			adapter := &GormAdapter{db: tx, dbFactory: g.dbFactory, driverName: g.driverName, metricsEnabled: g.metricsEnabled}
 			return fn(adapter)
 		})
 	}
@@ -236,22 +260,18 @@ type GormSelectQuery struct {
 	reconnect      func(...*gorm.DB) error
 	schema         string // Separated schema name
 	tableName      string // Just the table name, without schema
+	entity         string
 	tableAlias     string
 	driverName     string // Database driver name (postgres, sqlite, mssql)
 	inJoinContext  bool   // Track if we're in a JOIN relation context
 	joinTableAlias string // Alias to use for JOIN conditions
+	metricsEnabled bool
 }
 
 func (g *GormSelectQuery) Model(model interface{}) common.SelectQuery {
 	g.db = g.db.Model(model)
-
-	// Try to get table name from model if it implements TableNameProvider
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// Check if the table name contains schema (e.g., "schema.table")
-		// For SQLite, this will convert "schema.table" to "schema_table"
-		g.schema, g.tableName = parseTableName(fullTableName, g.driverName)
-	}
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.driverName)
+	g.entity = entityNameFromModel(model, g.tableName)
 
 	if provider, ok := model.(common.TableAliasProvider); ok {
 		g.tableAlias = provider.TableAlias()
@@ -265,6 +285,9 @@ func (g *GormSelectQuery) Table(table string) common.SelectQuery {
 	// Check if the table name contains schema (e.g., "schema.table")
 	// For SQLite, this will convert "schema.table" to "schema_table"
 	g.schema, g.tableName = parseTableName(table, g.driverName)
+	if g.entity == "" {
+		g.entity = cleanMetricIdentifier(g.tableName)
+	}
 
 	return g
 }
@@ -450,9 +473,10 @@ func (g *GormSelectQuery) PreloadRelation(relation string, apply ...func(common.
 		}
 
 		wrapper := &GormSelectQuery{
-			db:         db,
-			reconnect:  g.reconnect,
-			driverName: g.driverName,
+			db:             db,
+			reconnect:      g.reconnect,
+			driverName:     g.driverName,
+			metricsEnabled: g.metricsEnabled,
 		}
 
 		current := common.SelectQuery(wrapper)
@@ -494,6 +518,7 @@ func (g *GormSelectQuery) JoinRelation(relation string, apply ...func(common.Sel
 			driverName:     g.driverName,
 			inJoinContext:  true,                      // Mark as JOIN context
 			joinTableAlias: strings.ToLower(relation), // Use relation name as alias
+			metricsEnabled: g.metricsEnabled,
 		}
 		current := common.SelectQuery(wrapper)
 
@@ -550,6 +575,7 @@ func (g *GormSelectQuery) Scan(ctx context.Context, dest interface{}) (err error
 			err = logger.HandlePanic("GormSelectQuery.Scan", r)
 		}
 	}()
+	startedAt := time.Now()
 	run := func() error {
 		return g.db.WithContext(ctx).Find(dest).Error
 	}
@@ -566,6 +592,7 @@ func (g *GormSelectQuery) Scan(ctx context.Context, dest interface{}) (err error
 		})
 		logger.Error("GormSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
 }
 
@@ -578,6 +605,7 @@ func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
 	if g.db.Statement.Model == nil {
 		return fmt.Errorf("ScanModel requires Model() to be set before scanning")
 	}
+	startedAt := time.Now()
 	run := func() error {
 		return g.db.WithContext(ctx).Find(g.db.Statement.Model).Error
 	}
@@ -594,6 +622,7 @@ func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
 		})
 		logger.Error("GormSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
 }
 
@@ -604,6 +633,7 @@ func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
 			count = 0
 		}
 	}()
+	startedAt := time.Now()
 	var count64 int64
 	run := func() error {
 		return g.db.WithContext(ctx).Count(&count64).Error
@@ -621,6 +651,7 @@ func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
 		})
 		logger.Error("GormSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(g.metricsEnabled, "COUNT", g.schema, g.entity, g.tableName, startedAt, err)
 	return int(count64), err
 }
 
@@ -631,6 +662,7 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 			exists = false
 		}
 	}()
+	startedAt := time.Now()
 	var count int64
 	run := func() error {
 		return g.db.WithContext(ctx).Limit(1).Count(&count).Error
@@ -648,25 +680,36 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 		})
 		logger.Error("GormSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(g.metricsEnabled, "EXISTS", g.schema, g.entity, g.tableName, startedAt, err)
 	return count > 0, err
 }
 
 // GormInsertQuery implements InsertQuery for GORM
 type GormInsertQuery struct {
-	db        *gorm.DB
-	reconnect func(...*gorm.DB) error
-	model     interface{}
-	values    map[string]interface{}
+	db             *gorm.DB
+	reconnect      func(...*gorm.DB) error
+	model          interface{}
+	values         map[string]interface{}
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (g *GormInsertQuery) Model(model interface{}) common.InsertQuery {
 	g.model = model
 	g.db = g.db.Model(model)
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormInsertQuery) Table(table string) common.InsertQuery {
 	g.db = g.db.Table(table)
+	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	if g.entity == "" {
+		g.entity = cleanMetricIdentifier(g.tableName)
+	}
 	return g
 }
 
@@ -694,6 +737,7 @@ func (g *GormInsertQuery) Exec(ctx context.Context) (res common.Result, err erro
 			err = logger.HandlePanic("GormInsertQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	run := func() *gorm.DB {
 		switch {
 		case g.model != nil:
@@ -710,30 +754,42 @@ func (g *GormInsertQuery) Exec(ctx context.Context) (res common.Result, err erro
 			result = run()
 		}
 	}
+	recordQueryMetrics(g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
 // GormUpdateQuery implements UpdateQuery for GORM
 type GormUpdateQuery struct {
-	db        *gorm.DB
-	reconnect func(...*gorm.DB) error
-	model     interface{}
-	updates   interface{}
+	db             *gorm.DB
+	reconnect      func(...*gorm.DB) error
+	model          interface{}
+	updates        interface{}
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (g *GormUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	g.model = model
 	g.db = g.db.Model(model)
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormUpdateQuery) Table(table string) common.UpdateQuery {
 	g.db = g.db.Table(table)
+	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	if g.entity == "" {
+		g.entity = cleanMetricIdentifier(g.tableName)
+	}
 	if g.model == nil {
 		// Try to get table name from table string if model is not set
 		model, err := modelregistry.GetModelByName(table)
 		if err == nil {
 			g.model = model
+			g.entity = entityNameFromModel(model, g.tableName)
 		}
 	}
 	return g
@@ -794,6 +850,7 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 			err = logger.HandlePanic("GormUpdateQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	run := func() *gorm.DB {
 		return g.db.WithContext(ctx).Updates(g.updates)
 	}
@@ -810,24 +867,35 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 		})
 		logger.Error("GormUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
 	}
+	recordQueryMetrics(g.metricsEnabled, "UPDATE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
 // GormDeleteQuery implements DeleteQuery for GORM
 type GormDeleteQuery struct {
-	db        *gorm.DB
-	reconnect func(...*gorm.DB) error
-	model     interface{}
+	db             *gorm.DB
+	reconnect      func(...*gorm.DB) error
+	model          interface{}
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (g *GormDeleteQuery) Model(model interface{}) common.DeleteQuery {
 	g.model = model
 	g.db = g.db.Model(model)
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormDeleteQuery) Table(table string) common.DeleteQuery {
 	g.db = g.db.Table(table)
+	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	if g.entity == "" {
+		g.entity = cleanMetricIdentifier(g.tableName)
+	}
 	return g
 }
 
@@ -842,6 +910,7 @@ func (g *GormDeleteQuery) Exec(ctx context.Context) (res common.Result, err erro
 			err = logger.HandlePanic("GormDeleteQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	run := func() *gorm.DB {
 		return g.db.WithContext(ctx).Delete(g.model)
 	}
@@ -858,6 +927,7 @@ func (g *GormDeleteQuery) Exec(ctx context.Context) (res common.Result, err erro
 		})
 		logger.Error("GormDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
 	}
+	recordQueryMetrics(g.metricsEnabled, "DELETE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 

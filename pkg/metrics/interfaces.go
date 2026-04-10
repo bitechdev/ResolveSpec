@@ -19,7 +19,7 @@ type Provider interface {
 	DecRequestsInFlight()
 
 	// RecordDBQuery records metrics for a database query
-	RecordDBQuery(operation, table string, duration time.Duration, err error)
+	RecordDBQuery(operation, schema, entity, table string, duration time.Duration, err error)
 
 	// RecordCacheHit records a cache hit
 	RecordCacheHit(provider string)
@@ -69,7 +69,7 @@ type NoOpProvider struct{}
 func (n *NoOpProvider) RecordHTTPRequest(method, path, status string, duration time.Duration) {}
 func (n *NoOpProvider) IncRequestsInFlight()                                                  {}
 func (n *NoOpProvider) DecRequestsInFlight()                                                  {}
-func (n *NoOpProvider) RecordDBQuery(operation, table string, duration time.Duration, err error) {
+func (n *NoOpProvider) RecordDBQuery(operation, schema, entity, table string, duration time.Duration, err error) {
 }
 func (n *NoOpProvider) RecordCacheHit(provider string)                {}
 func (n *NoOpProvider) RecordCacheMiss(provider string)               {}

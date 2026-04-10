@@ -427,7 +427,9 @@ func (c *sqlConnection) getBunAdapter() (common.Database, error) {
 		c.bunDB = bun.NewDB(native, dialect)
 	}
 
-	c.bunAdapter = database.NewBunAdapter(c.bunDB).WithDBFactory(c.reopenBunForAdapter)
+	c.bunAdapter = database.NewBunAdapter(c.bunDB).
+		WithDBFactory(c.reopenBunForAdapter).
+		SetMetricsEnabled(c.config.EnableMetrics)
 	return c.bunAdapter, nil
 }
 
@@ -468,7 +470,9 @@ func (c *sqlConnection) getGORMAdapter() (common.Database, error) {
 		c.gormDB = db
 	}
 
-	c.gormAdapter = database.NewGormAdapter(c.gormDB).WithDBFactory(c.reopenGORMForAdapter)
+	c.gormAdapter = database.NewGormAdapter(c.gormDB).
+		WithDBFactory(c.reopenGORMForAdapter).
+		SetMetricsEnabled(c.config.EnableMetrics)
 	return c.gormAdapter, nil
 }
 
@@ -509,11 +513,17 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 	// Create a native adapter based on database type
 	switch c.dbType {
 	case DatabaseTypePostgreSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
+			WithDBFactory(c.reopenNativeForAdapter).
+			SetMetricsEnabled(c.config.EnableMetrics)
 	case DatabaseTypeSQLite:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
+			WithDBFactory(c.reopenNativeForAdapter).
+			SetMetricsEnabled(c.config.EnableMetrics)
 	case DatabaseTypeMSSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).WithDBFactory(c.reopenNativeForAdapter)
+		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
+			WithDBFactory(c.reopenNativeForAdapter).
+			SetMetricsEnabled(c.config.EnableMetrics)
 	default:
 		return nil, ErrUnsupportedDatabase
 	}

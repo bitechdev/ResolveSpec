@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -17,10 +19,11 @@ import (
 // PgSQLAdapter adapts standard database/sql to work with our Database interface
 // This provides a lightweight PostgreSQL adapter without ORM overhead
 type PgSQLAdapter struct {
-	db         *sql.DB
-	dbMu       sync.RWMutex
-	dbFactory  func() (*sql.DB, error)
-	driverName string
+	db             *sql.DB
+	dbMu           sync.RWMutex
+	dbFactory      func() (*sql.DB, error)
+	driverName     string
+	metricsEnabled bool
 }
 
 // NewPgSQLAdapter creates a new adapter wrapping a standard sql.DB.
@@ -31,13 +34,29 @@ func NewPgSQLAdapter(db *sql.DB, driverName ...string) *PgSQLAdapter {
 	if len(driverName) > 0 && driverName[0] != "" {
 		name = driverName[0]
 	}
-	return &PgSQLAdapter{db: db, driverName: name}
+	return &PgSQLAdapter{db: db, driverName: name, metricsEnabled: true}
 }
 
 // WithDBFactory configures a factory used to reopen the database connection if it is closed.
 func (p *PgSQLAdapter) WithDBFactory(factory func() (*sql.DB, error)) *PgSQLAdapter {
 	p.dbFactory = factory
 	return p
+}
+
+// SetMetricsEnabled enables or disables query metrics for this adapter.
+func (p *PgSQLAdapter) SetMetricsEnabled(enabled bool) *PgSQLAdapter {
+	p.metricsEnabled = enabled
+	return p
+}
+
+// EnableMetrics enables query metrics for this adapter.
+func (p *PgSQLAdapter) EnableMetrics() *PgSQLAdapter {
+	return p.SetMetricsEnabled(true)
+}
+
+// DisableMetrics disables query metrics for this adapter.
+func (p *PgSQLAdapter) DisableMetrics() *PgSQLAdapter {
+	return p.SetMetricsEnabled(false)
 }
 
 func (p *PgSQLAdapter) getDB() *sql.DB {
@@ -71,37 +90,41 @@ func (p *PgSQLAdapter) EnableQueryDebug() {
 
 func (p *PgSQLAdapter) NewSelect() common.SelectQuery {
 	return &PgSQLSelectQuery{
-		db:         p.getDB(),
-		driverName: p.driverName,
-		columns:    []string{"*"},
-		args:       make([]interface{}, 0),
+		db:             p.getDB(),
+		driverName:     p.driverName,
+		columns:        []string{"*"},
+		args:           make([]interface{}, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLAdapter) NewInsert() common.InsertQuery {
 	return &PgSQLInsertQuery{
-		db:         p.getDB(),
-		driverName: p.driverName,
-		values:     make(map[string]interface{}),
+		db:             p.getDB(),
+		driverName:     p.driverName,
+		values:         make(map[string]interface{}),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLAdapter) NewUpdate() common.UpdateQuery {
 	return &PgSQLUpdateQuery{
-		db:           p.getDB(),
-		driverName:   p.driverName,
-		sets:         make(map[string]interface{}),
-		args:         make([]interface{}, 0),
-		whereClauses: make([]string, 0),
+		db:             p.getDB(),
+		driverName:     p.driverName,
+		sets:           make(map[string]interface{}),
+		args:           make([]interface{}, 0),
+		whereClauses:   make([]string, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLAdapter) NewDelete() common.DeleteQuery {
 	return &PgSQLDeleteQuery{
-		db:           p.getDB(),
-		driverName:   p.driverName,
-		args:         make([]interface{}, 0),
-		whereClauses: make([]string, 0),
+		db:             p.getDB(),
+		driverName:     p.driverName,
+		args:           make([]interface{}, 0),
+		whereClauses:   make([]string, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
@@ -111,6 +134,8 @@ func (p *PgSQLAdapter) Exec(ctx context.Context, query string, args ...interface
 			err = logger.HandlePanic("PgSQLAdapter.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, p.driverName)
 	logger.Debug("PgSQL Exec: %s [args: %v]", query, args)
 	var result sql.Result
 	run := func() error { var e error; result, e = p.getDB().ExecContext(ctx, query, args...); return e }
@@ -122,8 +147,10 @@ func (p *PgSQLAdapter) Exec(ctx context.Context, query string, args ...interface
 	}
 	if err != nil {
 		logger.Error("PgSQL Exec failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return nil, err
 	}
+	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -133,6 +160,8 @@ func (p *PgSQLAdapter) Query(ctx context.Context, dest interface{}, query string
 			err = logger.HandlePanic("PgSQLAdapter.Query", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, p.driverName)
 	logger.Debug("PgSQL Query: %s [args: %v]", query, args)
 	var rows *sql.Rows
 	run := func() error { var e error; rows, e = p.getDB().QueryContext(ctx, query, args...); return e }
@@ -144,11 +173,14 @@ func (p *PgSQLAdapter) Query(ctx context.Context, dest interface{}, query string
 	}
 	if err != nil {
 		logger.Error("PgSQL Query failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return err
 	}
 	defer rows.Close()
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	return err
 }
 
 func (p *PgSQLAdapter) BeginTx(ctx context.Context) (common.Database, error) {
@@ -156,7 +188,7 @@ func (p *PgSQLAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PgSQLTxAdapter{tx: tx, driverName: p.driverName}, nil
+	return &PgSQLTxAdapter{tx: tx, driverName: p.driverName, metricsEnabled: p.metricsEnabled}, nil
 }
 
 func (p *PgSQLAdapter) CommitTx(ctx context.Context) error {
@@ -179,7 +211,7 @@ func (p *PgSQLAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 		return err
 	}
 
-	adapter := &PgSQLTxAdapter{tx: tx, driverName: p.driverName}
+	adapter := &PgSQLTxAdapter{tx: tx, driverName: p.driverName, metricsEnabled: p.metricsEnabled}
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -222,34 +254,34 @@ type relationMetadata struct {
 
 // PgSQLSelectQuery implements SelectQuery for PostgreSQL
 type PgSQLSelectQuery struct {
-	db            *sql.DB
-	tx            *sql.Tx
-	model         interface{}
-	tableName     string
-	tableAlias    string
-	driverName    string // Database driver name (postgres, sqlite, mssql)
-	columns       []string
-	columnExprs   []string
-	whereClauses  []string
-	orClauses     []string
-	joins         []string
-	orderBy       []string
-	groupBy       []string
-	havingClauses []string
-	limit         int
-	offset        int
-	args          []interface{}
-	paramCounter  int
-	preloads      []preloadConfig
+	db             *sql.DB
+	tx             *sql.Tx
+	model          interface{}
+	entity         string
+	tableName      string
+	schema         string
+	tableAlias     string
+	driverName     string // Database driver name (postgres, sqlite, mssql)
+	columns        []string
+	columnExprs    []string
+	whereClauses   []string
+	orClauses      []string
+	joins          []string
+	orderBy        []string
+	groupBy        []string
+	havingClauses  []string
+	limit          int
+	offset         int
+	args           []interface{}
+	paramCounter   int
+	preloads       []preloadConfig
+	metricsEnabled bool
 }
 
 func (p *PgSQLSelectQuery) Model(model interface{}) common.SelectQuery {
 	p.model = model
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// For SQLite, convert "schema.table" to "schema_table"
-		_, p.tableName = parseTableName(fullTableName, p.driverName)
-	}
+	p.schema, p.tableName = schemaAndTableFromModel(model, p.driverName)
+	p.entity = entityNameFromModel(model, p.tableName)
 	if provider, ok := model.(common.TableAliasProvider); ok {
 		p.tableAlias = provider.TableAlias()
 	}
@@ -258,7 +290,10 @@ func (p *PgSQLSelectQuery) Model(model interface{}) common.SelectQuery {
 
 func (p *PgSQLSelectQuery) Table(table string) common.SelectQuery {
 	// For SQLite, convert "schema.table" to "schema_table"
-	_, p.tableName = parseTableName(table, p.driverName)
+	p.schema, p.tableName = parseTableName(table, p.driverName)
+	if p.entity == "" {
+		p.entity = cleanMetricIdentifier(p.tableName)
+	}
 	return p
 }
 
@@ -468,6 +503,7 @@ func (p *PgSQLSelectQuery) Scan(ctx context.Context, dest interface{}) (err erro
 			err = logger.HandlePanic("PgSQLSelectQuery.Scan", r)
 		}
 	}()
+	startedAt := time.Now()
 
 	// Apply preloads that use JOINs
 	p.applyJoinPreloads()
@@ -484,17 +520,21 @@ func (p *PgSQLSelectQuery) Scan(ctx context.Context, dest interface{}) (err erro
 
 	if err != nil {
 		logger.Error("PgSQL SELECT failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
 		return err
 	}
 	defer rows.Close()
 
 	err = scanRows(rows, dest)
 	if err != nil {
+		recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
 		return err
 	}
 
 	// Apply preloads that use separate queries
-	return p.applySubqueryPreloads(ctx, dest)
+	err = p.applySubqueryPreloads(ctx, dest)
+	recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
+	return err
 }
 
 func (p *PgSQLSelectQuery) ScanModel(ctx context.Context) error {
@@ -511,6 +551,7 @@ func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
 			count = 0
 		}
 	}()
+	startedAt := time.Now()
 
 	// Build a COUNT query
 	var sb strings.Builder
@@ -550,6 +591,7 @@ func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
 	if err != nil {
 		logger.Error("PgSQL COUNT failed: %v", err)
 	}
+	recordQueryMetrics(p.metricsEnabled, "COUNT", p.schema, p.entity, p.tableName, startedAt, err)
 	return count, err
 }
 
@@ -567,20 +609,21 @@ func (p *PgSQLSelectQuery) Exists(ctx context.Context) (exists bool, err error) 
 
 // PgSQLInsertQuery implements InsertQuery for PostgreSQL
 type PgSQLInsertQuery struct {
-	db         *sql.DB
-	tx         *sql.Tx
-	tableName  string
-	driverName string
-	values     map[string]interface{}
-	returning  []string
+	db             *sql.DB
+	tx             *sql.Tx
+	schema         string
+	tableName      string
+	entity         string
+	driverName     string
+	values         map[string]interface{}
+	valueOrder     []string
+	returning      []string
+	metricsEnabled bool
 }
 
 func (p *PgSQLInsertQuery) Model(model interface{}) common.InsertQuery {
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// For SQLite, convert "schema.table" to "schema_table"
-		_, p.tableName = parseTableName(fullTableName, p.driverName)
-	}
+	p.schema, p.tableName = schemaAndTableFromModel(model, p.driverName)
+	p.entity = entityNameFromModel(model, p.tableName)
 	// Extract values from model using reflection
 	// This is a simplified implementation
 	return p
@@ -588,11 +631,17 @@ func (p *PgSQLInsertQuery) Model(model interface{}) common.InsertQuery {
 
 func (p *PgSQLInsertQuery) Table(table string) common.InsertQuery {
 	// For SQLite, convert "schema.table" to "schema_table"
-	_, p.tableName = parseTableName(table, p.driverName)
+	p.schema, p.tableName = parseTableName(table, p.driverName)
+	if p.entity == "" {
+		p.entity = cleanMetricIdentifier(p.tableName)
+	}
 	return p
 }
 
 func (p *PgSQLInsertQuery) Value(column string, value interface{}) common.InsertQuery {
+	if _, exists := p.values[column]; !exists {
+		p.valueOrder = append(p.valueOrder, column)
+	}
 	p.values[column] = value
 	return p
 }
@@ -613,6 +662,7 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 			err = logger.HandlePanic("PgSQLInsertQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 
 	if len(p.values) == 0 {
 		return nil, fmt.Errorf("no values to insert")
@@ -621,12 +671,11 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 	columns := make([]string, 0, len(p.values))
 	placeholders := make([]string, 0, len(p.values))
 	args := make([]interface{}, 0, len(p.values))
-
 	i := 1
-	for col, val := range p.values {
+	for _, col := range p.valueOrder {
 		columns = append(columns, col)
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-		args = append(args, val)
+		args = append(args, p.values[col])
 		i++
 	}
 
@@ -650,43 +699,50 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL INSERT failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
+	recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
 // PgSQLUpdateQuery implements UpdateQuery for PostgreSQL
 type PgSQLUpdateQuery struct {
-	db           *sql.DB
-	tx           *sql.Tx
-	tableName    string
-	driverName   string
-	model        interface{}
-	sets         map[string]interface{}
-	whereClauses []string
-	args         []interface{}
-	paramCounter int
-	returning    []string
+	db             *sql.DB
+	tx             *sql.Tx
+	schema         string
+	tableName      string
+	entity         string
+	driverName     string
+	model          interface{}
+	sets           map[string]interface{}
+	setOrder       []string
+	whereClauses   []string
+	args           []interface{}
+	paramCounter   int
+	returning      []string
+	metricsEnabled bool
 }
 
 func (p *PgSQLUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	p.model = model
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// For SQLite, convert "schema.table" to "schema_table"
-		_, p.tableName = parseTableName(fullTableName, p.driverName)
-	}
+	p.schema, p.tableName = schemaAndTableFromModel(model, p.driverName)
+	p.entity = entityNameFromModel(model, p.tableName)
 	return p
 }
 
 func (p *PgSQLUpdateQuery) Table(table string) common.UpdateQuery {
 	// For SQLite, convert "schema.table" to "schema_table"
-	_, p.tableName = parseTableName(table, p.driverName)
+	p.schema, p.tableName = parseTableName(table, p.driverName)
+	if p.entity == "" {
+		p.entity = cleanMetricIdentifier(p.tableName)
+	}
 	if p.model == nil {
 		model, err := modelregistry.GetModelByName(table)
 		if err == nil {
 			p.model = model
+			p.entity = entityNameFromModel(model, p.tableName)
 		}
 	}
 	return p
@@ -695,6 +751,9 @@ func (p *PgSQLUpdateQuery) Table(table string) common.UpdateQuery {
 func (p *PgSQLUpdateQuery) Set(column string, value interface{}) common.UpdateQuery {
 	if p.model != nil && !reflection.IsColumnWritable(p.model, column) {
 		return p
+	}
+	if _, exists := p.sets[column]; !exists {
+		p.setOrder = append(p.setOrder, column)
 	}
 	p.sets[column] = value
 	return p
@@ -706,12 +765,22 @@ func (p *PgSQLUpdateQuery) SetMap(values map[string]interface{}) common.UpdateQu
 		pkName = reflection.GetPrimaryKeyName(p.model)
 	}
 
-	for column, value := range values {
+	orderedColumns := make([]string, 0, len(values))
+	for column := range values {
+		orderedColumns = append(orderedColumns, column)
+	}
+	sort.Strings(orderedColumns)
+
+	for _, column := range orderedColumns {
+		value := values[column]
 		if pkName != "" && column == pkName {
 			continue
 		}
 		if p.model != nil && !reflection.IsColumnWritable(p.model, column) {
 			continue
+		}
+		if _, exists := p.sets[column]; !exists {
+			p.setOrder = append(p.setOrder, column)
 		}
 		p.sets[column] = value
 	}
@@ -746,6 +815,7 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 			err = logger.HandlePanic("PgSQLUpdateQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 
 	if len(p.sets) == 0 {
 		return nil, fmt.Errorf("no values to update")
@@ -753,12 +823,11 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	setClauses := make([]string, 0, len(p.sets))
 	setArgs := make([]interface{}, 0, len(p.sets))
-
 	// SET parameters start at $1
 	i := 1
-	for col, val := range p.sets {
+	for _, col := range p.setOrder {
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, i))
-		setArgs = append(setArgs, val)
+		setArgs = append(setArgs, p.sets[col])
 		i++
 	}
 
@@ -812,35 +881,40 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL UPDATE failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
+	recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
 // PgSQLDeleteQuery implements DeleteQuery for PostgreSQL
 type PgSQLDeleteQuery struct {
-	db           *sql.DB
-	tx           *sql.Tx
-	tableName    string
-	driverName   string
-	whereClauses []string
-	args         []interface{}
-	paramCounter int
+	db             *sql.DB
+	tx             *sql.Tx
+	schema         string
+	tableName      string
+	entity         string
+	driverName     string
+	whereClauses   []string
+	args           []interface{}
+	paramCounter   int
+	metricsEnabled bool
 }
 
 func (p *PgSQLDeleteQuery) Model(model interface{}) common.DeleteQuery {
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// For SQLite, convert "schema.table" to "schema_table"
-		_, p.tableName = parseTableName(fullTableName, p.driverName)
-	}
+	p.schema, p.tableName = schemaAndTableFromModel(model, p.driverName)
+	p.entity = entityNameFromModel(model, p.tableName)
 	return p
 }
 
 func (p *PgSQLDeleteQuery) Table(table string) common.DeleteQuery {
 	// For SQLite, convert "schema.table" to "schema_table"
-	_, p.tableName = parseTableName(table, p.driverName)
+	p.schema, p.tableName = parseTableName(table, p.driverName)
+	if p.entity == "" {
+		p.entity = cleanMetricIdentifier(p.tableName)
+	}
 	return p
 }
 
@@ -867,6 +941,7 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 			err = logger.HandlePanic("PgSQLDeleteQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 
 	query := fmt.Sprintf("DELETE FROM %s", p.tableName)
 
@@ -885,9 +960,11 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL DELETE failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
+	recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -913,66 +990,80 @@ func (p *PgSQLResult) LastInsertId() (int64, error) {
 
 // PgSQLTxAdapter wraps a PostgreSQL transaction
 type PgSQLTxAdapter struct {
-	tx         *sql.Tx
-	driverName string
+	tx             *sql.Tx
+	driverName     string
+	metricsEnabled bool
 }
 
 func (p *PgSQLTxAdapter) NewSelect() common.SelectQuery {
 	return &PgSQLSelectQuery{
-		tx:         p.tx,
-		driverName: p.driverName,
-		columns:    []string{"*"},
-		args:       make([]interface{}, 0),
+		tx:             p.tx,
+		driverName:     p.driverName,
+		columns:        []string{"*"},
+		args:           make([]interface{}, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLTxAdapter) NewInsert() common.InsertQuery {
 	return &PgSQLInsertQuery{
-		tx:         p.tx,
-		driverName: p.driverName,
-		values:     make(map[string]interface{}),
+		tx:             p.tx,
+		driverName:     p.driverName,
+		values:         make(map[string]interface{}),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLTxAdapter) NewUpdate() common.UpdateQuery {
 	return &PgSQLUpdateQuery{
-		tx:           p.tx,
-		driverName:   p.driverName,
-		sets:         make(map[string]interface{}),
-		args:         make([]interface{}, 0),
-		whereClauses: make([]string, 0),
+		tx:             p.tx,
+		driverName:     p.driverName,
+		sets:           make(map[string]interface{}),
+		args:           make([]interface{}, 0),
+		whereClauses:   make([]string, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLTxAdapter) NewDelete() common.DeleteQuery {
 	return &PgSQLDeleteQuery{
-		tx:           p.tx,
-		driverName:   p.driverName,
-		args:         make([]interface{}, 0),
-		whereClauses: make([]string, 0),
+		tx:             p.tx,
+		driverName:     p.driverName,
+		args:           make([]interface{}, 0),
+		whereClauses:   make([]string, 0),
+		metricsEnabled: p.metricsEnabled,
 	}
 }
 
 func (p *PgSQLTxAdapter) Exec(ctx context.Context, query string, args ...interface{}) (common.Result, error) {
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, p.driverName)
 	logger.Debug("PgSQL Tx Exec: %s [args: %v]", query, args)
 	result, err := p.tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		logger.Error("PgSQL Tx Exec failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return nil, err
 	}
+	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
 func (p *PgSQLTxAdapter) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, p.driverName)
 	logger.Debug("PgSQL Tx Query: %s [args: %v]", query, args)
 	rows, err := p.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		logger.Error("PgSQL Tx Query failed: %v", err)
+		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return err
 	}
 	defer rows.Close()
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	return err
 }
 
 func (p *PgSQLTxAdapter) BeginTx(ctx context.Context) (common.Database, error) {

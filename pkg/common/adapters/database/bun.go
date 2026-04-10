@@ -95,15 +95,16 @@ func debugScanIntoStruct(rows interface{}, dest interface{}) error {
 // BunAdapter adapts Bun to work with our Database interface
 // This demonstrates how the abstraction works with different ORMs
 type BunAdapter struct {
-	db         *bun.DB
-	dbMu       sync.RWMutex
-	dbFactory  func() (*bun.DB, error)
-	driverName string
+	db             *bun.DB
+	dbMu           sync.RWMutex
+	dbFactory      func() (*bun.DB, error)
+	driverName     string
+	metricsEnabled bool
 }
 
 // NewBunAdapter creates a new Bun adapter
 func NewBunAdapter(db *bun.DB) *BunAdapter {
-	adapter := &BunAdapter{db: db}
+	adapter := &BunAdapter{db: db, metricsEnabled: true}
 	// Initialize driver name
 	adapter.driverName = adapter.DriverName()
 	return adapter
@@ -113,6 +114,22 @@ func NewBunAdapter(db *bun.DB) *BunAdapter {
 func (b *BunAdapter) WithDBFactory(factory func() (*bun.DB, error)) *BunAdapter {
 	b.dbFactory = factory
 	return b
+}
+
+// SetMetricsEnabled enables or disables query metrics for this adapter.
+func (b *BunAdapter) SetMetricsEnabled(enabled bool) *BunAdapter {
+	b.metricsEnabled = enabled
+	return b
+}
+
+// EnableMetrics enables query metrics for this adapter.
+func (b *BunAdapter) EnableMetrics() *BunAdapter {
+	return b.SetMetricsEnabled(true)
+}
+
+// DisableMetrics disables query metrics for this adapter.
+func (b *BunAdapter) DisableMetrics() *BunAdapter {
+	return b.SetMetricsEnabled(false)
 }
 
 func (b *BunAdapter) getDB() *bun.DB {
@@ -159,22 +176,23 @@ func (b *BunAdapter) DisableQueryDebug() {
 
 func (b *BunAdapter) NewSelect() common.SelectQuery {
 	return &BunSelectQuery{
-		query:      b.getDB().NewSelect(),
-		db:         b.db,
-		driverName: b.driverName,
+		query:          b.getDB().NewSelect(),
+		db:             b.db,
+		driverName:     b.driverName,
+		metricsEnabled: b.metricsEnabled,
 	}
 }
 
 func (b *BunAdapter) NewInsert() common.InsertQuery {
-	return &BunInsertQuery{query: b.getDB().NewInsert()}
+	return &BunInsertQuery{query: b.getDB().NewInsert(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunAdapter) NewUpdate() common.UpdateQuery {
-	return &BunUpdateQuery{query: b.getDB().NewUpdate()}
+	return &BunUpdateQuery{query: b.getDB().NewUpdate(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunAdapter) NewDelete() common.DeleteQuery {
-	return &BunDeleteQuery{query: b.getDB().NewDelete()}
+	return &BunDeleteQuery{query: b.getDB().NewDelete(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunAdapter) Exec(ctx context.Context, query string, args ...interface{}) (res common.Result, err error) {
@@ -183,6 +201,8 @@ func (b *BunAdapter) Exec(ctx context.Context, query string, args ...interface{}
 			err = logger.HandlePanic("BunAdapter.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
 	var result sql.Result
 	run := func() error { var e error; result, e = b.getDB().ExecContext(ctx, query, args...); return e }
 	err = run()
@@ -191,6 +211,7 @@ func (b *BunAdapter) Exec(ctx context.Context, query string, args ...interface{}
 			err = run()
 		}
 	}
+	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -200,12 +221,15 @@ func (b *BunAdapter) Query(ctx context.Context, dest interface{}, query string, 
 			err = logger.HandlePanic("BunAdapter.Query", r)
 		}
 	}()
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
 	err = b.getDB().NewRaw(query, args...).Scan(ctx, dest)
 	if isDBClosed(err) {
 		if reconnErr := b.reconnectDB(); reconnErr == nil {
 			err = b.getDB().NewRaw(query, args...).Scan(ctx, dest)
 		}
 	}
+	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 
@@ -219,7 +243,7 @@ func (b *BunAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BunTxAdapter{tx: tx, driverName: b.driverName}, nil
+	return &BunTxAdapter{tx: tx, driverName: b.driverName, metricsEnabled: b.metricsEnabled}, nil
 }
 
 func (b *BunAdapter) CommitTx(ctx context.Context) error {
@@ -242,7 +266,7 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 	}()
 	run := func() error {
 		return b.getDB().RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
-			adapter := &BunTxAdapter{tx: tx, driverName: b.driverName}
+			adapter := &BunTxAdapter{tx: tx, driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 			return fn(adapter)
 		})
 	}
@@ -280,25 +304,24 @@ type BunSelectQuery struct {
 	hasModel       bool    // Track if Model() was called
 	schema         string  // Separated schema name
 	tableName      string  // Just the table name, without schema
+	entity         string
 	tableAlias     string
 	driverName     string                                                   // Database driver name (postgres, sqlite, mssql)
 	inJoinContext  bool                                                     // Track if we're in a JOIN relation context
 	joinTableAlias string                                                   // Alias to use for JOIN conditions
 	skipAutoDetect bool                                                     // Skip auto-detection to prevent circular calls
 	customPreloads map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
+	metricsEnabled bool
 }
 
 func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {
 	b.query = b.query.Model(model)
 	b.hasModel = true // Mark that we have a model
-
-	// Try to get table name from model if it implements TableNameProvider
-	if provider, ok := model.(common.TableNameProvider); ok {
-		fullTableName := provider.TableName()
-		// Check if the table name contains schema (e.g., "schema.table")
-		// For SQLite, this will convert "schema.table" to "schema_table"
-		b.schema, b.tableName = parseTableName(fullTableName, b.driverName)
+	b.schema, b.tableName = schemaAndTableFromModel(model, b.driverName)
+	if b.tableName == "" {
+		b.schema, b.tableName = parseTableName(b.query.GetTableName(), b.driverName)
 	}
+	b.entity = entityNameFromModel(model, b.tableName)
 
 	if provider, ok := model.(common.TableAliasProvider); ok {
 		b.tableAlias = provider.TableAlias()
@@ -312,6 +335,9 @@ func (b *BunSelectQuery) Table(table string) common.SelectQuery {
 	// Check if the table name contains schema (e.g., "schema.table")
 	// For SQLite, this will convert "schema.table" to "schema_table"
 	b.schema, b.tableName = parseTableName(table, b.driverName)
+	if b.entity == "" {
+		b.entity = cleanMetricIdentifier(b.tableName)
+	}
 	return b
 }
 
@@ -617,9 +643,10 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 
 		// Wrap the incoming *bun.SelectQuery in our adapter
 		wrapper := &BunSelectQuery{
-			query:      sq,
-			db:         b.db,
-			driverName: b.driverName,
+			query:          sq,
+			db:             b.db,
+			driverName:     b.driverName,
+			metricsEnabled: b.metricsEnabled,
 		}
 
 		// Try to extract table name and alias from the preload model
@@ -870,7 +897,7 @@ func (b *BunSelectQuery) loadRelationLevel(ctx context.Context, parentRecords re
 
 	// Apply user's functions (if any)
 	if isLast && len(applyFuncs) > 0 {
-		wrapper := &BunSelectQuery{query: query, db: b.db, driverName: b.driverName}
+		wrapper := &BunSelectQuery{query: query, db: b.db, driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 		for _, fn := range applyFuncs {
 			if fn != nil {
 				wrapper = fn(wrapper).(*BunSelectQuery)
@@ -1227,6 +1254,7 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 			err = logger.HandlePanic("BunSelectQuery.Scan", r)
 		}
 	}()
+	startedAt := time.Now()
 	if dest == nil {
 		return fmt.Errorf("destination cannot be nil")
 	}
@@ -1236,9 +1264,11 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
+		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 		return err
 	}
 
+	recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, nil)
 	return nil
 }
 
@@ -1276,6 +1306,7 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 	if b.query.GetModel() == nil {
 		return fmt.Errorf("model is nil")
 	}
+	startedAt := time.Now()
 
 	// Optional: Enable detailed field-level debugging (set to true to debug)
 	const enableDetailedDebug = true
@@ -1293,6 +1324,7 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
+		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 		return err
 	}
 
@@ -1301,10 +1333,12 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 		logger.Info("Loading %d custom preload(s) with separate queries", len(b.customPreloads))
 		if err := b.loadCustomPreloads(ctx); err != nil {
 			logger.Error("Failed to load custom preloads: %v", err)
+			recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 			return err
 		}
 	}
 
+	recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, nil)
 	return nil
 }
 
@@ -1315,6 +1349,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 			count = 0
 		}
 	}()
+	startedAt := time.Now()
 	// If Model() was set, use bun's native Count() which works properly
 	if b.hasModel {
 		count, err := b.query.Count(ctx)
@@ -1323,6 +1358,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 			sqlStr := b.query.String()
 			logger.Error("BunSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
 		}
+		recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
 		return count, err
 	}
 
@@ -1337,6 +1373,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 		sqlStr := countQuery.String()
 		logger.Error("BunSelectQuery.Count (subquery) failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
 	return count, err
 }
 
@@ -1347,25 +1384,37 @@ func (b *BunSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 			exists = false
 		}
 	}()
+	startedAt := time.Now()
 	exists, err = b.query.Exists(ctx)
 	if err != nil {
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(b.metricsEnabled, "EXISTS", b.schema, b.entity, b.tableName, startedAt, err)
 	return exists, err
 }
 
 // BunInsertQuery implements InsertQuery for Bun
 type BunInsertQuery struct {
-	query    *bun.InsertQuery
-	values   map[string]interface{}
-	hasModel bool
+	query          *bun.InsertQuery
+	values         map[string]interface{}
+	hasModel       bool
+	driverName     string
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (b *BunInsertQuery) Model(model interface{}) common.InsertQuery {
 	b.query = b.query.Model(model)
 	b.hasModel = true
+	b.schema, b.tableName = schemaAndTableFromModel(model, b.driverName)
+	if b.tableName == "" {
+		b.schema, b.tableName = parseTableName(b.query.GetTableName(), b.driverName)
+	}
+	b.entity = entityNameFromModel(model, b.tableName)
 	return b
 }
 
@@ -1374,6 +1423,10 @@ func (b *BunInsertQuery) Table(table string) common.InsertQuery {
 		return b
 	}
 	b.query = b.query.Table(table)
+	b.schema, b.tableName = parseTableName(table, b.driverName)
+	if b.entity == "" {
+		b.entity = cleanMetricIdentifier(b.tableName)
+	}
 	return b
 }
 
@@ -1403,6 +1456,7 @@ func (b *BunInsertQuery) Exec(ctx context.Context) (res common.Result, err error
 			err = logger.HandlePanic("BunInsertQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	if len(b.values) > 0 {
 		if !b.hasModel {
 			// If no model was set, use the values map as the model
@@ -1416,29 +1470,45 @@ func (b *BunInsertQuery) Exec(ctx context.Context) (res common.Result, err error
 		}
 	}
 	result, err := b.query.Exec(ctx)
+	recordQueryMetrics(b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
 // BunUpdateQuery implements UpdateQuery for Bun
 type BunUpdateQuery struct {
-	query *bun.UpdateQuery
-	model interface{}
+	query          *bun.UpdateQuery
+	model          interface{}
+	driverName     string
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (b *BunUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	b.query = b.query.Model(model)
 	b.model = model
+	b.schema, b.tableName = schemaAndTableFromModel(model, b.driverName)
+	if b.tableName == "" {
+		b.schema, b.tableName = parseTableName(b.query.GetTableName(), b.driverName)
+	}
+	b.entity = entityNameFromModel(model, b.tableName)
 	return b
 }
 
 func (b *BunUpdateQuery) Table(table string) common.UpdateQuery {
 	b.query = b.query.Table(table)
+	b.schema, b.tableName = parseTableName(table, b.driverName)
+	if b.entity == "" {
+		b.entity = cleanMetricIdentifier(b.tableName)
+	}
 	if b.model == nil {
 		// Try to get table name from table string if model is not set
 
 		model, err := modelregistry.GetModelByName(table)
 		if err == nil {
 			b.model = model
+			b.entity = entityNameFromModel(model, b.tableName)
 		}
 	}
 	return b
@@ -1489,27 +1559,43 @@ func (b *BunUpdateQuery) Exec(ctx context.Context) (res common.Result, err error
 			err = logger.HandlePanic("BunUpdateQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	result, err := b.query.Exec(ctx)
 	if err != nil {
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(b.metricsEnabled, "UPDATE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
 // BunDeleteQuery implements DeleteQuery for Bun
 type BunDeleteQuery struct {
-	query *bun.DeleteQuery
+	query          *bun.DeleteQuery
+	driverName     string
+	schema         string
+	tableName      string
+	entity         string
+	metricsEnabled bool
 }
 
 func (b *BunDeleteQuery) Model(model interface{}) common.DeleteQuery {
 	b.query = b.query.Model(model)
+	b.schema, b.tableName = schemaAndTableFromModel(model, b.driverName)
+	if b.tableName == "" {
+		b.schema, b.tableName = parseTableName(b.query.GetTableName(), b.driverName)
+	}
+	b.entity = entityNameFromModel(model, b.tableName)
 	return b
 }
 
 func (b *BunDeleteQuery) Table(table string) common.DeleteQuery {
 	b.query = b.query.Table(table)
+	b.schema, b.tableName = parseTableName(table, b.driverName)
+	if b.entity == "" {
+		b.entity = cleanMetricIdentifier(b.tableName)
+	}
 	return b
 }
 
@@ -1524,12 +1610,14 @@ func (b *BunDeleteQuery) Exec(ctx context.Context) (res common.Result, err error
 			err = logger.HandlePanic("BunDeleteQuery.Exec", r)
 		}
 	}()
+	startedAt := time.Now()
 	result, err := b.query.Exec(ctx)
 	if err != nil {
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
 	}
+	recordQueryMetrics(b.metricsEnabled, "DELETE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -1555,37 +1643,46 @@ func (b *BunResult) LastInsertId() (int64, error) {
 
 // BunTxAdapter wraps a Bun transaction to implement the Database interface
 type BunTxAdapter struct {
-	tx         bun.Tx
-	driverName string
+	tx             bun.Tx
+	driverName     string
+	metricsEnabled bool
 }
 
 func (b *BunTxAdapter) NewSelect() common.SelectQuery {
 	return &BunSelectQuery{
-		query:      b.tx.NewSelect(),
-		db:         b.tx,
-		driverName: b.driverName,
+		query:          b.tx.NewSelect(),
+		db:             b.tx,
+		driverName:     b.driverName,
+		metricsEnabled: b.metricsEnabled,
 	}
 }
 
 func (b *BunTxAdapter) NewInsert() common.InsertQuery {
-	return &BunInsertQuery{query: b.tx.NewInsert()}
+	return &BunInsertQuery{query: b.tx.NewInsert(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunTxAdapter) NewUpdate() common.UpdateQuery {
-	return &BunUpdateQuery{query: b.tx.NewUpdate()}
+	return &BunUpdateQuery{query: b.tx.NewUpdate(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunTxAdapter) NewDelete() common.DeleteQuery {
-	return &BunDeleteQuery{query: b.tx.NewDelete()}
+	return &BunDeleteQuery{query: b.tx.NewDelete(), driverName: b.driverName, metricsEnabled: b.metricsEnabled}
 }
 
 func (b *BunTxAdapter) Exec(ctx context.Context, query string, args ...interface{}) (common.Result, error) {
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
 	result, err := b.tx.ExecContext(ctx, query, args...)
+	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
 func (b *BunTxAdapter) Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
-	return b.tx.NewRaw(query, args...).Scan(ctx, dest)
+	startedAt := time.Now()
+	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
+	err := b.tx.NewRaw(query, args...).Scan(ctx, dest)
+	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	return err
 }
 
 func (b *BunTxAdapter) BeginTx(ctx context.Context) (common.Database, error) {

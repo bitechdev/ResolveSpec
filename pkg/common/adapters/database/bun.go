@@ -122,16 +122,6 @@ func (b *BunAdapter) SetMetricsEnabled(enabled bool) *BunAdapter {
 	return b
 }
 
-// EnableMetrics enables query metrics for this adapter.
-func (b *BunAdapter) EnableMetrics() *BunAdapter {
-	return b.SetMetricsEnabled(true)
-}
-
-// DisableMetrics disables query metrics for this adapter.
-func (b *BunAdapter) DisableMetrics() *BunAdapter {
-	return b.SetMetricsEnabled(false)
-}
-
 func (b *BunAdapter) getDB() *bun.DB {
 	b.dbMu.RLock()
 	defer b.dbMu.RUnlock()
@@ -1249,30 +1239,28 @@ func (b *BunSelectQuery) Having(having string, args ...interface{}) common.Selec
 }
 
 func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("BunSelectQuery.Scan", r)
 		}
+		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 	if dest == nil {
-		return fmt.Errorf("destination cannot be nil")
+		err = fmt.Errorf("destination cannot be nil")
+		return err
 	}
 
 	err = b.query.Scan(ctx, dest)
 	if err != nil {
-		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
-		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
-		return err
 	}
-
-	recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, nil)
-	return nil
+	return err
 }
 
 func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			// Enhanced panic recovery with model information
@@ -1282,7 +1270,6 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 				modelValue := model.Value()
 				modelInfo = fmt.Sprintf("Model type: %T", modelValue)
 
-				// Try to get the model's underlying struct type
 				v := reflect.ValueOf(modelValue)
 				if v.Kind() == reflect.Ptr {
 					v = v.Elem()
@@ -1302,11 +1289,12 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 			logger.Error("Panic in BunSelectQuery.ScanModel: %v. %s. SQL: %s", r, modelInfo, sqlStr)
 			err = logger.HandlePanic("BunSelectQuery.ScanModel", r)
 		}
+		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
 	if b.query.GetModel() == nil {
-		return fmt.Errorf("model is nil")
+		err = fmt.Errorf("model is nil")
+		return err
 	}
-	startedAt := time.Now()
 
 	// Optional: Enable detailed field-level debugging (set to true to debug)
 	const enableDetailedDebug = true
@@ -1321,45 +1309,40 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 
 	err = b.query.Scan(ctx)
 	if err != nil {
-		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
-		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 		return err
 	}
 
 	// After main query, load custom preloads using separate queries
 	if len(b.customPreloads) > 0 {
 		logger.Info("Loading %d custom preload(s) with separate queries", len(b.customPreloads))
-		if err := b.loadCustomPreloads(ctx); err != nil {
+		if err = b.loadCustomPreloads(ctx); err != nil {
 			logger.Error("Failed to load custom preloads: %v", err)
-			recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 			return err
 		}
 	}
 
-	recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, nil)
 	return nil
 }
 
 func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("BunSelectQuery.Count", r)
 			count = 0
 		}
+		recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 	// If Model() was set, use bun's native Count() which works properly
 	if b.hasModel {
-		count, err := b.query.Count(ctx)
+		count, err = b.query.Count(ctx) // assign to named returns, not shadow vars
 		if err != nil {
-			// Log SQL string for debugging
 			sqlStr := b.query.String()
 			logger.Error("BunSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
 		}
-		recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
-		return count, err
+		return
 	}
 
 	// Otherwise, wrap as subquery to avoid "Model(nil)" error
@@ -1369,30 +1352,27 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 		ColumnExpr("COUNT(*)")
 	err = countQuery.Scan(ctx, &count)
 	if err != nil {
-		// Log SQL string for debugging
 		sqlStr := countQuery.String()
 		logger.Error("BunSelectQuery.Count (subquery) failed. SQL: %s. Error: %v", sqlStr, err)
 	}
-	recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
-	return count, err
+	return
 }
 
 func (b *BunSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("BunSelectQuery.Exists", r)
 			exists = false
 		}
+		recordQueryMetrics(b.metricsEnabled, "EXISTS", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 	exists, err = b.query.Exists(ctx)
 	if err != nil {
-		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
 	}
-	recordQueryMetrics(b.metricsEnabled, "EXISTS", b.schema, b.entity, b.tableName, startedAt, err)
-	return exists, err
+	return
 }
 
 // BunInsertQuery implements InsertQuery for Bun

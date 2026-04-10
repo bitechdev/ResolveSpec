@@ -44,16 +44,6 @@ func (g *GormAdapter) SetMetricsEnabled(enabled bool) *GormAdapter {
 	return g
 }
 
-// EnableMetrics enables query metrics for this adapter.
-func (g *GormAdapter) EnableMetrics() *GormAdapter {
-	return g.SetMetricsEnabled(true)
-}
-
-// DisableMetrics disables query metrics for this adapter.
-func (g *GormAdapter) DisableMetrics() *GormAdapter {
-	return g.SetMetricsEnabled(false)
-}
-
 func (g *GormAdapter) getDB() *gorm.DB {
 	g.dbMu.RLock()
 	defer g.dbMu.RUnlock()
@@ -131,15 +121,15 @@ func (g *GormAdapter) NewSelect() common.SelectQuery {
 }
 
 func (g *GormAdapter) NewInsert() common.InsertQuery {
-	return &GormInsertQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
+	return &GormInsertQuery{db: g.getDB(), reconnect: g.reconnectDB, driverName: g.driverName, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) NewUpdate() common.UpdateQuery {
-	return &GormUpdateQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
+	return &GormUpdateQuery{db: g.getDB(), reconnect: g.reconnectDB, driverName: g.driverName, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) NewDelete() common.DeleteQuery {
-	return &GormDeleteQuery{db: g.getDB(), reconnect: g.reconnectDB, metricsEnabled: g.metricsEnabled}
+	return &GormDeleteQuery{db: g.getDB(), reconnect: g.reconnectDB, driverName: g.driverName, metricsEnabled: g.metricsEnabled}
 }
 
 func (g *GormAdapter) Exec(ctx context.Context, query string, args ...interface{}) (res common.Result, err error) {
@@ -693,20 +683,21 @@ type GormInsertQuery struct {
 	schema         string
 	tableName      string
 	entity         string
+	driverName     string
 	metricsEnabled bool
 }
 
 func (g *GormInsertQuery) Model(model interface{}) common.InsertQuery {
 	g.model = model
 	g.db = g.db.Model(model)
-	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.driverName)
 	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormInsertQuery) Table(table string) common.InsertQuery {
 	g.db = g.db.Table(table)
-	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	g.schema, g.tableName = parseTableName(table, g.driverName)
 	if g.entity == "" {
 		g.entity = cleanMetricIdentifier(g.tableName)
 	}
@@ -767,20 +758,21 @@ type GormUpdateQuery struct {
 	schema         string
 	tableName      string
 	entity         string
+	driverName     string
 	metricsEnabled bool
 }
 
 func (g *GormUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	g.model = model
 	g.db = g.db.Model(model)
-	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.driverName)
 	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormUpdateQuery) Table(table string) common.UpdateQuery {
 	g.db = g.db.Table(table)
-	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	g.schema, g.tableName = parseTableName(table, g.driverName)
 	if g.entity == "" {
 		g.entity = cleanMetricIdentifier(g.tableName)
 	}
@@ -879,20 +871,21 @@ type GormDeleteQuery struct {
 	schema         string
 	tableName      string
 	entity         string
+	driverName     string
 	metricsEnabled bool
 }
 
 func (g *GormDeleteQuery) Model(model interface{}) common.DeleteQuery {
 	g.model = model
 	g.db = g.db.Model(model)
-	g.schema, g.tableName = schemaAndTableFromModel(model, g.db.Name())
+	g.schema, g.tableName = schemaAndTableFromModel(model, g.driverName)
 	g.entity = entityNameFromModel(model, g.tableName)
 	return g
 }
 
 func (g *GormDeleteQuery) Table(table string) common.DeleteQuery {
 	g.db = g.db.Table(table)
-	g.schema, g.tableName = parseTableName(table, g.db.Name())
+	g.schema, g.tableName = parseTableName(table, g.driverName)
 	if g.entity == "" {
 		g.entity = cleanMetricIdentifier(g.tableName)
 	}

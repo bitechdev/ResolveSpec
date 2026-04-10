@@ -93,6 +93,9 @@ func schemaAndTableFromModel(model interface{}, driverName string) (schema, tabl
 	return parseTableName(provider.TableName(), driverName)
 }
 
+// tableNameProviderType is cached to avoid repeated reflection on every call.
+var tableNameProviderType = reflect.TypeOf((*common.TableNameProvider)(nil)).Elem()
+
 func tableNameProviderFromModel(model interface{}) (common.TableNameProvider, bool) {
 	if model == nil {
 		return nil, false
@@ -108,6 +111,12 @@ func tableNameProviderFromModel(model interface{}) (common.TableNameProvider, bo
 	}
 
 	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return nil, false
+	}
+
+	// Check whether *T implements TableNameProvider before allocating.
+	ptrType := reflect.PointerTo(modelType)
+	if !ptrType.Implements(tableNameProviderType) && !modelType.Implements(tableNameProviderType) {
 		return nil, false
 	}
 

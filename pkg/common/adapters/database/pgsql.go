@@ -49,16 +49,6 @@ func (p *PgSQLAdapter) SetMetricsEnabled(enabled bool) *PgSQLAdapter {
 	return p
 }
 
-// EnableMetrics enables query metrics for this adapter.
-func (p *PgSQLAdapter) EnableMetrics() *PgSQLAdapter {
-	return p.SetMetricsEnabled(true)
-}
-
-// DisableMetrics disables query metrics for this adapter.
-func (p *PgSQLAdapter) DisableMetrics() *PgSQLAdapter {
-	return p.SetMetricsEnabled(false)
-}
-
 func (p *PgSQLAdapter) getDB() *sql.DB {
 	p.dbMu.RLock()
 	defer p.dbMu.RUnlock()
@@ -544,16 +534,8 @@ func (p *PgSQLSelectQuery) ScanModel(ctx context.Context) error {
 	return p.Scan(ctx, p.model)
 }
 
-func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = logger.HandlePanic("PgSQLSelectQuery.Count", r)
-			count = 0
-		}
-	}()
-	startedAt := time.Now()
-
-	// Build a COUNT query
+// countInternal executes the COUNT query and returns the result without recording metrics.
+func (p *PgSQLSelectQuery) countInternal(ctx context.Context) (int, error) {
 	var sb strings.Builder
 	sb.WriteString("SELECT COUNT(*) FROM ")
 	sb.WriteString(p.tableName)
@@ -587,7 +569,22 @@ func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
 		row = p.db.QueryRowContext(ctx, query, p.args...)
 	}
 
-	err = row.Scan(&count)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = logger.HandlePanic("PgSQLSelectQuery.Count", r)
+			count = 0
+		}
+	}()
+	startedAt := time.Now()
+	count, err = p.countInternal(ctx)
 	if err != nil {
 		logger.Error("PgSQL COUNT failed: %v", err)
 	}
@@ -602,8 +599,12 @@ func (p *PgSQLSelectQuery) Exists(ctx context.Context) (exists bool, err error) 
 			exists = false
 		}
 	}()
-
-	count, err := p.Count(ctx)
+	startedAt := time.Now()
+	count, err := p.countInternal(ctx)
+	if err != nil {
+		logger.Error("PgSQL EXISTS failed: %v", err)
+	}
+	recordQueryMetrics(p.metricsEnabled, "EXISTS", p.schema, p.entity, p.tableName, startedAt, err)
 	return count > 0, err
 }
 
@@ -657,15 +658,17 @@ func (p *PgSQLInsertQuery) Returning(columns ...string) common.InsertQuery {
 }
 
 func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLInsertQuery.Exec", r)
 		}
+		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 
 	if len(p.values) == 0 {
-		return nil, fmt.Errorf("no values to insert")
+		err = fmt.Errorf("no values to insert")
+		return nil, err
 	}
 
 	columns := make([]string, 0, len(p.values))
@@ -699,11 +702,9 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL INSERT failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
-	recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -810,15 +811,17 @@ func (p *PgSQLUpdateQuery) replacePlaceholders(query string, argCount int) strin
 }
 
 func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLUpdateQuery.Exec", r)
 		}
+		recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 
 	if len(p.sets) == 0 {
-		return nil, fmt.Errorf("no values to update")
+		err = fmt.Errorf("no values to update")
+		return nil, err
 	}
 
 	setClauses := make([]string, 0, len(p.sets))
@@ -881,11 +884,9 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL UPDATE failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
-	recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -936,12 +937,13 @@ func (p *PgSQLDeleteQuery) replacePlaceholders(query string, argCount int) strin
 }
 
 func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err error) {
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLDeleteQuery.Exec", r)
 		}
+		recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
-	startedAt := time.Now()
 
 	query := fmt.Sprintf("DELETE FROM %s", p.tableName)
 
@@ -960,11 +962,9 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL DELETE failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
 		return nil, err
 	}
 
-	recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 

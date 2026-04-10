@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -46,21 +47,28 @@ type Provider interface {
 	Handler() http.Handler
 }
 
-// globalProvider is the global metrics provider
-var globalProvider Provider
+// globalProvider is the global metrics provider, protected by globalProviderMu.
+var (
+	globalProviderMu sync.RWMutex
+	globalProvider   Provider
+)
 
-// SetProvider sets the global metrics provider
+// SetProvider sets the global metrics provider.
 func SetProvider(p Provider) {
+	globalProviderMu.Lock()
 	globalProvider = p
+	globalProviderMu.Unlock()
 }
 
-// GetProvider returns the current metrics provider
+// GetProvider returns the current metrics provider.
 func GetProvider() Provider {
-	if globalProvider == nil {
-		// Return no-op provider if none is set
+	globalProviderMu.RLock()
+	p := globalProvider
+	globalProviderMu.RUnlock()
+	if p == nil {
 		return &NoOpProvider{}
 	}
-	return globalProvider
+	return p
 }
 
 // NoOpProvider is a no-op implementation of Provider

@@ -211,10 +211,14 @@ func (b *BunAdapter) Query(ctx context.Context, dest interface{}, query string, 
 
 func (b *BunAdapter) BeginTx(ctx context.Context) (common.Database, error) {
 	tx, err := b.getDB().BeginTx(ctx, &sql.TxOptions{})
+	if isDBClosed(err) {
+		if reconnErr := b.reconnectDB(); reconnErr == nil {
+			tx, err = b.getDB().BeginTx(ctx, &sql.TxOptions{})
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	// For Bun, we'll return a special wrapper that holds the transaction
 	return &BunTxAdapter{tx: tx, driverName: b.driverName}, nil
 }
 
@@ -236,11 +240,19 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 			err = logger.HandlePanic("BunAdapter.RunInTransaction", r)
 		}
 	}()
-	return b.getDB().RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
-		// Create adapter with transaction
-		adapter := &BunTxAdapter{tx: tx, driverName: b.driverName}
-		return fn(adapter)
-	})
+	run := func() error {
+		return b.getDB().RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
+			adapter := &BunTxAdapter{tx: tx, driverName: b.driverName}
+			return fn(adapter)
+		})
+	}
+	err = run()
+	if isDBClosed(err) {
+		if reconnErr := b.reconnectDB(); reconnErr == nil {
+			err = run()
+		}
+	}
+	return err
 }
 
 func (b *BunAdapter) GetUnderlyingDB() interface{} {

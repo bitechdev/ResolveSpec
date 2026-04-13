@@ -735,9 +735,9 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (condition st
 	case "lte", "<=":
 		return fmt.Sprintf("%s <= ?", filter.Column), []interface{}{filter.Value}
 	case "like":
-		return fmt.Sprintf("%s LIKE ?", filter.Column), []interface{}{filter.Value}
+		return fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column), []interface{}{filter.Value}
 	case "ilike":
-		return fmt.Sprintf("%s ILIKE ?", filter.Column), []interface{}{filter.Value}
+		return fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column), []interface{}{filter.Value}
 	case "in":
 		condition, args := common.BuildInCondition(filter.Column, filter.Value)
 		return condition, args

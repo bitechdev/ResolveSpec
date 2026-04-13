@@ -274,7 +274,7 @@ func TestBuildFilterCondition(t *testing.T) {
 				Value:    "test",
 				Logic:    "AND",
 			},
-			expected: "description ILIKE '%test%'",
+			expected: "CAST(description AS TEXT) ILIKE '%test%'",
 		},
 		{
 			name:    "Starts with operator",
@@ -284,7 +284,7 @@ func TestBuildFilterCondition(t *testing.T) {
 				Value:    "john",
 				Logic:    "AND",
 			},
-			expected: "name ILIKE 'john%'",
+			expected: "CAST(name AS TEXT) ILIKE 'john%'",
 		},
 		{
 			name:    "Ends with operator",
@@ -294,7 +294,7 @@ func TestBuildFilterCondition(t *testing.T) {
 				Value:    "@example.com",
 				Logic:    "AND",
 			},
-			expected: "email ILIKE '%@example.com'",
+			expected: "CAST(email AS TEXT) ILIKE '%@example.com'",
 		},
 		{
 			name:    "Between operator",

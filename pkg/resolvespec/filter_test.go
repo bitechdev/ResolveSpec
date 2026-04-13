@@ -54,7 +54,7 @@ func TestBuildFilterCondition(t *testing.T) {
 				Operator: "like",
 				Value:    "%@example.com",
 			},
-			expectedCondition: "email LIKE ?",
+			expectedCondition: "CAST(email AS TEXT) LIKE ?",
 			expectedArgsCount: 1,
 		},
 	}

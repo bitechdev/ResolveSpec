@@ -739,7 +739,7 @@ func (h *Handler) mergeQueryParams(r *http.Request, sqlquery string, variables m
 					colval = strings.ReplaceAll(colval, "\\", "\\\\")
 					colval = strings.ReplaceAll(colval, "'", "''")
 					if colval != "*" {
-						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(parmk, "colname"), colval))
+						sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%%%s%%'", ValidSQL(parmk, "colname"), colval))
 					}
 				} else if val == "" || val == "0" {
 					// For empty/zero values, treat as literal 0 or empty string with quotes
@@ -806,7 +806,7 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 			colname := strings.ReplaceAll(k, "x-searchfilter-", "")
 			sval := strings.ReplaceAll(val, "'", "")
 			if sval != "" {
-				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(colname, "colname"), ValidSQL(sval, "colvalue")))
+				sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%%%s%%'", ValidSQL(colname, "colname"), ValidSQL(sval, "colvalue")))
 			}
 		}
 

@@ -1545,10 +1545,10 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("%s LIKE ?", filter.Column)
+		condition = fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
+		condition = fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)
@@ -1589,10 +1589,10 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("%s LIKE ?", filter.Column)
+		condition = fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("%s ILIKE ?", filter.Column)
+		condition = fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)

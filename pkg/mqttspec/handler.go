@@ -702,7 +702,12 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	if hookCtx.Options != nil {
 		// Apply filters
 		for _, filter := range hookCtx.Options.Filters {
-			query = query.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			op := strings.ToLower(filter.Operator)
+			if op == "like" || op == "ilike" {
+				query = query.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			} else {
+				query = query.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			}
 		}
 
 		// Apply sorting
@@ -743,7 +748,12 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {
-			countQuery = countQuery.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			op := strings.ToLower(filter.Operator)
+			if op == "like" || op == "ilike" {
+				countQuery = countQuery.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			} else {
+				countQuery = countQuery.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+			}
 		}
 	}
 	count, _ := countQuery.Count(hookCtx.Context)

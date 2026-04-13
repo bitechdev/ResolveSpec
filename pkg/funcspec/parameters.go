@@ -259,7 +259,7 @@ func (h *Handler) ApplyFilters(sqlQuery string, params *RequestParameters) strin
 	for colName, value := range params.SearchFilters {
 		sval := strings.ReplaceAll(value, "'", "")
 		if sval != "" {
-			condition := fmt.Sprintf("%s ILIKE '%%%s%%'", ValidSQL(colName, "colname"), ValidSQL(sval, "colvalue"))
+			condition := fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%%%s%%'", ValidSQL(colName, "colname"), ValidSQL(sval, "colvalue"))
 			sqlQuery = sqlQryWhere(sqlQuery, condition)
 			logger.Debug("Applied search filter: %s", condition)
 		}
@@ -307,11 +307,11 @@ func (h *Handler) buildFilterCondition(colName string, op FilterOperator) string
 
 	switch operator {
 	case "contains", "contain", "like":
-		return fmt.Sprintf("%s ILIKE '%%%s%%'", safCol, ValidSQL(value, "colvalue"))
+		return fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%%%s%%'", safCol, ValidSQL(value, "colvalue"))
 	case "beginswith", "startswith":
-		return fmt.Sprintf("%s ILIKE '%s%%'", safCol, ValidSQL(value, "colvalue"))
+		return fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%s%%'", safCol, ValidSQL(value, "colvalue"))
 	case "endswith":
-		return fmt.Sprintf("%s ILIKE '%%%s'", safCol, ValidSQL(value, "colvalue"))
+		return fmt.Sprintf("CAST(%s AS TEXT) ILIKE '%%%s'", safCol, ValidSQL(value, "colvalue"))
 	case "equals", "eq", "=":
 		if IsNumeric(value) {
 			return fmt.Sprintf("%s = %s", safCol, ValidSQL(value, "colvalue"))

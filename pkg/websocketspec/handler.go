@@ -807,6 +807,11 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 		cond, args := common.BuildInCondition(filter.Column, filter.Value)
 		return cond, args
 	}
+	op := strings.ToLower(filter.Operator)
+	if op == "like" || op == "ilike" {
+		operatorSQL := h.getOperatorSQL(filter.Operator)
+		return fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, operatorSQL), []interface{}{filter.Value}
+	}
 	operatorSQL := h.getOperatorSQL(filter.Operator)
 	return fmt.Sprintf("%s %s ?", filter.Column, operatorSQL), []interface{}{filter.Value}
 }

@@ -2118,11 +2118,12 @@ func (h *Handler) qualifyColumnName(columnName, fullTableName string) string {
 
 func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, tableName string, needsCast bool, logicOp string) common.SelectQuery {
 	// Qualify the column name with table name if not already qualified
-	qualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+	rawQualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+	qualifiedColumn := rawQualifiedColumn
 
 	// Apply casting to text if needed for non-numeric columns or non-numeric values
 	if needsCast {
-		qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", qualifiedColumn)
+		qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
 	}
 
 	// Helper function to apply the correct Where method based on logic operator
@@ -2147,11 +2148,11 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 	case "lte", "less_than_equals", "le":
 		return applyWhere(fmt.Sprintf("%s <= ?", qualifiedColumn), filter.Value)
 	case "like":
-		return applyWhere(fmt.Sprintf("%s LIKE ?", qualifiedColumn), filter.Value)
+		// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
+		return applyWhere(fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", rawQualifiedColumn), filter.Value)
 	case "ilike":
-		// Use ILIKE for case-insensitive search (PostgreSQL)
-		// Column is already cast to TEXT if needed
-		return applyWhere(fmt.Sprintf("%s ILIKE ?", qualifiedColumn), filter.Value)
+		// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
+		return applyWhere(fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", rawQualifiedColumn), filter.Value)
 	case "in":
 		cond, inArgs := common.BuildInCondition(qualifiedColumn, filter.Value)
 		if cond == "" {
@@ -2203,11 +2204,16 @@ func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common
 
 	for i, filter := range filters {
 		// Qualify the column name with table name if not already qualified
-		qualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+		rawQualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
+		qualifiedColumn := rawQualifiedColumn
 
-		// Apply casting to text if needed for non-numeric columns or non-numeric values
-		if castInfo[i].NeedsCast {
-			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", qualifiedColumn)
+		op := strings.ToLower(filter.Operator)
+		if op == "like" || op == "ilike" {
+			// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
+			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
+		} else if castInfo[i].NeedsCast {
+			// Apply casting to text if needed for non-numeric columns or non-numeric values
+			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
 		}
 
 		// Build the condition based on operator

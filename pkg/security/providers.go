@@ -868,6 +868,75 @@ func generateRandomString(length int) string {
 // 	return ""
 // }
 
+// Password reset methods
+// ======================
+
+// RequestPasswordReset implements PasswordResettable. It calls the stored procedure
+// resolvespec_password_reset_request and returns the reset token and expiry.
+func (a *DatabaseAuthenticator) RequestPasswordReset(ctx context.Context, req PasswordResetRequest) (*PasswordResetResponse, error) {
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal password reset request: %w", err)
+	}
+
+	var success bool
+	var errorMsg sql.NullString
+	var dataJSON sql.NullString
+
+	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
+		query := fmt.Sprintf(`SELECT p_success, p_error, p_data::text FROM %s($1::jsonb)`, a.sqlNames.PasswordResetRequest)
+		return db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &dataJSON)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("password reset request query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return nil, fmt.Errorf("%s", errorMsg.String)
+		}
+		return nil, fmt.Errorf("password reset request failed")
+	}
+
+	var response PasswordResetResponse
+	if dataJSON.Valid && dataJSON.String != "" {
+		if err := json.Unmarshal([]byte(dataJSON.String), &response); err != nil {
+			return nil, fmt.Errorf("failed to parse password reset response: %w", err)
+		}
+	}
+
+	return &response, nil
+}
+
+// CompletePasswordReset implements PasswordResettable. It validates the token and
+// updates the user's password via resolvespec_password_reset.
+func (a *DatabaseAuthenticator) CompletePasswordReset(ctx context.Context, req PasswordResetCompleteRequest) error {
+	reqJSON, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal password reset complete request: %w", err)
+	}
+
+	var success bool
+	var errorMsg sql.NullString
+
+	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
+		query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1::jsonb)`, a.sqlNames.PasswordResetComplete)
+		return db.QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg)
+	})
+	if err != nil {
+		return fmt.Errorf("password reset complete query failed: %w", err)
+	}
+
+	if !success {
+		if errorMsg.Valid {
+			return fmt.Errorf("%s", errorMsg.String)
+		}
+		return fmt.Errorf("password reset failed")
+	}
+
+	return nil
+}
+
 // Passkey authentication methods
 // ==============================
 

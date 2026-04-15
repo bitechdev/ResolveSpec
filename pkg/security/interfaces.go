@@ -57,6 +57,27 @@ type LogoutRequest struct {
 	UserID int    `json:"user_id"`
 }
 
+// PasswordResetRequest initiates a password reset for a user
+type PasswordResetRequest struct {
+	Email    string `json:"email,omitempty"`
+	Username string `json:"username,omitempty"`
+}
+
+// PasswordResetResponse is returned when a reset is initiated
+type PasswordResetResponse struct {
+	// Token is the reset token to be delivered out-of-band (e.g. email).
+	// The stored procedure may return it for delivery or leave it empty
+	// if the delivery is handled entirely in the database.
+	Token     string `json:"token"`
+	ExpiresIn int64  `json:"expires_in"` // seconds
+}
+
+// PasswordResetCompleteRequest completes a password reset using the token
+type PasswordResetCompleteRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
 // Authenticator handles user authentication operations
 type Authenticator interface {
 	// Login authenticates credentials and returns a token
@@ -113,4 +134,13 @@ type Validatable interface {
 type Cacheable interface {
 	// ClearCache clears cached security rules for a user/entity
 	ClearCache(ctx context.Context, userID int, schema, table string) error
+}
+
+// PasswordResettable allows providers to support self-service password reset
+type PasswordResettable interface {
+	// RequestPasswordReset creates a reset token for the given email/username
+	RequestPasswordReset(ctx context.Context, req PasswordResetRequest) (*PasswordResetResponse, error)
+
+	// CompletePasswordReset validates the token and sets the new password
+	CompletePasswordReset(ctx context.Context, req PasswordResetCompleteRequest) error
 }

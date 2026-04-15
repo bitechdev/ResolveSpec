@@ -1399,6 +1399,158 @@ $$ LANGUAGE plpgsql;
 -- SELECT * FROM resolvespec_passkey_get_credentials_by_username('admin');
 
 -- ============================================
+-- Password Reset Tables
+-- ============================================
+
+-- Password reset tokens table
+CREATE TABLE IF NOT EXISTS user_password_resets (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE, -- SHA-256 hex of the raw token
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    used BOOLEAN DEFAULT false,
+    used_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_pw_reset_token_hash ON user_password_resets(token_hash);
+CREATE INDEX IF NOT EXISTS idx_pw_reset_user_id ON user_password_resets(user_id);
+CREATE INDEX IF NOT EXISTS idx_pw_reset_expires_at ON user_password_resets(expires_at);
+
+-- ============================================
+-- Stored Procedures for Password Reset
+-- ============================================
+
+-- 1. resolvespec_password_reset_request - Creates a password reset token for a user
+-- Input: p_request jsonb {email: string, username: string}
+-- Output: p_success (bool), p_error (text), p_data jsonb {token: string, expires_in: int}
+-- NOTE: The raw token is returned so the caller can deliver it out-of-band (e.g. email).
+--       Only the SHA-256 hash is stored. Invalidates any previous unused tokens for the user.
+CREATE OR REPLACE FUNCTION resolvespec_password_reset_request(p_request jsonb)
+RETURNS TABLE(p_success boolean, p_error text, p_data jsonb) AS $$
+DECLARE
+    v_user_id   INTEGER;
+    v_email     TEXT;
+    v_username  TEXT;
+    v_raw_token TEXT;
+    v_token_hash TEXT;
+    v_expires_at TIMESTAMP;
+BEGIN
+    v_email    := p_request->>'email';
+    v_username := p_request->>'username';
+
+    -- Require at least one identifier
+    IF (v_email IS NULL OR v_email = '') AND (v_username IS NULL OR v_username = '') THEN
+        RETURN QUERY SELECT false, 'email or username is required'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
+    -- Look up active user
+    IF v_email IS NOT NULL AND v_email <> '' THEN
+        SELECT id INTO v_user_id FROM users WHERE email = v_email AND is_active = true;
+    ELSE
+        SELECT id INTO v_user_id FROM users WHERE username = v_username AND is_active = true;
+    END IF;
+
+    -- Return generic success even when user not found to avoid user enumeration
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT true, NULL::text, jsonb_build_object('token', '', 'expires_in', 0);
+        RETURN;
+    END IF;
+
+    -- Invalidate previous unused tokens for this user
+    DELETE FROM user_password_resets WHERE user_id = v_user_id AND used = false;
+
+    -- Generate a random 32-byte token and store its SHA-256 hash
+    v_raw_token  := encode(gen_random_bytes(32), 'hex');
+    v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
+    v_expires_at := now() + interval '1 hour';
+
+    INSERT INTO user_password_resets (user_id, token_hash, expires_at)
+    VALUES (v_user_id, v_token_hash, v_expires_at);
+
+    RETURN QUERY SELECT
+        true,
+        NULL::text,
+        jsonb_build_object(
+            'token',      v_raw_token,
+            'expires_in', 3600
+        );
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text, NULL::jsonb;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. resolvespec_password_reset - Validates the token and updates the user's password
+-- Input: p_request jsonb {token: string, new_password: string}
+-- Output: p_success (bool), p_error (text)
+-- NOTE: Hash the new_password with bcrypt before storing (pgcrypto crypt/gen_salt).
+--       The TODO below mirrors the convention used in resolvespec_register.
+CREATE OR REPLACE FUNCTION resolvespec_password_reset(p_request jsonb)
+RETURNS TABLE(p_success boolean, p_error text) AS $$
+DECLARE
+    v_raw_token  TEXT;
+    v_token_hash TEXT;
+    v_new_pw     TEXT;
+    v_reset_id   INTEGER;
+    v_user_id    INTEGER;
+    v_expires_at TIMESTAMP;
+BEGIN
+    v_raw_token := p_request->>'token';
+    v_new_pw    := p_request->>'new_password';
+
+    IF v_raw_token IS NULL OR v_raw_token = '' THEN
+        RETURN QUERY SELECT false, 'token is required'::text;
+        RETURN;
+    END IF;
+
+    IF v_new_pw IS NULL OR v_new_pw = '' THEN
+        RETURN QUERY SELECT false, 'new_password is required'::text;
+        RETURN;
+    END IF;
+
+    v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
+
+    -- Find valid, unused reset token
+    SELECT id, user_id, expires_at
+    INTO v_reset_id, v_user_id, v_expires_at
+    FROM user_password_resets
+    WHERE token_hash = v_token_hash AND used = false;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'invalid or expired token'::text;
+        RETURN;
+    END IF;
+
+    IF v_expires_at <= now() THEN
+        RETURN QUERY SELECT false, 'invalid or expired token'::text;
+        RETURN;
+    END IF;
+
+    -- TODO: Hash new password with pgcrypto before storing
+    -- Enable pgcrypto: CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    -- v_new_pw := crypt(v_new_pw, gen_salt('bf'));
+
+    -- Update password and invalidate all sessions
+    UPDATE users SET password = v_new_pw, updated_at = now() WHERE id = v_user_id;
+    DELETE FROM user_sessions WHERE user_id = v_user_id;
+
+    -- Mark token as used
+    UPDATE user_password_resets SET used = true, used_at = now() WHERE id = v_reset_id;
+
+    RETURN QUERY SELECT true, NULL::text;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN QUERY SELECT false, SQLERRM::text;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Example: Test password reset stored procedures
+-- SELECT * FROM resolvespec_password_reset_request('{"email": "user@example.com"}'::jsonb);
+-- SELECT * FROM resolvespec_password_reset('{"token": "<raw_token>", "new_password": "newpass123"}'::jsonb);
+
+-- ============================================
 -- OAuth2 Server Tables (OAuthServer persistence)
 -- ============================================
 

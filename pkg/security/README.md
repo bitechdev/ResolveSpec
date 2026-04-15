@@ -13,6 +13,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 - ✅ **Extensible** - Implement custom providers for your needs
 - ✅ **Stored Procedures** - All database operations use PostgreSQL stored procedures for security and maintainability
 - ✅ **OAuth2 Authorization Server** - Built-in OAuth 2.1 + PKCE server (RFC 8414, 7591, 7009, 7662) with login form and external provider federation
+- ✅ **Password Reset** - Self-service password reset with secure token generation and session invalidation
 
 ## Stored Procedure Architecture
 
@@ -45,6 +46,8 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 | `resolvespec_oauth_exchange_code` | Consume authorization code (single-use) | OAuthServer / DatabaseAuthenticator |
 | `resolvespec_oauth_introspect` | Token introspection (RFC 7662) | OAuthServer / DatabaseAuthenticator |
 | `resolvespec_oauth_revoke` | Token revocation (RFC 7009) | OAuthServer / DatabaseAuthenticator |
+| `resolvespec_password_reset_request` | Create password reset token | DatabaseAuthenticator |
+| `resolvespec_password_reset` | Validate token and set new password | DatabaseAuthenticator |
 
 See `database_schema.sql` for complete stored procedure definitions and examples.
 
@@ -904,6 +907,66 @@ securityList := security.NewSecurityList(provider)
 restheadspec.RegisterSecurityHooks(handler, securityList) // or funcspec/resolvespec
 ```
 
+## Password Reset
+
+`DatabaseAuthenticator` implements `PasswordResettable` for self-service password reset.
+
+### Flow
+
+1. User submits email or username → `RequestPasswordReset` → server generates a token and returns it for out-of-band delivery (email, SMS, etc.)
+2. User submits the raw token + new password → `CompletePasswordReset` → password updated, all sessions invalidated
+
+### DB Requirements
+
+Run the migrations in `database_schema.sql`:
+- `user_password_resets` table (`user_id`, `token_hash` SHA-256, `expires_at`, `used`, `used_at`)
+- `resolvespec_password_reset_request` stored procedure
+- `resolvespec_password_reset` stored procedure
+
+Requires the `pgcrypto` extension (`gen_random_bytes`, `digest`) — already used by `resolvespec_login`.
+
+### Usage
+
+```go
+auth := security.NewDatabaseAuthenticator(db)
+
+// Step 1 — initiate reset (call after user submits their email)
+resp, err := auth.RequestPasswordReset(ctx, security.PasswordResetRequest{
+    Email: "user@example.com",
+})
+// resp.Token is the raw token — deliver it out-of-band
+// resp.ExpiresIn is 3600 (1 hour)
+// Always returns success regardless of whether the user exists (anti-enumeration)
+
+// Step 2 — complete reset (call after user submits token + new password)
+err = auth.CompletePasswordReset(ctx, security.PasswordResetCompleteRequest{
+    Token:       rawToken,
+    NewPassword: "newSecurePassword",
+})
+// On success: password updated, all active sessions deleted
+```
+
+### Security Notes
+
+- The raw token is never stored; only its SHA-256 hash is persisted
+- Requesting a reset invalidates any previous unused tokens for that user
+- Tokens expire after 1 hour
+- Completing a reset deletes all active sessions, forcing re-login
+- `RequestPasswordReset` always returns success even when the email/username is not found, preventing user enumeration
+- Hash the new password with bcrypt before storing (pgcrypto `crypt`/`gen_salt`) — see the TODO comment in `resolvespec_password_reset`
+
+### SQLNames
+
+```go
+type SQLNames struct {
+    // ...
+    PasswordResetRequest  string // default: "resolvespec_password_reset_request"
+    PasswordResetComplete string // default: "resolvespec_password_reset"
+}
+```
+
+---
+
 ## OAuth2 Authorization Server
 
 `OAuthServer` is a generic OAuth 2.1 + PKCE authorization server. It is not tied to any spec — `pkg/resolvemcp` uses it, but it can be used standalone with any `http.ServeMux`.
@@ -1107,6 +1170,14 @@ type Validatable interface {
 ```go
 type Cacheable interface {
     ClearCache(ctx context.Context, userID int, schema, table string) error
+}
+```
+
+**PasswordResettable** - Self-service password reset:
+```go
+type PasswordResettable interface {
+    RequestPasswordReset(ctx context.Context, req PasswordResetRequest) (*PasswordResetResponse, error)
+    CompletePasswordReset(ctx context.Context, req PasswordResetCompleteRequest) error
 }
 ```
 

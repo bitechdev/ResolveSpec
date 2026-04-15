@@ -47,6 +47,10 @@ type SQLNames struct {
 	PasskeyUpdateName         string // default: "resolvespec_passkey_update_name"
 	PasskeyLogin              string // default: "resolvespec_passkey_login"
 
+	// Password reset procedures (DatabaseAuthenticator)
+	PasswordResetRequest  string // default: "resolvespec_password_reset_request"
+	PasswordResetComplete string // default: "resolvespec_password_reset"
+
 	// OAuth2 procedures (DatabaseAuthenticator OAuth2 methods)
 	OAuthGetOrCreateUser    string // default: "resolvespec_oauth_getorcreateuser"
 	OAuthCreateSession      string // default: "resolvespec_oauth_createsession"
@@ -94,6 +98,9 @@ func DefaultSQLNames() *SQLNames {
 		PasskeyDeleteCredential:   "resolvespec_passkey_delete_credential",
 		PasskeyUpdateName:         "resolvespec_passkey_update_name",
 		PasskeyLogin:              "resolvespec_passkey_login",
+
+		PasswordResetRequest:  "resolvespec_password_reset_request",
+		PasswordResetComplete: "resolvespec_password_reset",
 
 		OAuthGetOrCreateUser:    "resolvespec_oauth_getorcreateuser",
 		OAuthCreateSession:      "resolvespec_oauth_createsession",
@@ -189,6 +196,12 @@ func MergeSQLNames(base, override *SQLNames) *SQLNames {
 	}
 	if override.PasskeyLogin != "" {
 		merged.PasskeyLogin = override.PasskeyLogin
+	}
+	if override.PasswordResetRequest != "" {
+		merged.PasswordResetRequest = override.PasswordResetRequest
+	}
+	if override.PasswordResetComplete != "" {
+		merged.PasswordResetComplete = override.PasswordResetComplete
 	}
 	if override.OAuthGetOrCreateUser != "" {
 		merged.OAuthGetOrCreateUser = override.OAuthGetOrCreateUser

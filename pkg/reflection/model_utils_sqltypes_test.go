@@ -221,6 +221,124 @@ func TestMapToStruct_AllSqlTypes(t *testing.T) {
 	t.Logf("  - SqlJSONB (Tags): %v", tagsValue)
 }
 
+// TestMapToStruct_NestedStructPointer tests that a map[string]interface{} value is
+// correctly converted into a pointer-to-struct field (e.g. AFN *ModelCoreActionfunction).
+func TestMapToStruct_NestedStructPointer(t *testing.T) {
+	type Inner struct {
+		ID   spectypes.SqlInt32  `bun:"rid_inner,pk" json:"rid_inner"`
+		Name spectypes.SqlString `bun:"name" json:"name"`
+	}
+	type Outer struct {
+		ID    spectypes.SqlInt32 `bun:"rid_outer,pk" json:"rid_outer"`
+		Inner *Inner             `json:"inner,omitempty" bun:"rel:has-one"`
+	}
+
+	dataMap := map[string]interface{}{
+		"rid_outer": int64(1),
+		"inner": map[string]interface{}{
+			"rid_inner": int64(42),
+			"name":      "hello",
+		},
+	}
+
+	var result Outer
+	err := reflection.MapToStruct(dataMap, &result)
+	if err != nil {
+		t.Fatalf("MapToStruct() error = %v", err)
+	}
+
+	if !result.ID.Valid || result.ID.Val != 1 {
+		t.Errorf("ID = %v, want 1", result.ID)
+	}
+	if result.Inner == nil {
+		t.Fatal("Inner is nil, want non-nil")
+	}
+	if !result.Inner.ID.Valid || result.Inner.ID.Val != 42 {
+		t.Errorf("Inner.ID = %v, want 42", result.Inner.ID)
+	}
+	if !result.Inner.Name.Valid || result.Inner.Name.Val != "hello" {
+		t.Errorf("Inner.Name = %v, want 'hello'", result.Inner.Name)
+	}
+}
+
+// TestMapToStruct_NestedStructNilPointer tests that a nil map value leaves the pointer nil.
+func TestMapToStruct_NestedStructNilPointer(t *testing.T) {
+	type Inner struct {
+		ID spectypes.SqlInt32 `bun:"rid_inner,pk" json:"rid_inner"`
+	}
+	type Outer struct {
+		ID    spectypes.SqlInt32 `bun:"rid_outer,pk" json:"rid_outer"`
+		Inner *Inner             `json:"inner,omitempty" bun:"rel:has-one"`
+	}
+
+	dataMap := map[string]interface{}{
+		"rid_outer": int64(5),
+		"inner":     nil,
+	}
+
+	var result Outer
+	err := reflection.MapToStruct(dataMap, &result)
+	if err != nil {
+		t.Fatalf("MapToStruct() error = %v", err)
+	}
+
+	if result.Inner != nil {
+		t.Errorf("Inner = %v, want nil", result.Inner)
+	}
+}
+
+// TestMapToStruct_NestedStructWithSpectypes mirrors the real-world case of
+// ModelCoreActionoption.AFN being populated from map[string]interface{}.
+func TestMapToStruct_NestedStructWithSpectypes(t *testing.T) {
+	type ActionFunction struct {
+		Ridactionfunction spectypes.SqlInt32  `bun:"rid_actionfunction,pk" json:"rid_actionfunction"`
+		Functionname      spectypes.SqlString `bun:"functionname" json:"functionname"`
+		Fntype            spectypes.SqlString `bun:"fntype" json:"fntype"`
+	}
+	type ActionOption struct {
+		Ridactionoption   spectypes.SqlInt32  `bun:"rid_actionoption,pk" json:"rid_actionoption"`
+		Ridactionfunction spectypes.SqlInt32  `bun:"rid_actionfunction" json:"rid_actionfunction"`
+		Description       spectypes.SqlString `bun:"description" json:"description"`
+		AFN               *ActionFunction     `json:"AFN,omitempty" bun:"rel:has-one"`
+	}
+
+	dataMap := map[string]interface{}{
+		"rid_actionoption":   int64(10),
+		"rid_actionfunction": int64(99),
+		"description":        "test option",
+		"AFN": map[string]interface{}{
+			"rid_actionfunction": int64(99),
+			"functionname":       "MyFunction",
+			"fntype":             "action",
+		},
+	}
+
+	var result ActionOption
+	err := reflection.MapToStruct(dataMap, &result)
+	if err != nil {
+		t.Fatalf("MapToStruct() error = %v", err)
+	}
+
+	if !result.Ridactionoption.Valid || result.Ridactionoption.Val != 10 {
+		t.Errorf("Ridactionoption = %v, want 10", result.Ridactionoption)
+	}
+	if !result.Description.Valid || result.Description.Val != "test option" {
+		t.Errorf("Description = %v, want 'test option'", result.Description)
+	}
+	if result.AFN == nil {
+		t.Fatal("AFN is nil, want non-nil")
+	}
+	if !result.AFN.Ridactionfunction.Valid || result.AFN.Ridactionfunction.Val != 99 {
+		t.Errorf("AFN.Ridactionfunction = %v, want 99", result.AFN.Ridactionfunction)
+	}
+	if !result.AFN.Functionname.Valid || result.AFN.Functionname.Val != "MyFunction" {
+		t.Errorf("AFN.Functionname = %v, want 'MyFunction'", result.AFN.Functionname)
+	}
+	if !result.AFN.Fntype.Valid || result.AFN.Fntype.Val != "action" {
+		t.Errorf("AFN.Fntype = %v, want 'action'", result.AFN.Fntype)
+	}
+}
+
 func TestMapToStruct_SqlNull_NilValues(t *testing.T) {
 	// Test that SqlNull types handle nil values correctly
 	type TestModel struct {

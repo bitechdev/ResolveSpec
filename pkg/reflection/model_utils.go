@@ -1244,6 +1244,16 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 			}
 		}
 
+		// Handle map[string]interface{} → nested struct (e.g. relation fields like AFN, DEF)
+		if m, ok := value.(map[string]interface{}); ok {
+			if field.CanAddr() {
+				if err := MapToStruct(m, field.Addr().Interface()); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+
 		// Fallback: Try to find a "Val" field (for SqlNull types) and set it directly
 		valField := field.FieldByName("Val")
 		if valField.IsValid() && valField.CanSet() {

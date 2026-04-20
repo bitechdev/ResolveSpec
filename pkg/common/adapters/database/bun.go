@@ -597,6 +597,19 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 	if !b.skipAutoDetect {
 		model := b.query.GetModel()
 		if model != nil && model.Value() != nil {
+			// Guard against relations that don't exist on the model. Without this,
+			// bun panics inside Count/Scan with `model=X does not have relation="Y"`.
+			// Only validate the root segment so nested paths (e.g. "PRM.CHILD") still
+			// fall through to bun's native resolution.
+			rootRelation := relation
+			if idx := strings.Index(rootRelation, "."); idx >= 0 {
+				rootRelation = rootRelation[:idx]
+			}
+			if reflection.GetRelationType(model.Value(), rootRelation) == reflection.RelationUnknown {
+				logger.Warn("Skipping preload '%s': relation '%s' is not declared on model %T", relation, rootRelation, model.Value())
+				return b
+			}
+
 			relType := reflection.GetRelationType(model.Value(), relation)
 
 			// Log the detected relationship type

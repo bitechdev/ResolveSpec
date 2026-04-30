@@ -66,7 +66,7 @@ func formatPostgresStringArray(vals []string) string {
 	parts := make([]string, len(vals))
 	for i, v := range vals {
 		// Quote if value contains comma, double-quote, backslash, braces, whitespace, or is empty.
-		needsQuote := v == "" || strings.ContainsAny(v, `,"\\{}` + "\t\n\r ")
+		needsQuote := v == "" || strings.ContainsAny(v, `,"\\{}`+"\t\n\r ")
 		if needsQuote {
 			v = strings.ReplaceAll(v, `\`, `\\`)
 			v = strings.ReplaceAll(v, `"`, `""`)

@@ -92,6 +92,7 @@ See [`resolvespec-python/todo.md`](./resolvespec-python/todo.md) for detailed Py
 
 - [ ] Long preload alias names may exceed PostgreSQL identifier limit
 - [ ] Some edge cases in computed column handling
+- [ ] `GormResult.LastInsertId()` (`pkg/common/adapters/database/gorm.go:936`) always returns `0, nil` — GORM does not expose last insert ID via `sql.Result` for most dialects. Auto-generated IDs from GORM inserts are not propagated back through `LastInsertId`, which breaks the ID-retrieval path in `recursive_crud.go`. Fix: read the ID back from the model struct after `Create()` using reflection, or use GORM's `Statement.LastInsertId`.
 
 ---
 

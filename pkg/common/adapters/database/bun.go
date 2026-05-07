@@ -1529,7 +1529,7 @@ func (b *BunUpdateQuery) SetMap(values map[string]interface{}) common.UpdateQuer
 			// Skip primary key updates
 			continue
 		}
-		b.query = b.query.Set(column+" = ?", value)
+		b.query = b.query.Set(column+" = ?", common.ConvertSliceForBun(value))
 	}
 	return b
 }

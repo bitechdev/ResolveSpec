@@ -106,3 +106,66 @@ func TestExtractTagValue(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertSliceForBun(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected interface{}
+	}{
+		{
+			name:     "empty slice produces empty pg array",
+			input:    []interface{}{},
+			expected: "{}",
+		},
+		{
+			name:     "string elements",
+			input:    []interface{}{"a", "b", "c"},
+			expected: "{a,b,c}",
+		},
+		{
+			name:     "string element needing quotes",
+			input:    []interface{}{"hello world", "ok"},
+			expected: `{"hello world",ok}`,
+		},
+		{
+			name:     "string with comma",
+			input:    []interface{}{"a,b"},
+			expected: `{"a,b"}`,
+		},
+		{
+			name:     "integer elements (JSON float64)",
+			input:    []interface{}{float64(1), float64(2), float64(3)},
+			expected: "{1,2,3}",
+		},
+		{
+			name:     "bool elements",
+			input:    []interface{}{true, false},
+			expected: "{t,f}",
+		},
+		{
+			name:     "nil input passthrough",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "string input passthrough",
+			input:    "hello",
+			expected: "hello",
+		},
+		{
+			name:     "int input passthrough",
+			input:    42,
+			expected: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ConvertSliceForBun(tt.input)
+			if result != tt.expected {
+				t.Errorf("ConvertSliceForBun(%v) = %v; want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

@@ -603,7 +603,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Standard processing without nested relations
 		query := h.db.NewInsert().Table(tableName)
 		for key, value := range v {
-			query = query.Value(key, value)
+			query = query.Value(key, common.ConvertSliceForBun(value))
 		}
 		result, err := query.Exec(ctx)
 		if err != nil {
@@ -669,7 +669,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			for _, item := range v {
 				txQuery := tx.NewInsert().Table(tableName)
 				for key, value := range item {
-					txQuery = txQuery.Value(key, value)
+					txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
 				}
 				if _, err := txQuery.Exec(ctx); err != nil {
 					return err
@@ -747,7 +747,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					txQuery := tx.NewInsert().Table(tableName)
 					for key, value := range itemMap {
-						txQuery = txQuery.Value(key, value)
+						txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
 					}
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err

@@ -269,7 +269,7 @@ func (p *NestedCUDProcessor) processInsert(
 	query := p.db.NewInsert().Table(tableName)
 
 	for key, value := range data {
-		query = query.Value(key, value)
+		query = query.Value(key, ConvertSliceForBun(value))
 	}
 	pkName := reflection.GetPrimaryKeyName(tableName)
 	// Add RETURNING clause to get the inserted ID

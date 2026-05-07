@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -260,4 +261,49 @@ func GetTableNameFromModel(model interface{}) string {
 	// Fallback: convert struct name to lowercase (simple heuristic)
 	// This handles cases like "MasterTaskItem" -> "mastertaskitem"
 	return strings.ToLower(modelType.Name())
+}
+
+// ConvertSliceForBun converts []interface{} values to PostgreSQL array literal strings.
+// BUN's fallback appender for []interface{} is JSON encoding, which produces "[]" —
+// invalid PostgreSQL array syntax. PostgreSQL expects "{}" for empty arrays and
+// "{elem1,elem2}" for non-empty ones. All other value types are returned unchanged.
+func ConvertSliceForBun(value interface{}) interface{} {
+	arr, ok := value.([]interface{})
+	if !ok {
+		return value
+	}
+	if len(arr) == 0 {
+		return "{}"
+	}
+	parts := make([]string, len(arr))
+	for i, elem := range arr {
+		switch e := elem.(type) {
+		case string:
+			needsQuote := e == "" || strings.ContainsAny(e, `,"\\{}`+"\t\n\r ")
+			if needsQuote {
+				e = strings.ReplaceAll(e, `\`, `\\`)
+				e = strings.ReplaceAll(e, `"`, `""`)
+				parts[i] = `"` + e + `"`
+			} else {
+				parts[i] = e
+			}
+		case float64:
+			if e == float64(int64(e)) {
+				parts[i] = strconv.FormatInt(int64(e), 10)
+			} else {
+				parts[i] = strconv.FormatFloat(e, 'f', -1, 64)
+			}
+		case bool:
+			if e {
+				parts[i] = "t"
+			} else {
+				parts[i] = "f"
+			}
+		case nil:
+			parts[i] = "NULL"
+		default:
+			parts[i] = fmt.Sprintf("%v", e)
+		}
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }

@@ -76,9 +76,14 @@ func GetJSONNameForField(modelType reflect.Type, fieldName string) string {
 		return ""
 	}
 
-	// Handle pointer types
-	if modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
+	// Unwrap pointer and slice indirections to reach the struct type
+	for {
+		switch modelType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			modelType = modelType.Elem()
+			continue
+		}
+		break
 	}
 
 	if modelType.Kind() != reflect.Struct {

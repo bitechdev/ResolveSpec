@@ -541,9 +541,14 @@ func collectSQLColumnsFromType(typ reflect.Type, columns *[]string, scanOnlyEmbe
 func IsColumnWritable(model any, columnName string) bool {
 	modelType := reflect.TypeOf(model)
 
-	// Unwrap pointers to get to the base struct type
-	for modelType != nil && modelType.Kind() == reflect.Pointer {
-		modelType = modelType.Elem()
+	// Unwrap pointers and slices to get to the base struct type
+	for modelType != nil {
+		switch modelType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			modelType = modelType.Elem()
+			continue
+		}
+		break
 	}
 
 	// Validate that we have a struct type
@@ -878,8 +883,14 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 		return RelationUnknown
 	}
 
-	if modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
+	// Unwrap pointer → slice → pointer chains to reach the underlying struct
+	for {
+		switch modelType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			modelType = modelType.Elem()
+			continue
+		}
+		break
 	}
 
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -1472,9 +1483,14 @@ func convertToFloat64(value interface{}) (float64, bool) {
 func GetValidJSONFieldNames(modelType reflect.Type) map[string]bool {
 	validFields := make(map[string]bool)
 
-	// Unwrap pointers to get to the base struct type
-	for modelType != nil && modelType.Kind() == reflect.Pointer {
-		modelType = modelType.Elem()
+	// Unwrap pointers and slices to get to the base struct type
+	for modelType != nil {
+		switch modelType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			modelType = modelType.Elem()
+			continue
+		}
+		break
 	}
 
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -1535,8 +1551,13 @@ func getRelationModelSingleLevel(model interface{}, fieldName string) interface{
 		return nil
 	}
 
-	if modelType.Kind() == reflect.Ptr {
-		modelType = modelType.Elem()
+	for {
+		switch modelType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			modelType = modelType.Elem()
+			continue
+		}
+		break
 	}
 
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -1599,17 +1620,16 @@ func getRelationModelSingleLevel(model interface{}, fieldName string) interface{
 		return nil
 	}
 
-	if targetType.Kind() == reflect.Slice {
-		targetType = targetType.Elem()
-		if targetType == nil {
-			return nil
+	for {
+		switch targetType.Kind() {
+		case reflect.Ptr, reflect.Slice:
+			targetType = targetType.Elem()
+			if targetType == nil {
+				return nil
+			}
+			continue
 		}
-	}
-	if targetType.Kind() == reflect.Ptr {
-		targetType = targetType.Elem()
-		if targetType == nil {
-			return nil
-		}
+		break
 	}
 
 	if targetType.Kind() != reflect.Struct {

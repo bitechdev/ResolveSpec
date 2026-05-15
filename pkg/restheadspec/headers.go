@@ -64,7 +64,10 @@ type ExpandOption struct {
 // decodeHeaderValue decodes base64 encoded header values
 // Supports ZIP_ and __ prefixes for base64 encoding
 func decodeHeaderValue(value string) string {
-	str, _ := DecodeParam(value)
+	str, err := DecodeParam(value)
+	if err != nil {
+		return value
+	}
 	return str
 }
 
@@ -98,6 +101,11 @@ func DecodeParam(pStr string) (string, error) {
 
 	if strings.HasPrefix(code, "ZIP_") || strings.HasPrefix(code, "__") {
 		code, _ = DecodeParam(code)
+	} else {
+		strDat, err := base64.StdEncoding.DecodeString(code)
+		if err == nil {
+			code = string(strDat)
+		}
 	}
 
 	return code, nil

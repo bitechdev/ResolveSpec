@@ -28,16 +28,18 @@ type Handler struct {
 }
 
 type SqlQueryOptions struct {
-	NoCount     bool
-	BlankParams bool
-	AllowFilter bool
+	NoCount                bool
+	BlankParams            bool
+	AllowFilter            bool
+	AllowQueryParamFilters bool
 }
 
 func NewSqlQueryOptions() SqlQueryOptions {
 	return SqlQueryOptions{
-		NoCount:     false,
-		BlankParams: true,
-		AllowFilter: true,
+		NoCount:                false,
+		BlankParams:            true,
+		AllowFilter:            true,
+		AllowQueryParamFilters: false,
 	}
 }
 
@@ -138,6 +140,11 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 		// Merge query string parameters
 		sqlquery = h.mergeQueryParams(r, sqlquery, variables, options.AllowFilter, propQry)
 
+		// Apply p_-prefixed query params as field filters
+		if options.AllowQueryParamFilters {
+			sqlquery = h.applyQueryParamFilters(r, sqlquery)
+		}
+
 		// Merge header parameters
 		sqlquery = h.mergeHeaderParams(r, sqlquery, variables, propQry, &complexAPI)
 
@@ -168,9 +175,16 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 		// Replace meta variables in SQL
 		sqlquery = h.replaceMetaVariables(sqlquery, r, userCtx, metainfo, variables)
 
-		// Remove unused input variables
-		if options.BlankParams {
-			for _, kw := range inputvars {
+		// Replace variables from provided values, then blank any remaining unused ones
+		for _, kw := range inputvars {
+			varName := kw[1 : len(kw)-1] // strip [ and ]
+			if val, ok := variables[varName]; ok {
+				if strVal := fmt.Sprintf("%v", val); strVal != "" {
+					sqlquery = strings.ReplaceAll(sqlquery, kw, ValidSQL(strVal, "colvalue"))
+					continue
+				}
+			}
+			if options.BlankParams {
 				replacement := getReplacementForBlankParam(sqlquery, kw)
 				sqlquery = strings.ReplaceAll(sqlquery, kw, replacement)
 				logger.Debug("Replaced unused variable %s with: %s", kw, replacement)
@@ -474,6 +488,11 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 		// Merge query string parameters
 		sqlquery = h.mergeQueryParams(r, sqlquery, variables, false, propQry)
 
+		// Apply p_-prefixed query params as field filters
+		if options.AllowQueryParamFilters {
+			sqlquery = h.applyQueryParamFilters(r, sqlquery)
+		}
+
 		// Merge header parameters
 		sqlquery = h.mergeHeaderParams(r, sqlquery, variables, propQry, &complexAPI)
 		hookCtx.ComplexAPI = complexAPI
@@ -520,9 +539,16 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			}
 		}
 
-		// Remove unused input variables
-		if options.BlankParams {
-			for _, kw := range inputvars {
+		// Replace variables from provided values, then blank any remaining unused ones
+		for _, kw := range inputvars {
+			varName := kw[1 : len(kw)-1] // strip [ and ]
+			if val, ok := variables[varName]; ok {
+				if strVal := fmt.Sprintf("%v", val); strVal != "" {
+					sqlquery = strings.ReplaceAll(sqlquery, kw, ValidSQL(strVal, "colvalue"))
+					continue
+				}
+			}
+			if options.BlankParams {
 				replacement := getReplacementForBlankParam(sqlquery, kw)
 				sqlquery = strings.ReplaceAll(sqlquery, kw, replacement)
 				logger.Debug("Replaced unused variable %s with: %s", kw, replacement)
@@ -819,6 +845,43 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 
 		if strings.Contains(k, "x-simpleapi") {
 			*complexAPI = !strings.EqualFold(val, "1") && !strings.EqualFold(val, "true")
+		}
+	}
+	return sqlquery
+}
+
+// sqlStripStringLiterals removes the contents of single-quoted string literals from SQL,
+// leaving the structural identifiers (column names, table names) intact.
+// Used to check column presence without matching inside string arguments.
+func sqlStripStringLiterals(sql string) string {
+	re := regexp.MustCompile(`'(?:[^']|'')*'`)
+	return re.ReplaceAllString(sql, "''")
+}
+
+// applyQueryParamFilters applies query parameters as SQL field filters when the param name
+// appears as a structural identifier in the SQL (not inside a string literal).
+// e.g. ?rid_parent=0 → (rid_parent = 0 OR rid_parent IS NULL)
+func (h *Handler) applyQueryParamFilters(r *http.Request, sqlquery string) string {
+	sqlStructure := strings.ToLower(sqlStripStringLiterals(sqlquery))
+	for parmk, parmv := range r.URL.Query() {
+		if len(parmv) == 0 || !strings.Contains(sqlStructure, strings.ToLower(parmk)) {
+			continue
+		}
+		val := parmv[0]
+		dec, err := restheadspec.DecodeParam(val)
+		if err == nil {
+			val = dec
+		}
+		col := ValidSQL(parmk, "colname")
+		switch {
+		case val == "0":
+			sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = 0 OR %[1]s IS NULL)", col))
+		case val == "":
+			sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("(%[1]s = '' OR %[1]s IS NULL)", col))
+		case IsNumeric(val):
+			sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = %s", col, ValidSQL(val, "colvalue")))
+		default:
+			sqlquery = sqlQryWhere(sqlquery, fmt.Sprintf("%s = '%s'", col, ValidSQL(val, "colvalue")))
 		}
 	}
 	return sqlquery

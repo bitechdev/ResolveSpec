@@ -991,8 +991,8 @@ func getReplacementForBlankParam(sqlquery, param string) string {
 		charAfter = sqlquery[endIdx]
 	}
 
-	// Check if parameter is surrounded by quotes (single quote or dollar sign for PostgreSQL dollar-quoted strings)
-	if (charBefore == '\'' || charBefore == '$') && (charAfter == '\'' || charAfter == '$') {
+	// Check if parameter is surrounded by quotes (single quote, dollar sign for PostgreSQL dollar-quoted strings, or double quote for JSON string values)
+	if (charBefore == '\'' || charBefore == '$' || charBefore == '"') && (charAfter == '\'' || charAfter == '$' || charAfter == '"') {
 		// Parameter is in quotes, return empty string
 		return ""
 	}

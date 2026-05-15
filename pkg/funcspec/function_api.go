@@ -729,9 +729,10 @@ func (h *Handler) mergeQueryParams(r *http.Request, sqlquery string, variables m
 			propQry[parmk] = val
 		}
 
-		// Apply filters if allowed — check against string-literal-stripped SQL to avoid
-		// matching column names that only appear inside quoted arguments (e.g. JSON strings)
-		if allowFilter && len(parmk) > 1 && strings.Contains(strings.ToLower(sqlStripStringLiterals(sqlquery)), strings.ToLower(parmk)) {
+		// Apply filters if allowed — check only the SELECT list to avoid matching function
+		// parameters in the FROM clause (e.g. [p_rid_doctype] in a set-returning function call)
+		// or names inside quoted string arguments.
+		if allowFilter && len(parmk) > 1 && strings.Contains(sqlSelectList(sqlStripStringLiterals(sqlquery)), strings.ToLower(parmk)) {
 			if len(parmv) > 1 {
 				// Sanitize each value in the IN clause with appropriate quoting
 				sanitizedValues := make([]string, len(parmv))
@@ -845,6 +846,18 @@ func (h *Handler) mergeHeaderParams(r *http.Request, sqlquery string, variables 
 func sqlStripStringLiterals(sql string) string {
 	re := regexp.MustCompile(`'(?:[^']|'')*'`)
 	return re.ReplaceAllString(sql, "''")
+}
+
+// sqlSelectList returns the column list portion of a SELECT query (between SELECT and FROM).
+// Returns the full query lowercased if no clear SELECT…FROM boundary is found.
+func sqlSelectList(sql string) string {
+	lower := strings.ToLower(sql)
+	selectPos := strings.Index(lower, "select ")
+	fromPos := strings.Index(lower, " from ")
+	if selectPos < 0 || fromPos <= selectPos {
+		return lower
+	}
+	return lower[selectPos+7 : fromPos]
 }
 
 // replaceMetaVariables replaces meta variables like [rid_user], [user], etc. in the SQL query

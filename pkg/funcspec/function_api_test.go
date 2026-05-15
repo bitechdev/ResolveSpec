@@ -957,6 +957,60 @@ func TestAllowFilterDoesNotMatchInsideJsonArgument(t *testing.T) {
 	}
 }
 
+// TestAllowFilterDoesNotMatchFunctionParams verifies that query params that appear only
+// as function call arguments in the FROM clause (e.g. [p_rid_doctype]) are not treated
+// as column filters, since they are not in the SELECT list.
+func TestAllowFilterDoesNotMatchFunctionParams(t *testing.T) {
+	handler := NewHandler(&MockDatabase{})
+
+	sqlQuery := `select rid, rid_parent, description, row_cnt, filterstring, tableprefix, rid_table, tooltip, additionalfilter, haschildren
+    from crm_get_doc_menu($JQ$[p_tableprefix]$JQ$,[p_rid_parent],[p_rid_doctype],[p_removedup],[p_showall]) r`
+
+	tests := []struct {
+		name        string
+		queryParams map[string]string
+		checkResult func(t *testing.T, result string)
+	}{
+		{
+			name:        "p_rid_doctype is a function param, not a column — no filter applied",
+			queryParams: map[string]string{"p_rid_doctype": "0"},
+			checkResult: func(t *testing.T, result string) {
+				if strings.Contains(strings.ToLower(result), "where") {
+					t.Errorf("Expected no WHERE clause for p_rid_doctype (function arg, not SELECT column), got:\n%s", result)
+				}
+			},
+		},
+		{
+			name:        "p_showall is a function param, not a column — no filter applied",
+			queryParams: map[string]string{"p_showall": "1"},
+			checkResult: func(t *testing.T, result string) {
+				if strings.Contains(strings.ToLower(result), "where") {
+					t.Errorf("Expected no WHERE clause for p_showall (function arg, not SELECT column), got:\n%s", result)
+				}
+			},
+		},
+		{
+			name:        "rid is a SELECT column — filter applied",
+			queryParams: map[string]string{"rid": "42"},
+			checkResult: func(t *testing.T, result string) {
+				if !strings.Contains(strings.ToLower(result), "where") {
+					t.Error("Expected WHERE clause for rid (real SELECT column)")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := createTestRequest("GET", "/test", tt.queryParams, nil, nil)
+			variables := make(map[string]interface{})
+			propQry := make(map[string]string)
+			result := handler.mergeQueryParams(req, sqlQuery, variables, true, propQry)
+			tt.checkResult(t, result)
+		})
+	}
+}
+
 // TestGetReplacementForBlankParamDoubleQuote verifies that placeholders surrounded by
 // double quotes (as in JSON string values) are blanked to "" not NULL.
 func TestGetReplacementForBlankParamDoubleQuote(t *testing.T) {

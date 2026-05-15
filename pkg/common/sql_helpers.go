@@ -59,6 +59,38 @@ func IsSQLExpression(cond string) bool {
 	return false
 }
 
+// reEmptyCompMid matches a simple column comparison with an empty RHS that is immediately
+// followed by AND/OR (only whitespace between the operator and the next keyword).
+// Removing the match leaves the preceding AND/OR connector intact.
+// Example: "cond1 and col = \n    and cond2" → "cond1 and cond2"
+var reEmptyCompMid = regexp.MustCompile(`(?i)[\w.]+\s*(?:=|<>|!=|>=|<=|>|<)\s+(?:and|or)\s+`)
+
+// reEmptyCompEnd matches AND/OR + a simple column comparison with an empty RHS at the end
+// of the string (or sub-clause).
+// Example: "cond1 and col = " → "cond1"
+var reEmptyCompEnd = regexp.MustCompile(`(?i)\s+(?:and|or)\s+[\w.]+\s*(?:=|<>|!=|>=|<=|>|<)\s*$`)
+
+// stripEmptyComparisonClauses removes comparison conditions that have no right-hand side
+// value from a raw SQL string. Operates on the whole string so it also cleans up conditions
+// inside subqueries, not just top-level AND splits.
+func stripEmptyComparisonClauses(sql string) string {
+	sql = reEmptyCompMid.ReplaceAllLiteralString(sql, "")
+	sql = reEmptyCompEnd.ReplaceAllLiteralString(sql, "")
+	return sql
+}
+
+// hasEmptyRHS returns true when a condition ends with a comparison operator and has no
+// right-hand side value — e.g., "col = ", "com.rid_parent = ", "col >= ".
+func hasEmptyRHS(cond string) bool {
+	cond = strings.TrimSpace(cond)
+	for _, op := range []string{"<>", "!=", ">=", "<=", "=", ">", "<"} {
+		if strings.HasSuffix(cond, op) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsTrivialCondition checks if a condition is trivial and always evaluates to true
 // These conditions should be removed from WHERE clauses as they have no filtering effect
 func IsTrivialCondition(cond string) bool {
@@ -147,6 +179,14 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 		return ""
 	}
 
+	// Strip comparison conditions with empty RHS throughout the SQL string (including
+	// inside subqueries), before condition splitting.
+	where = stripEmptyComparisonClauses(where)
+	if where == "" {
+		return ""
+	}
+	where = strings.TrimSpace(where)
+
 	// Check if the original clause has outer parentheses and contains OR operators
 	// If so, we need to preserve the outer parentheses to prevent OR logic from escaping
 	hasOuterParens := false
@@ -209,6 +249,12 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 		// Skip trivial conditions that always evaluate to true
 		if IsTrivialCondition(condToCheck) {
 			logger.Debug("Removing trivial condition: '%s'", cond)
+			continue
+		}
+
+		// Skip conditions with no right-hand side value (e.g. "col = " with empty value)
+		if hasEmptyRHS(condToCheck) {
+			logger.Debug("Removing condition with empty value: '%s'", cond)
 			continue
 		}
 

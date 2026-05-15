@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -501,6 +502,31 @@ func (h *Handler) parseExpand(options *ExtendedRequestOptions, value string) {
 	}
 }
 
+// reMultiJoinBoundary finds the start of each individual JOIN clause within a string that
+// may contain multiple consecutive JOIN clauses (e.g., "INNER JOIN ... LEFT OUTER JOIN ...").
+var reMultiJoinBoundary = regexp.MustCompile(`(?i)(?:inner|left(?:\s+outer)?|right(?:\s+outer)?|full(?:\s+outer)?|cross)\s+join\b`)
+
+// splitJoinClauses splits a SQL string that may contain multiple JOIN clauses into
+// individual clauses. A plain pipe-separated segment may itself contain several JOINs;
+// this function splits them so each gets its own alias entry.
+func splitJoinClauses(joinStr string) []string {
+	indices := reMultiJoinBoundary.FindAllStringIndex(joinStr, -1)
+	if len(indices) <= 1 {
+		return []string{strings.TrimSpace(joinStr)}
+	}
+	parts := make([]string, 0, len(indices))
+	for i, idx := range indices {
+		end := len(joinStr)
+		if i+1 < len(indices) {
+			end = indices[i+1][0]
+		}
+		if part := strings.TrimSpace(joinStr[idx[0]:end]); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
 // parseCustomSQLJoin parses x-custom-sql-join header
 // Format: Single JOIN clause or multiple JOIN clauses separated by |
 // Example: "LEFT JOIN departments d ON d.id = employees.department_id"
@@ -533,17 +559,19 @@ func (h *Handler) parseCustomSQLJoin(options *ExtendedRequestOptions, value stri
 			continue
 		}
 
-		// Extract table alias from the JOIN clause
-		alias := extractJoinAlias(sanitizedJoin)
-		if alias != "" {
+		// Split into individual JOIN clauses so each clause gets its own alias entry.
+		// CustomSQLJoin and JoinAliases are kept parallel (one entry per individual clause).
+		for _, clause := range splitJoinClauses(sanitizedJoin) {
+			alias := extractJoinAlias(clause)
+			// Keep arrays parallel; use empty string when alias cannot be extracted.
 			options.JoinAliases = append(options.JoinAliases, alias)
-			// Also add to the embedded RequestOptions for validation
 			options.RequestOptions.JoinAliases = append(options.RequestOptions.JoinAliases, alias)
-			logger.Debug("Extracted join alias: %s", alias)
+			if alias != "" {
+				logger.Debug("Extracted join alias: %s", alias)
+			}
+			logger.Debug("Adding custom SQL join: %s", clause)
+			options.CustomSQLJoin = append(options.CustomSQLJoin, clause)
 		}
-
-		logger.Debug("Adding custom SQL join: %s", sanitizedJoin)
-		options.CustomSQLJoin = append(options.CustomSQLJoin, sanitizedJoin)
 	}
 }
 

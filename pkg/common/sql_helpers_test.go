@@ -134,6 +134,30 @@ func TestSanitizeWhereClause(t *testing.T) {
 			tableName: "apiprovider",
 			expected:  "apiprovider.type in ('softphone') AND (apiprovider.rid_apiprovider in (select l.rid_apiprovider from core.apiproviderlink l where l.rid_hub = 2576))",
 		},
+		{
+			name:      "empty RHS stripped mid-clause",
+			where:     "com.tableprefix = 'tcli' and com.rid_parent = \n    and com.status = 'Active'",
+			tableName: "",
+			expected:  "com.tableprefix = 'tcli' AND com.status = 'Active'",
+		},
+		{
+			name:      "empty RHS stripped at end of clause",
+			where:     "com.tableprefix = 'tcli' and com.rid_parent =",
+			tableName: "",
+			expected:  "com.tableprefix = 'tcli'",
+		},
+		{
+			name:      "non-empty value not stripped",
+			where:     "com.tableprefix = 'tcli' and com.rid_parent = 123 and com.status = 'Active'",
+			tableName: "",
+			expected:  "com.tableprefix = 'tcli' AND com.rid_parent = 123 AND com.status = 'Active'",
+		},
+		{
+			name:      "empty RHS inside subquery stripped",
+			where:     "a = 1 and b in (select x from t where c.rid = \n    and d = 2)",
+			tableName: "",
+			expected:  "a = 1 AND b in (select x from t where d = 2)",
+		},
 	}
 
 	for _, tt := range tests {

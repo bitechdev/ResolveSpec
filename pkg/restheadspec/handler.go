@@ -575,11 +575,25 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 	}
 
-	// Apply custom SQL JOIN clauses
+	// Apply custom SQL JOIN clauses, skipping any whose alias is already provided by a
+	// preload LEFT JOIN (to prevent "table name specified more than once" errors).
 	if len(options.CustomSQLJoin) > 0 {
-		for _, joinClause := range options.CustomSQLJoin {
+		preloadAliasSet := make(map[string]bool, len(options.Preload))
+		for _, p := range options.Preload {
+			if alias := common.RelationPathToBunAlias(p.Relation); alias != "" {
+				preloadAliasSet[alias] = true
+			}
+		}
+
+		for i, joinClause := range options.CustomSQLJoin {
+			if i < len(options.JoinAliases) && options.JoinAliases[i] != "" {
+				alias := strings.ToLower(options.JoinAliases[i])
+				if preloadAliasSet[alias] {
+					logger.Debug("Skipping custom SQL JOIN (alias '%s' already joined by preload): %s", alias, joinClause)
+					continue
+				}
+			}
 			logger.Debug("Applying custom SQL JOIN: %s", joinClause)
-			// Joins are already sanitized during parsing, so we can apply them directly
 			query = query.Join(joinClause)
 		}
 	}

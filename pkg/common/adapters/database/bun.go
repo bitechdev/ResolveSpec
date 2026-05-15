@@ -487,6 +487,14 @@ func normalizeTableAlias(query, expectedAlias, tableName string) string {
 	return modified
 }
 
+func isJoinKeyword(word string) bool {
+	switch strings.ToUpper(word) {
+	case "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS":
+		return true
+	}
+	return false
+}
+
 func (b *BunSelectQuery) WhereOr(query string, args ...interface{}) common.SelectQuery {
 	b.query = b.query.WhereOr(query, args...)
 	return b
@@ -517,7 +525,7 @@ func (b *BunSelectQuery) Join(query string, args ...interface{}) common.SelectQu
 	if prefix != "" && !strings.Contains(strings.ToUpper(query), " AS ") {
 		// If query doesn't already have AS, check if it's a simple table name
 		parts := strings.Fields(query)
-		if len(parts) > 0 && !strings.HasPrefix(strings.ToUpper(parts[0]), "JOIN") {
+		if len(parts) > 0 && !isJoinKeyword(parts[0]) {
 			// Simple table name, add prefix: "table AS prefix"
 			joinClause = fmt.Sprintf("%s AS %s", parts[0], prefix)
 			if len(parts) > 1 {
@@ -552,7 +560,7 @@ func (b *BunSelectQuery) LeftJoin(query string, args ...interface{}) common.Sele
 	joinClause := query
 	if prefix != "" && !strings.Contains(strings.ToUpper(query), " AS ") {
 		parts := strings.Fields(query)
-		if len(parts) > 0 && !strings.HasPrefix(strings.ToUpper(parts[0]), "LEFT") && !strings.HasPrefix(strings.ToUpper(parts[0]), "JOIN") {
+		if len(parts) > 0 && !isJoinKeyword(parts[0]) {
 			joinClause = fmt.Sprintf("%s AS %s", parts[0], prefix)
 			if len(parts) > 1 {
 				joinClause += " " + strings.Join(parts[1:], " ")

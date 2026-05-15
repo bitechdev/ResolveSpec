@@ -111,6 +111,9 @@ type HookContext struct {
 	AbortMessage string // Message to return if aborted
 	AbortCode    int    // HTTP status code if aborted
 
+	// Tx provides access to the database/transaction for executing additional SQL
+	Tx common.Database
+
 	// Metadata is additional context data
 	Metadata map[string]interface{}
 }

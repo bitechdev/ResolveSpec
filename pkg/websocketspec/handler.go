@@ -174,6 +174,7 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 		Options:    msg.Options,
 		ID:         recordID,
 		Data:       msg.Data,
+		Tx:         h.db,
 		Metadata:   make(map[string]interface{}),
 	}
 

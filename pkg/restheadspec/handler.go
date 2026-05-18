@@ -2502,14 +2502,16 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 		w.SetHeader("X-No-Data-Found", "true")
 	}
 
-	w.WriteHeader(http.StatusOK)
-
 	// Normalize single-record arrays to objects if requested
 	if options != nil && options.SingleRecordAsObject {
 		data = h.normalizeResultArray(data)
 	}
 
-	// Return data as-is without wrapping in common.Response
+	if dataLen == 0 {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 
 	if err := w.WriteJSON(data); err != nil {
 		logger.Error("Failed to write JSON response: %v", err)
@@ -2520,7 +2522,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 // Returns the single element if data is a slice/array with exactly one element, otherwise returns data unchanged
 func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 	if data == nil {
-		return []interface{}{}
+		return map[string]interface{}{}
 	}
 
 	// Use reflection to check if data is a slice or array
@@ -2535,15 +2537,15 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 			// Return the single element
 			return dataValue.Index(0).Interface()
 		} else if dataValue.Len() == 0 {
-			// Keep empty array as empty array, don't convert to empty object
-			return []interface{}{}
+			// Single-record request with no result → empty object
+			return map[string]interface{}{}
 		}
 	}
 
 	if dataValue.Kind() == reflect.String {
 		str := dataValue.String()
 		if str == "" || str == "null" {
-			return []interface{}{}
+			return map[string]interface{}{}
 		}
 
 	}
@@ -2552,9 +2554,6 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 
 // sendFormattedResponse sends response with formatting options
 func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
-	// Normalize single-record arrays to objects if requested
-	httpStatus := http.StatusOK
-
 	// Handle nil data - convert to empty array
 	if data == nil {
 		data = []interface{}{}
@@ -2566,8 +2565,10 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	dataLen := reflection.Len(data)
 
 	// Add X-No-Data-Found header when no records were found
+	httpStatus := http.StatusOK
 	if dataLen == 0 {
 		w.SetHeader("X-No-Data-Found", "true")
+		httpStatus = http.StatusNoContent
 	}
 
 	// Apply normalization after header is set

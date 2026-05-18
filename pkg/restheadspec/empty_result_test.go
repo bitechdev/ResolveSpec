@@ -9,29 +9,29 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 )
 
-// Test that normalizeResultArray returns empty array when no records found without ID
+// Test that normalizeResultArray returns empty object when no records found (single-record mode)
 func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 	handler := &Handler{}
 
 	tests := []struct {
-		name             string
-		input            interface{}
-		shouldBeEmptyArr bool
+		name            string
+		input           interface{}
+		shouldBeEmptyObj bool
 	}{
 		{
-			name:             "nil should return empty array",
-			input:            nil,
-			shouldBeEmptyArr: true,
+			name:            "nil should return empty object",
+			input:           nil,
+			shouldBeEmptyObj: true,
 		},
 		{
-			name:             "empty slice should return empty array",
-			input:            []*EmptyTestModel{},
-			shouldBeEmptyArr: true,
+			name:            "empty slice should return empty object",
+			input:           []*EmptyTestModel{},
+			shouldBeEmptyObj: true,
 		},
 		{
-			name:             "single element should return the element",
-			input:            []*EmptyTestModel{{ID: 1, Name: "test"}},
-			shouldBeEmptyArr: false,
+			name:            "single element should return the element",
+			input:           []*EmptyTestModel{{ID: 1, Name: "test"}},
+			shouldBeEmptyObj: false,
 		},
 		{
 			name: "multiple elements should return the slice",
@@ -39,7 +39,7 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 				{ID: 1, Name: "test1"},
 				{ID: 2, Name: "test2"},
 			},
-			shouldBeEmptyArr: false,
+			shouldBeEmptyObj: false,
 		},
 	}
 
@@ -47,25 +47,25 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := handler.normalizeResultArray(tt.input)
 
-			// For cases that should return empty array
-			if tt.shouldBeEmptyArr {
-				emptyArr, ok := result.([]interface{})
+			// For cases that should return empty object
+			if tt.shouldBeEmptyObj {
+				emptyObj, ok := result.(map[string]interface{})
 				if !ok {
-					t.Errorf("Expected empty array []interface{}{}, got %T: %v", result, result)
+					t.Errorf("Expected empty object map[string]interface{}{}, got %T: %v", result, result)
 					return
 				}
-				if len(emptyArr) != 0 {
-					t.Errorf("Expected empty array with length 0, got length %d", len(emptyArr))
+				if len(emptyObj) != 0 {
+					t.Errorf("Expected empty object with length 0, got length %d", len(emptyObj))
 				}
 
-				// Verify it serializes to [] and not null
+				// Verify it serializes to {} and not null
 				jsonBytes, err := json.Marshal(result)
 				if err != nil {
 					t.Errorf("Failed to marshal result: %v", err)
 					return
 				}
-				if string(jsonBytes) != "[]" {
-					t.Errorf("Expected JSON '[]', got '%s'", string(jsonBytes))
+				if string(jsonBytes) != "{}" {
+					t.Errorf("Expected JSON '{}', got '%s'", string(jsonBytes))
 				}
 			}
 		})
@@ -138,12 +138,12 @@ func TestSendResponseWithOptions_NoDataFoundHeader(t *testing.T) {
 		t.Errorf("Expected X-No-Data-Found header to be 'true', got '%s'", mockWriter.headers["X-No-Data-Found"])
 	}
 
-	// Check status code is 200
-	if mockWriter.statusCode != 200 {
-		t.Errorf("Expected status code 200, got %d", mockWriter.statusCode)
+	// Check status code is 204 when no records found
+	if mockWriter.statusCode != 204 {
+		t.Errorf("Expected status code 204, got %d", mockWriter.statusCode)
 	}
 
-	// Verify the body is an empty array
+	// Verify the body is an empty array (list request, SingleRecordAsObject not set)
 	if mockWriter.body == nil {
 		t.Error("Expected body to be set, got nil")
 	} else {

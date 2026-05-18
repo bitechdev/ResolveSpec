@@ -289,19 +289,20 @@ func (b *BunAdapter) DriverName() string {
 
 // BunSelectQuery implements SelectQuery for Bun
 type BunSelectQuery struct {
-	query          *bun.SelectQuery
-	db             bun.IDB // Store DB connection for count queries
-	hasModel       bool    // Track if Model() was called
-	schema         string  // Separated schema name
-	tableName      string  // Just the table name, without schema
-	entity         string
-	tableAlias     string
-	driverName     string                                                   // Database driver name (postgres, sqlite, mssql)
-	inJoinContext  bool                                                     // Track if we're in a JOIN relation context
-	joinTableAlias string                                                   // Alias to use for JOIN conditions
-	skipAutoDetect bool                                                     // Skip auto-detection to prevent circular calls
-	customPreloads map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
-	metricsEnabled bool
+	query               *bun.SelectQuery
+	db                  bun.IDB // Store DB connection for count queries
+	hasModel            bool    // Track if Model() was called
+	schema              string  // Separated schema name
+	tableName           string  // Just the table name, without schema
+	entity              string
+	tableAlias          string
+	driverName          string                                                   // Database driver name (postgres, sqlite, mssql)
+	inJoinContext       bool                                                     // Track if we're in a JOIN relation context
+	joinTableAlias      string                                                   // Alias to use for JOIN conditions
+	skipAutoDetect      bool                                                     // Skip auto-detection to prevent circular calls
+	preloadRelationAlias string                                                  // Relation alias used in separate-query preloads (e.g. "tprp" for relation "TPRP")
+	customPreloads      map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
+	metricsEnabled      bool
 }
 
 func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {
@@ -346,12 +347,14 @@ func (b *BunSelectQuery) ColumnExpr(query string, args ...interface{}) common.Se
 }
 
 func (b *BunSelectQuery) Where(query string, args ...interface{}) common.SelectQuery {
-	// If we're in a JOIN context, add table prefix to unqualified columns
 	if b.inJoinContext && b.joinTableAlias != "" {
 		query = addTablePrefix(query, b.joinTableAlias)
+	} else if b.preloadRelationAlias != "" && b.tableName != "" {
+		// Separate-query preload: the caller may have written conditions using the
+		// relation name as a prefix (e.g. "TPRP.col"). Bun uses the real table name
+		// as the alias, so rewrite any such references to use tableName instead.
+		query = replaceRelationAlias(query, b.preloadRelationAlias, b.tableName)
 	} else if b.tableAlias != "" && b.tableName != "" {
-		// If we have a table alias defined, check if the query references a different alias
-		// This can happen in preloads where the user expects a certain alias but Bun generates another
 		query = normalizeTableAlias(query, b.tableAlias, b.tableName)
 	}
 	b.query = b.query.Where(query, args...)
@@ -484,6 +487,30 @@ func normalizeTableAlias(query, expectedAlias, tableName string) string {
 		}
 	}
 
+	return modified
+}
+
+// replaceRelationAlias rewrites WHERE conditions written with a relation alias prefix
+// (e.g. "TPRP.col") to use the real table name that bun uses in separate queries
+// (e.g. "t_proposalinstance.col"). Only called for separate-query preload wrappers.
+func replaceRelationAlias(query, relationAlias, tableName string) string {
+	if relationAlias == "" || tableName == "" || query == "" {
+		return query
+	}
+	parts := strings.FieldsFunc(query, func(r rune) bool {
+		return r == ' ' || r == '(' || r == ')' || r == ','
+	})
+	modified := query
+	for _, part := range parts {
+		if dotIndex := strings.Index(part, "."); dotIndex > 0 {
+			prefix := part[:dotIndex]
+			column := part[dotIndex+1:]
+			if strings.EqualFold(prefix, relationAlias) {
+				logger.Debug("Replacing relation alias '%s' with table name '%s' in preload WHERE condition", prefix, tableName)
+				modified = strings.ReplaceAll(modified, part, tableName+"."+column)
+			}
+		}
+	}
 	return modified
 }
 
@@ -676,7 +703,19 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 				wrapper.tableAlias = provider.TableAlias()
 				logger.Debug("Preload relation '%s' using table alias: %s", relation, wrapper.tableAlias)
 			}
+
 		}
+
+		// Fallback: if the model didn't provide a table name, ask bun directly.
+		if wrapper.tableName == "" {
+			wrapper.schema, wrapper.tableName = parseTableName(sq.GetTableName(), b.driverName)
+		}
+
+		// For separate-query preloads (has-many), bun aliases the related table using
+		// the actual table name, not the relation name. Record the relation alias so
+		// Where() can rewrite conditions like "TPRP.col" to "t_proposalinstance.col".
+		wrapper.preloadRelationAlias = strings.ToLower(relation)
+		logger.Debug("Preload relation '%s' registered alias '%s' for separate-query WHERE rewriting", relation, wrapper.preloadRelationAlias)
 
 		// Start with the interface value (not pointer)
 		current := common.SelectQuery(wrapper)

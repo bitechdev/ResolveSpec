@@ -37,6 +37,17 @@ type gormCompositeEmployee struct {
 	Department *fkDept `gorm:"foreignKey:DeptID,TenantID" json:"department"`
 }
 
+// selfRefItem mimics a self-referential model (like mastertaskitem) where the
+// parent PK column appears as the left side of a has-many join tag.
+type selfRefItem struct {
+	RidItem       int32        `json:"rid_item" bun:"rid_item,type:integer,pk"`
+	RidParentItem int32        `json:"rid_parentitem" bun:"rid_parentitem,type:integer"`
+	// has-one (single parent pointer)
+	Parent   *selfRefItem   `json:"Parent,omitempty" bun:"rel:has-one,join:rid_item=rid_parentitem"`
+	// has-many (child collection) — same join, duplicate right-side must be deduped
+	Children []*selfRefItem `json:"Children,omitempty" bun:"rel:has-many,join:rid_item=rid_parentitem"`
+}
+
 // conventionEmployee has no explicit FK tag — relies on naming convention.
 type conventionEmployee struct {
 	DepartmentID string  `json:"department_id"`
@@ -99,6 +110,14 @@ func TestGetForeignKeyColumn(t *testing.T) {
 			modelType: reflect.TypeOf(gormCompositeEmployee{}),
 			parentKey: "department",
 			want:      []string{"dept_id", "tenant_id"},
+		},
+
+		// Join left-side scan (parentKey is a raw column name, not a relation field name)
+		{
+			name:      "self-referential: parent PK column returns child FK column",
+			modelType: reflect.TypeOf(selfRefItem{}),
+			parentKey: "rid_item",
+			want:      []string{"rid_parentitem"},
 		},
 
 		// Pointer and slice unwrapping

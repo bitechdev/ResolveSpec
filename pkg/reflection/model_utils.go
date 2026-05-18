@@ -974,16 +974,21 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 }
 
 // GetForeignKeyColumn returns the DB column names of the foreign key(s) that
-// the relation field identified by parentKey owns on modelType. Composite keys
-// (e.g. bun "join:a=b,join:c=d" or GORM "foreignKey:ColA,ColB") yield multiple
-// entries. Returns nil when no tag is found (caller should fall back to
-// convention).
+// relate parentKey to modelType. Composite keys (e.g. bun "join:a=b,join:c=d"
+// or GORM "foreignKey:ColA,ColB") yield multiple entries. Returns nil when no
+// tag is found (caller should fall back to convention).
 //
-// It checks tags in priority order:
-//  1. Bun join: tag — e.g. `bun:"rel:belongs-to,join:department_id=id"` → ["department_id"]
-//  2. GORM foreignKey: tag — e.g. `gorm:"foreignKey:DepartmentID"` → [column of DepartmentID field]
+// Two lookup strategies are tried in order:
 //
-// parentKey is matched case-insensitively against the field name and JSON tag.
+//  1. Relation-field match: find a field whose name/json equals parentKey, then
+//     read its bun join: or GORM foreignKey: tag and return the local columns.
+//     e.g. parentKey="department", field `Department bun:"join:dept_id=id"` → ["dept_id"]
+//
+//  2. Join left-side scan: scan every bun join tag in the struct for pairs whose
+//     left side equals parentKey and return the right-side (child FK) columns.
+//     e.g. parentKey="rid_mastertaskitem", field `Children bun:"join:rid_mastertaskitem=rid_parentmastertaskitem"` → ["rid_parentmastertaskitem"]
+//     Strategy 1 is skipped if the matched field is a declared relation (rel:) or
+//     has a GORM tag but carries no explicit FK — callers should use convention.
 func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
 	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice {
 		modelType = modelType.Elem()
@@ -992,6 +997,7 @@ func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
 		return nil
 	}
 
+	// Strategy 1: match parentKey against a field's name/json tag.
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
 
@@ -1001,9 +1007,11 @@ func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
 			continue
 		}
 
+		bunTag := field.Tag.Get("bun")
+
 		// Bun: join:local_col=foreign_col (one join: part per pair)
 		var bunCols []string
-		for _, part := range strings.Split(field.Tag.Get("bun"), ",") {
+		for _, part := range strings.Split(bunTag, ",") {
 			part = strings.TrimSpace(part)
 			if strings.HasPrefix(part, "join:") {
 				pair := strings.TrimPrefix(part, "join:")
@@ -1033,10 +1041,38 @@ func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
 			}
 		}
 
-		return nil
+		// The field matched by name/json but has no explicit FK tag. If it is a
+		// declared relation field (rel:) or carries a GORM tag, the caller should
+		// use naming convention — don't fall through to strategy 2. Otherwise the
+		// matched field is a plain scalar column; proceed to the join left-side scan.
+		if strings.Contains(bunTag, "rel:") || field.Tag.Get("gorm") != "" {
+			return nil
+		}
+		break
 	}
 
-	return nil
+	// Strategy 2: scan every field's bun join tag for pairs whose left side (the
+	// parent's column) matches parentKey; the right side is the child FK column.
+	// This handles cases where parentKey is a raw column name rather than a
+	// relation field name (e.g. self-referential or has-many relationships).
+	seen := map[string]bool{}
+	var cols []string
+	for i := 0; i < modelType.NumField(); i++ {
+		for _, part := range strings.Split(modelType.Field(i).Tag.Get("bun"), ",") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "join:") {
+				pair := strings.TrimPrefix(part, "join:")
+				if idx := strings.Index(pair, "="); idx > 0 {
+					left, right := pair[:idx], pair[idx+1:]
+					if strings.EqualFold(left, parentKey) && !seen[right] {
+						seen[right] = true
+						cols = append(cols, right)
+					}
+				}
+			}
+		}
+	}
+	return cols // nil if empty
 }
 
 // GetRelationModel gets the model type for a relation field

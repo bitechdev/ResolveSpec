@@ -234,6 +234,8 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 		return
 	}
 
+	pkCol := reflection.GetPrimaryKeyName(reflect.New(modelType).Interface())
+
 	for parentKey, parentID := range parentIDs {
 		dbColNames := reflection.GetForeignKeyColumn(modelType, parentKey)
 
@@ -255,6 +257,9 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 		}
 
 		for _, dbColName := range dbColNames {
+			if pkCol != "" && strings.EqualFold(dbColName, pkCol) {
+				continue
+			}
 			if _, exists := data[dbColName]; !exists {
 				logger.Debug("Injecting foreign key: %s = %v", dbColName, parentID)
 				data[dbColName] = parentID

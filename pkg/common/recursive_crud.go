@@ -125,6 +125,13 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			result.AffectedRows = 1
 			result.Data = regularData
 
+			// Re-select the inserted row so result.Data reflects DB-generated defaults.
+			if row, err := p.processSelect(ctx, tableName, id); err != nil {
+				logger.Warn("Select after insert failed: table=%s, id=%v, error=%v", tableName, id, err)
+			} else if len(row) > 0 {
+				result.Data = row
+			}
+
 			// Process child relations after parent insert (to get parent ID)
 			if err := p.processChildRelations(ctx, "insert", id, relationFields, result.RelationData, modelType, parentIDs); err != nil {
 				logger.Error("Failed to process child relations after insert: table=%s, parentID=%v, relations=%+v, error=%v", tableName, id, relationFields, err)
@@ -146,9 +153,16 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			result.AffectedRows = rows
 			result.Data = regularData
 
+			// Re-select the updated row so result.Data reflects current DB state.
+			if row, err := p.processSelect(ctx, tableName, result.ID); err != nil {
+				logger.Warn("Select after update failed: table=%s, id=%v, error=%v", tableName, result.ID, err)
+			} else if len(row) > 0 {
+				result.Data = row
+			}
+
 			// Process child relations for update
 			if err := p.processChildRelations(ctx, "update", data[pkName], relationFields, result.RelationData, modelType, parentIDs); err != nil {
-				logger.Error("Failed to process child relations after update: table=%s, parentID=%v, relations=%+v, error=%v", tableName, data[pkName], relationFields, err)
+				logger.Error("Failed to process child relations after update: table=%s, parentID=%v, relations=%+v, error=%v", tableName, data[pkName], regularData, err)
 				return nil, fmt.Errorf("failed to process child relations: %w", err)
 			}
 		} else {
@@ -292,6 +306,20 @@ func (p *NestedCUDProcessor) processInsert(
 
 	logger.Debug("Insert successful, ID: %v", id)
 	return id, nil
+}
+
+// processSelect fetches the row identified by id from tableName into a flat map.
+// Used to populate result.Data with the actual DB state after insert/update.
+func (p *NestedCUDProcessor) processSelect(ctx context.Context, tableName string, id interface{}) (map[string]interface{}, error) {
+	pkName := reflection.GetPrimaryKeyName(tableName)
+	var row map[string]interface{}
+	if err := p.db.NewSelect().
+		Table(tableName).
+		Where(fmt.Sprintf("%s = ?", QuoteIdent(pkName)), id).
+		Scan(ctx, &row); err != nil {
+		return nil, fmt.Errorf("select after write failed: %w", err)
+	}
+	return row, nil
 }
 
 // processUpdate handles update operation

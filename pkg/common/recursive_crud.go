@@ -235,9 +235,9 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 	}
 
 	for parentKey, parentID := range parentIDs {
-		dbColName := reflection.GetForeignKeyColumn(modelType, parentKey)
+		dbColNames := reflection.GetForeignKeyColumn(modelType, parentKey)
 
-		if dbColName == "" {
+		if len(dbColNames) == 0 {
 			// No explicit tag found — fall back to naming convention by scanning scalar fields.
 			for i := 0; i < modelType.NumField(); i++ {
 				field := modelType.Field(i)
@@ -248,13 +248,13 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 					strings.EqualFold(jsonName, parentKey+"_id") ||
 					strings.EqualFold(jsonName, parentKey+"id") ||
 					strings.EqualFold(field.Name, parentKey+"ID") {
-					dbColName = reflection.GetColumnName(field)
+					dbColNames = []string{reflection.GetColumnName(field)}
 					break
 				}
 			}
 		}
 
-		if dbColName != "" {
+		for _, dbColName := range dbColNames {
 			if _, exists := data[dbColName]; !exists {
 				logger.Debug("Injecting foreign key: %s = %v", dbColName, parentID)
 				data[dbColName] = parentID

@@ -973,21 +973,23 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 	return RelationUnknown
 }
 
-// GetForeignKeyColumn returns the DB column name of the foreign key that the
-// relation field identified by parentKey owns on modelType.
+// GetForeignKeyColumn returns the DB column names of the foreign key(s) that
+// the relation field identified by parentKey owns on modelType. Composite keys
+// (e.g. bun "join:a=b,join:c=d" or GORM "foreignKey:ColA,ColB") yield multiple
+// entries. Returns nil when no tag is found (caller should fall back to
+// convention).
 //
 // It checks tags in priority order:
-//  1. Bun join: tag — e.g. `bun:"rel:belongs-to,join:department_id=id"` → "department_id"
-//  2. GORM foreignKey: tag — e.g. `gorm:"foreignKey:DepartmentID"` → column of DepartmentID field
-//  3. Returns "" when no tag is found (caller should fall back to convention)
+//  1. Bun join: tag — e.g. `bun:"rel:belongs-to,join:department_id=id"` → ["department_id"]
+//  2. GORM foreignKey: tag — e.g. `gorm:"foreignKey:DepartmentID"` → [column of DepartmentID field]
 //
 // parentKey is matched case-insensitively against the field name and JSON tag.
-func GetForeignKeyColumn(modelType reflect.Type, parentKey string) string {
+func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
 	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice {
 		modelType = modelType.Elem()
 	}
 	if modelType.Kind() != reflect.Struct {
-		return ""
+		return nil
 	}
 
 	for i := 0; i < modelType.NumField(); i++ {
@@ -999,34 +1001,42 @@ func GetForeignKeyColumn(modelType reflect.Type, parentKey string) string {
 			continue
 		}
 
-		// Bun: join:local_col=foreign_col
+		// Bun: join:local_col=foreign_col (one join: part per pair)
+		var bunCols []string
 		for _, part := range strings.Split(field.Tag.Get("bun"), ",") {
 			part = strings.TrimSpace(part)
 			if strings.HasPrefix(part, "join:") {
-				// join: may contain multiple pairs separated by spaces: "join:a=b join:c=d"
-				// but typically it's a single pair; take the first local column
 				pair := strings.TrimPrefix(part, "join:")
 				if idx := strings.Index(pair, "="); idx > 0 {
-					return pair[:idx]
+					bunCols = append(bunCols, pair[:idx])
 				}
 			}
 		}
+		if len(bunCols) > 0 {
+			return bunCols
+		}
 
-		// GORM: foreignKey:FieldName
+		// GORM: foreignKey:FieldA,FieldB
 		for _, part := range strings.Split(field.Tag.Get("gorm"), ";") {
 			part = strings.TrimSpace(part)
 			if strings.HasPrefix(part, "foreignKey:") {
-				fkFieldName := strings.TrimPrefix(part, "foreignKey:")
-				if fkField, ok := modelType.FieldByName(fkFieldName); ok {
-					return getColumnNameFromField(fkField)
+				var cols []string
+				for _, fkFieldName := range strings.Split(strings.TrimPrefix(part, "foreignKey:"), ",") {
+					fkFieldName = strings.TrimSpace(fkFieldName)
+					if fkField, ok := modelType.FieldByName(fkFieldName); ok {
+						cols = append(cols, getColumnNameFromField(fkField))
+					}
+				}
+				if len(cols) > 0 {
+					return cols
 				}
 			}
 		}
 
-		return ""
+		return nil
 	}
 
-	return ""
+	return nil
 }
 
 // GetRelationModel gets the model type for a relation field

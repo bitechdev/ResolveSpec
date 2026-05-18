@@ -289,20 +289,20 @@ func (b *BunAdapter) DriverName() string {
 
 // BunSelectQuery implements SelectQuery for Bun
 type BunSelectQuery struct {
-	query               *bun.SelectQuery
-	db                  bun.IDB // Store DB connection for count queries
-	hasModel            bool    // Track if Model() was called
-	schema              string  // Separated schema name
-	tableName           string  // Just the table name, without schema
-	entity              string
-	tableAlias          string
-	driverName          string                                                   // Database driver name (postgres, sqlite, mssql)
-	inJoinContext       bool                                                     // Track if we're in a JOIN relation context
-	joinTableAlias      string                                                   // Alias to use for JOIN conditions
-	skipAutoDetect      bool                                                     // Skip auto-detection to prevent circular calls
-	preloadRelationAlias string                                                  // Relation alias used in separate-query preloads (e.g. "tprp" for relation "TPRP")
-	customPreloads      map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
-	metricsEnabled      bool
+	query                *bun.SelectQuery
+	db                   bun.IDB // Store DB connection for count queries
+	hasModel             bool    // Track if Model() was called
+	schema               string  // Separated schema name
+	tableName            string  // Just the table name, without schema
+	entity               string
+	tableAlias           string
+	driverName           string                                                   // Database driver name (postgres, sqlite, mssql)
+	inJoinContext        bool                                                     // Track if we're in a JOIN relation context
+	joinTableAlias       string                                                   // Alias to use for JOIN conditions
+	skipAutoDetect       bool                                                     // Skip auto-detection to prevent circular calls
+	preloadRelationAlias string                                                   // Relation alias used in separate-query preloads (e.g. "tprp" for relation "TPRP")
+	customPreloads       map[string][]func(common.SelectQuery) common.SelectQuery // Relations to load with custom implementation
+	metricsEnabled       bool
 }
 
 func (b *BunSelectQuery) Model(model interface{}) common.SelectQuery {

@@ -821,7 +821,7 @@ func TestReplaceMetaVariables(t *testing.T) {
 			name:     "Replace [user]",
 			sqlQuery: "SELECT * FROM audit WHERE username = [user]",
 			expectedCheck: func(result string) bool {
-				return strings.Contains(result, "'testuser'")
+				return strings.Contains(result, "$USR$testuser$USR$")
 			},
 		},
 		{

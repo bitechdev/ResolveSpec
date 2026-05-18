@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -103,7 +104,7 @@ func DecodeParam(pStr string) (string, error) {
 		code, _ = DecodeParam(code)
 	} else {
 		strDat, err := base64.StdEncoding.DecodeString(code)
-		if err == nil {
+		if err == nil && utf8.Valid(strDat) {
 			code = string(strDat)
 		}
 	}

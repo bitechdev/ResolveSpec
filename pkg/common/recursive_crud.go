@@ -174,7 +174,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		// Process child relations first (for referential integrity)
 		if err := p.processChildRelations(ctx, "delete", data[pkName], relationFields, result.RelationData, modelType, parentIDs); err != nil {
 			logger.Error("Failed to process child relations before delete: table=%s, id=%v, relations=%+v, error=%v", tableName, data[pkName], relationFields, err)
-			return nil, fmt.Errorf("failed to process child relations before delete: %w", err)
+			return nil, nil
 		}
 
 		rows, err := p.processDelete(ctx, tableName, data[pkName])

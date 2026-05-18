@@ -708,6 +708,51 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 	return &PgSQLResult{result: result}, nil
 }
 
+func (p *PgSQLInsertQuery) Scan(ctx context.Context, dest interface{}) (err error) {
+	startedAt := time.Now()
+	defer func() {
+		if r := recover(); r != nil {
+			err = logger.HandlePanic("PgSQLInsertQuery.Scan", r)
+		}
+		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
+	}()
+
+	if len(p.values) == 0 {
+		return fmt.Errorf("no values to insert")
+	}
+
+	columns := make([]string, 0, len(p.values))
+	placeholders := make([]string, 0, len(p.values))
+	args := make([]interface{}, 0, len(p.values))
+	i := 1
+	for _, col := range p.valueOrder {
+		columns = append(columns, col)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", i))
+		args = append(args, p.values[col])
+		i++
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		p.tableName,
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "))
+
+	if len(p.returning) > 0 {
+		query += " RETURNING " + strings.Join(p.returning, ", ")
+	}
+
+	logger.Debug("PgSQL INSERT (Scan): %s [args: %v]", query, args)
+
+	var row *sql.Row
+	if p.tx != nil {
+		row = p.tx.QueryRowContext(ctx, query, args...)
+	} else {
+		row = p.db.QueryRowContext(ctx, query, args...)
+	}
+
+	return row.Scan(dest)
+}
+
 // PgSQLUpdateQuery implements UpdateQuery for PostgreSQL
 type PgSQLUpdateQuery struct {
 	db             *sql.DB

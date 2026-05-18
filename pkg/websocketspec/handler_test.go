@@ -239,6 +239,11 @@ func (m *MockInsertQuery) Exec(ctx context.Context) (common.Result, error) {
 	return args.Get(0).(common.Result), args.Error(1)
 }
 
+func (m *MockInsertQuery) Scan(ctx context.Context, dest interface{}) error {
+	args := m.Called(ctx, dest)
+	return args.Error(0)
+}
+
 // MockUpdateQuery is a mock implementation of common.UpdateQuery
 type MockUpdateQuery struct {
 	mock.Mock

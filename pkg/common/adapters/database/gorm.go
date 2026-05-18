@@ -3,11 +3,13 @@ package database
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -676,15 +678,16 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 
 // GormInsertQuery implements InsertQuery for GORM
 type GormInsertQuery struct {
-	db             *gorm.DB
-	reconnect      func(...*gorm.DB) error
-	model          interface{}
-	values         map[string]interface{}
-	schema         string
-	tableName      string
-	entity         string
-	driverName     string
-	metricsEnabled bool
+	db               *gorm.DB
+	reconnect        func(...*gorm.DB) error
+	model            interface{}
+	values           map[string]interface{}
+	schema           string
+	tableName        string
+	entity           string
+	driverName       string
+	metricsEnabled   bool
+	returningColumns []string
 }
 
 func (g *GormInsertQuery) Model(model interface{}) common.InsertQuery {
@@ -718,7 +721,7 @@ func (g *GormInsertQuery) OnConflict(action string) common.InsertQuery {
 }
 
 func (g *GormInsertQuery) Returning(columns ...string) common.InsertQuery {
-	// GORM doesn't have explicit RETURNING, but updates the model
+	g.returningColumns = columns
 	return g
 }
 
@@ -747,6 +750,76 @@ func (g *GormInsertQuery) Exec(ctx context.Context) (res common.Result, err erro
 	}
 	recordQueryMetrics(g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
+}
+
+func (g *GormInsertQuery) Scan(ctx context.Context, dest interface{}) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = logger.HandlePanic("GormInsertQuery.Scan", r)
+		}
+	}()
+	startedAt := time.Now()
+
+	var returningCols []clause.Column
+	for _, col := range g.returningColumns {
+		returningCols = append(returningCols, clause.Column{Name: col})
+	}
+
+	db := g.db.WithContext(ctx)
+	if len(returningCols) > 0 {
+		db = db.Clauses(clause.Returning{Columns: returningCols})
+	}
+
+	var result *gorm.DB
+	switch {
+	case g.model != nil:
+		result = db.Create(g.model)
+	case g.values != nil:
+		result = db.Create(g.values)
+	default:
+		result = db.Create(map[string]interface{}{})
+	}
+
+	if isDBClosed(result.Error) && g.reconnect != nil {
+		if reconnErr := g.reconnect(g.db); reconnErr == nil {
+			result = db.Create(g.model)
+		}
+	}
+
+	recordQueryMetrics(g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
+	if result.Error != nil {
+		return result.Error
+	}
+
+	// Extract the returning column value from the model or values map
+	if len(g.returningColumns) == 1 {
+		col := g.returningColumns[0]
+		if g.model != nil {
+			val := reflect.ValueOf(g.model)
+			if val.Kind() == reflect.Ptr {
+				val = val.Elem()
+			}
+			if val.Kind() == reflect.Struct {
+				for i := 0; i < val.NumField(); i++ {
+					f := val.Type().Field(i)
+					dbTag := strings.Split(f.Tag.Get("bun"), ",")[0]
+					jsonTag := strings.Split(f.Tag.Get("json"), ",")[0]
+					if strings.EqualFold(f.Name, col) || dbTag == col || jsonTag == col {
+						reflect.ValueOf(dest).Elem().Set(val.Field(i))
+						return nil
+					}
+				}
+			}
+		}
+		if g.values != nil {
+			if v, ok := g.values[col]; ok {
+				reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(v))
+				return nil
+			}
+		}
+	}
+
+	return nil
 }
 
 // GormUpdateQuery implements UpdateQuery for GORM

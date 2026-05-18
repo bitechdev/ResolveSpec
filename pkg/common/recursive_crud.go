@@ -234,25 +234,30 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 		return
 	}
 
-	// Iterate through model fields to find foreign key fields
-	for i := 0; i < modelType.NumField(); i++ {
-		field := modelType.Field(i)
-		jsonTag := field.Tag.Get("json")
-		jsonName := strings.Split(jsonTag, ",")[0]
+	for parentKey, parentID := range parentIDs {
+		dbColName := reflection.GetForeignKeyColumn(modelType, parentKey)
 
-		// Check if this field is a foreign key and we have a parent ID for it
-		// Common patterns: DepartmentID, ManagerID, ProjectID, etc.
-		for parentKey, parentID := range parentIDs {
-			// Match field name patterns like "department_id" with parent key "department"
-			if strings.EqualFold(jsonName, parentKey+"_id") ||
-				strings.EqualFold(jsonName, parentKey+"id") ||
-				strings.EqualFold(field.Name, parentKey+"ID") {
-				// Use the DB column name as the key, since data is keyed by DB column names
-				dbColName := reflection.GetColumnName(field)
-				if _, exists := data[dbColName]; !exists {
-					logger.Debug("Injecting foreign key: %s = %v", dbColName, parentID)
-					data[dbColName] = parentID
+		if dbColName == "" {
+			// No explicit tag found — fall back to naming convention by scanning scalar fields.
+			for i := 0; i < modelType.NumField(); i++ {
+				field := modelType.Field(i)
+				jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
+				if strings.EqualFold(jsonName, "rid"+parentKey) ||
+					strings.EqualFold(jsonName, "rid_"+parentKey) ||
+					strings.EqualFold(jsonName, "id_"+parentKey) ||
+					strings.EqualFold(jsonName, parentKey+"_id") ||
+					strings.EqualFold(jsonName, parentKey+"id") ||
+					strings.EqualFold(field.Name, parentKey+"ID") {
+					dbColName = reflection.GetColumnName(field)
+					break
 				}
+			}
+		}
+
+		if dbColName != "" {
+			if _, exists := data[dbColName]; !exists {
+				logger.Debug("Injecting foreign key: %s = %v", dbColName, parentID)
+				data[dbColName] = parentID
 			}
 		}
 	}
@@ -272,24 +277,15 @@ func (p *NestedCUDProcessor) processInsert(
 		query = query.Value(key, ConvertSliceForBun(value))
 	}
 	pkName := reflection.GetPrimaryKeyName(tableName)
-	// Add RETURNING clause to get the inserted ID
 	query = query.Returning(pkName)
 
-	result, err := query.Exec(ctx)
-	if err != nil {
+	var id interface{}
+	if err := query.Scan(ctx, &id); err != nil {
 		logger.Error("Insert execution failed: table=%s, data=%+v, error=%v", tableName, data, err)
 		return nil, fmt.Errorf("insert exec failed: %w", err)
 	}
 
-	// Try to get the ID
-	var id interface{}
-	if lastID, err := result.LastInsertId(); err == nil && lastID > 0 {
-		id = lastID
-	} else if data[pkName] != nil {
-		id = data[pkName]
-	}
-
-	logger.Debug("Insert successful, ID: %v, rows affected: %d", id, result.RowsAffected())
+	logger.Debug("Insert successful, ID: %v", id)
 	return id, nil
 }
 

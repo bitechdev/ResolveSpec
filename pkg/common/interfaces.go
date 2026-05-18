@@ -75,6 +75,7 @@ type InsertQuery interface {
 
 	// Execution
 	Exec(ctx context.Context) (Result, error)
+	Scan(ctx context.Context, dest interface{}) error
 }
 
 // UpdateQuery interface for building UPDATE queries

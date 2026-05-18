@@ -101,10 +101,16 @@ func (m *mockInsertQuery) Value(column string, value interface{}) InsertQuery {
 func (m *mockInsertQuery) OnConflict(action string) InsertQuery { return m }
 func (m *mockInsertQuery) Returning(columns ...string) InsertQuery { return m }
 func (m *mockInsertQuery) Exec(ctx context.Context) (Result, error) {
-	// Record the insert call
 	m.db.insertCalls = append(m.db.insertCalls, m.values)
 	m.db.lastID++
 	return &mockResult{lastID: m.db.lastID, rowsAffected: 1}, nil
+}
+
+func (m *mockInsertQuery) Scan(ctx context.Context, dest interface{}) error {
+	m.db.insertCalls = append(m.db.insertCalls, m.values)
+	m.db.lastID++
+	reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(m.db.lastID))
+	return nil
 }
 
 // Mock UpdateQuery

@@ -973,6 +973,62 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 	return RelationUnknown
 }
 
+// GetForeignKeyColumn returns the DB column name of the foreign key that the
+// relation field identified by parentKey owns on modelType.
+//
+// It checks tags in priority order:
+//  1. Bun join: tag — e.g. `bun:"rel:belongs-to,join:department_id=id"` → "department_id"
+//  2. GORM foreignKey: tag — e.g. `gorm:"foreignKey:DepartmentID"` → column of DepartmentID field
+//  3. Returns "" when no tag is found (caller should fall back to convention)
+//
+// parentKey is matched case-insensitively against the field name and JSON tag.
+func GetForeignKeyColumn(modelType reflect.Type, parentKey string) string {
+	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice {
+		modelType = modelType.Elem()
+	}
+	if modelType.Kind() != reflect.Struct {
+		return ""
+	}
+
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+
+		name := field.Name
+		jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
+		if !strings.EqualFold(name, parentKey) && !strings.EqualFold(jsonName, parentKey) {
+			continue
+		}
+
+		// Bun: join:local_col=foreign_col
+		for _, part := range strings.Split(field.Tag.Get("bun"), ",") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "join:") {
+				// join: may contain multiple pairs separated by spaces: "join:a=b join:c=d"
+				// but typically it's a single pair; take the first local column
+				pair := strings.TrimPrefix(part, "join:")
+				if idx := strings.Index(pair, "="); idx > 0 {
+					return pair[:idx]
+				}
+			}
+		}
+
+		// GORM: foreignKey:FieldName
+		for _, part := range strings.Split(field.Tag.Get("gorm"), ";") {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "foreignKey:") {
+				fkFieldName := strings.TrimPrefix(part, "foreignKey:")
+				if fkField, ok := modelType.FieldByName(fkFieldName); ok {
+					return getColumnNameFromField(fkField)
+				}
+			}
+		}
+
+		return ""
+	}
+
+	return ""
+}
+
 // GetRelationModel gets the model type for a relation field
 // It searches for the field by name in the following order (case-insensitive):
 // 1. Actual field name

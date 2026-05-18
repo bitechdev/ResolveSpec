@@ -1451,6 +1451,18 @@ func (b *BunInsertQuery) Returning(columns ...string) common.InsertQuery {
 	return b
 }
 
+func (b *BunInsertQuery) prepareValues() {
+	if len(b.values) > 0 {
+		if !b.hasModel {
+			b.query = b.query.Model(&b.values)
+		} else {
+			for k, v := range b.values {
+				b.query = b.query.Value(k, "?", v)
+			}
+		}
+	}
+}
+
 func (b *BunInsertQuery) Exec(ctx context.Context) (res common.Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1458,21 +1470,23 @@ func (b *BunInsertQuery) Exec(ctx context.Context) (res common.Result, err error
 		}
 	}()
 	startedAt := time.Now()
-	if len(b.values) > 0 {
-		if !b.hasModel {
-			// If no model was set, use the values map as the model
-			// Bun can insert map[string]interface{} directly
-			b.query = b.query.Model(&b.values)
-		} else {
-			// If model was set, use Value() to add individual values
-			for k, v := range b.values {
-				b.query = b.query.Value(k, "?", v)
-			}
-		}
-	}
+	b.prepareValues()
 	result, err := b.query.Exec(ctx)
 	recordQueryMetrics(b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
+}
+
+func (b *BunInsertQuery) Scan(ctx context.Context, dest interface{}) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = logger.HandlePanic("BunInsertQuery.Scan", r)
+		}
+	}()
+	startedAt := time.Now()
+	b.prepareValues()
+	err = b.query.Scan(ctx, dest)
+	recordQueryMetrics(b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
+	return err
 }
 
 // BunUpdateQuery implements UpdateQuery for Bun

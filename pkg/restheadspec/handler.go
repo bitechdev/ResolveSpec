@@ -2507,11 +2507,7 @@ func (h *Handler) sendResponseWithOptions(w common.ResponseWriter, data interfac
 		data = h.normalizeResultArray(data)
 	}
 
-	if dataLen == 0 {
-		w.WriteHeader(http.StatusNoContent)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
+	w.WriteHeader(http.StatusOK)
 
 	if err := w.WriteJSON(data); err != nil {
 		logger.Error("Failed to write JSON response: %v", err)

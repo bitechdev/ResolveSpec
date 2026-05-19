@@ -141,7 +141,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			logger.Debug("Skipping insert for %s - no data columns besides _request", tableName)
 		}
 
-	case "update":
+	case "update", "change":
 		// Only perform update if we have data to update
 		if hasData {
 			rows, err := p.processUpdate(ctx, regularData, tableName, data[pkName])

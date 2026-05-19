@@ -14,23 +14,23 @@ func TestNormalizeResultArray_EmptyArrayWhenNoID(t *testing.T) {
 	handler := &Handler{}
 
 	tests := []struct {
-		name            string
-		input           interface{}
+		name             string
+		input            interface{}
 		shouldBeEmptyObj bool
 	}{
 		{
-			name:            "nil should return empty object",
-			input:           nil,
+			name:             "nil should return empty object",
+			input:            nil,
 			shouldBeEmptyObj: true,
 		},
 		{
-			name:            "empty slice should return empty object",
-			input:           []*EmptyTestModel{},
+			name:             "empty slice should return empty object",
+			input:            []*EmptyTestModel{},
 			shouldBeEmptyObj: true,
 		},
 		{
-			name:            "single element should return the element",
-			input:           []*EmptyTestModel{{ID: 1, Name: "test"}},
+			name:             "single element should return the element",
+			input:            []*EmptyTestModel{{ID: 1, Name: "test"}},
 			shouldBeEmptyObj: false,
 		},
 		{
@@ -138,9 +138,9 @@ func TestSendResponseWithOptions_NoDataFoundHeader(t *testing.T) {
 		t.Errorf("Expected X-No-Data-Found header to be 'true', got '%s'", mockWriter.headers["X-No-Data-Found"])
 	}
 
-	// Check status code is 204 when no records found
-	if mockWriter.statusCode != 204 {
-		t.Errorf("Expected status code 204, got %d", mockWriter.statusCode)
+	// Check status code is 200 even when no records found
+	if mockWriter.statusCode != 200 {
+		t.Errorf("Expected status code 200, got %d", mockWriter.statusCode)
 	}
 
 	// Verify the body is an empty array (list request, SingleRecordAsObject not set)

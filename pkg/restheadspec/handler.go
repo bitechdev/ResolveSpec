@@ -2561,10 +2561,8 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	dataLen := reflection.Len(data)
 
 	// Add X-No-Data-Found header when no records were found
-	httpStatus := http.StatusOK
 	if dataLen == 0 {
 		w.SetHeader("X-No-Data-Found", "true")
-		httpStatus = http.StatusNoContent
 	}
 
 	// Apply normalization after header is set
@@ -2588,7 +2586,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	switch options.ResponseFormat {
 	case "simple":
 		// Simple format: just return the data array
-		w.WriteHeader(httpStatus)
+		w.WriteHeader(http.StatusOK)
 		if err := w.WriteJSON(data); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2600,7 +2598,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 		if metadata != nil {
 			response["count"] = metadata.Total
 		}
-		w.WriteHeader(httpStatus)
+		w.WriteHeader(http.StatusOK)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
@@ -2611,7 +2609,7 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 			Data:     data,
 			Metadata: metadata,
 		}
-		w.WriteHeader(httpStatus)
+		w.WriteHeader(http.StatusOK)
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}

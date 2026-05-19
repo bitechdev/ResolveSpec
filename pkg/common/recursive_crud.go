@@ -143,6 +143,10 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 
 	case "update", "change":
 		// Only perform update if we have data to update
+		if reflection.IsEmptyValue(data[pkName]) {
+			logger.Warn("Skipping update for %s - no primary key", tableName)
+			return result, nil
+		}
 		if hasData {
 			rows, err := p.processUpdate(ctx, regularData, tableName, data[pkName])
 			if err != nil {
@@ -171,10 +175,15 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 		}
 
 	case "delete":
+		if reflection.IsEmptyValue(data[pkName]) {
+			logger.Warn("Skipping delete for %s - no primary key", tableName)
+			return result, nil
+		}
+
 		// Process child relations first (for referential integrity)
 		if err := p.processChildRelations(ctx, "delete", data[pkName], relationFields, result.RelationData, modelType, parentIDs); err != nil {
 			logger.Error("Failed to process child relations before delete: table=%s, id=%v, relations=%+v, error=%v", tableName, data[pkName], relationFields, err)
-			return nil, nil
+			return nil, fmt.Errorf("failed to process child relations: %w", err)
 		}
 
 		rows, err := p.processDelete(ctx, tableName, data[pkName])

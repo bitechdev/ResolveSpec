@@ -583,6 +583,7 @@ func (g *GormSelectQuery) Scan(ctx context.Context, dest interface{}) (err error
 			return tx.Find(dest)
 		})
 		logger.Error("GormSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
@@ -613,6 +614,7 @@ func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
 			return tx.Find(g.db.Statement.Model)
 		})
 		logger.Error("GormSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
@@ -642,6 +644,7 @@ func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
 			return tx.Count(&count64)
 		})
 		logger.Error("GormSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "COUNT", g.schema, g.entity, g.tableName, startedAt, err)
 	return int(count64), err
@@ -671,6 +674,7 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 			return tx.Limit(1).Count(&count)
 		})
 		logger.Error("GormSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "EXISTS", g.schema, g.entity, g.tableName, startedAt, err)
 	return count > 0, err
@@ -931,6 +935,7 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 			return tx.Updates(g.updates)
 		})
 		logger.Error("GormUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
+		return &GormResult{result: result}, common.WrapSQLError(result.Error, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "UPDATE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
@@ -992,6 +997,7 @@ func (g *GormDeleteQuery) Exec(ctx context.Context) (res common.Result, err erro
 			return tx.Delete(g.model)
 		})
 		logger.Error("GormDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
+		return &GormResult{result: result}, common.WrapSQLError(result.Error, sqlStr)
 	}
 	recordQueryMetrics(g.metricsEnabled, "DELETE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error

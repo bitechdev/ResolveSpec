@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -1757,18 +1758,21 @@ func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metada
 }
 
 func (h *Handler) sendError(w common.ResponseWriter, status int, code, message string, details interface{}) {
+	apiErr := &common.APIError{
+		Code:    code,
+		Message: message,
+		Details: details,
+		Detail:  fmt.Sprintf("%v", details),
+	}
+	if asErr, ok := details.(error); ok {
+		var sqlErr *common.SQLError
+		if errors.As(asErr, &sqlErr) {
+			apiErr.SQL = sqlErr.SQL
+		}
+	}
 	w.SetHeader("Content-Type", "application/json")
 	w.WriteHeader(status)
-	err := w.WriteJSON(common.Response{
-		Success: false,
-		Error: &common.APIError{
-			Code:    code,
-			Message: message,
-			Details: details,
-			Detail:  fmt.Sprintf("%v", details),
-		},
-	})
-	if err != nil {
+	if err := w.WriteJSON(common.Response{Success: false, Error: apiErr}); err != nil {
 		logger.Error("Error sending response: %v", err)
 	}
 }

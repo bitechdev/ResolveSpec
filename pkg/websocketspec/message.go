@@ -99,6 +99,9 @@ type ErrorInfo struct {
 
 	// Details contains additional error context
 	Details map[string]interface{} `json:"details,omitempty"`
+
+	// SQL is the query that caused the error, populated for database errors
+	SQL string `json:"sql,omitempty"`
 }
 
 // RequestMessage represents a client request

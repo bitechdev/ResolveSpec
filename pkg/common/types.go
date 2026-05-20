@@ -1,5 +1,23 @@
 package common
 
+// SQLError wraps a database error together with the SQL that caused it,
+// so callers can surface the query in API error responses for easier debugging.
+type SQLError struct {
+	Err error
+	SQL string
+}
+
+func (e *SQLError) Error() string { return e.Err.Error() }
+func (e *SQLError) Unwrap() error { return e.Err }
+
+// WrapSQLError wraps err with the given SQL. If err is nil it returns nil.
+func WrapSQLError(err error, sql string) error {
+	if err == nil {
+		return nil
+	}
+	return &SQLError{Err: err, SQL: sql}
+}
+
 type RequestBody struct {
 	Operation string         `json:"operation"`
 	Data      interface{}    `json:"data"`
@@ -104,6 +122,7 @@ type APIError struct {
 	Message string      `json:"message"`
 	Details interface{} `json:"details,omitempty"`
 	Detail  string      `json:"detail,omitempty"`
+	SQL     string      `json:"sql,omitempty"`
 }
 
 type Column struct {

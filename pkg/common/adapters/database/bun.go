@@ -1315,6 +1315,7 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 	if err != nil {
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	return err
 }
@@ -1371,7 +1372,7 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 	if err != nil {
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
-		return err
+		return common.WrapSQLError(err, sqlStr)
 	}
 
 	// After main query, load custom preloads using separate queries
@@ -1401,6 +1402,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 		if err != nil {
 			sqlStr := b.query.String()
 			logger.Error("BunSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
+			err = common.WrapSQLError(err, sqlStr)
 		}
 		return
 	}
@@ -1414,6 +1416,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 	if err != nil {
 		sqlStr := countQuery.String()
 		logger.Error("BunSelectQuery.Count (subquery) failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	return
 }
@@ -1431,6 +1434,7 @@ func (b *BunSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 	if err != nil {
 		sqlStr := b.query.String()
 		logger.Error("BunSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	return
 }
@@ -1619,6 +1623,7 @@ func (b *BunUpdateQuery) Exec(ctx context.Context) (res common.Result, err error
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(b.metricsEnabled, "UPDATE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
@@ -1670,6 +1675,7 @@ func (b *BunDeleteQuery) Exec(ctx context.Context) (res common.Result, err error
 		// Log SQL string for debugging
 		sqlStr := b.query.String()
 		logger.Error("BunDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(b.metricsEnabled, "DELETE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err

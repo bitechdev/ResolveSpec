@@ -138,7 +138,7 @@ func (p *PgSQLAdapter) Exec(ctx context.Context, query string, args ...interface
 	if err != nil {
 		logger.Error("PgSQL Exec failed: %v", err)
 		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
-		return nil, err
+		return nil, common.WrapSQLError(err, query)
 	}
 	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
@@ -164,7 +164,7 @@ func (p *PgSQLAdapter) Query(ctx context.Context, dest interface{}, query string
 	if err != nil {
 		logger.Error("PgSQL Query failed: %v", err)
 		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
-		return err
+		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 
@@ -511,7 +511,7 @@ func (p *PgSQLSelectQuery) Scan(ctx context.Context, dest interface{}) (err erro
 	if err != nil {
 		logger.Error("PgSQL SELECT failed: %v", err)
 		recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
-		return err
+		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 
@@ -534,8 +534,8 @@ func (p *PgSQLSelectQuery) ScanModel(ctx context.Context) error {
 	return p.Scan(ctx, p.model)
 }
 
-// countInternal executes the COUNT query and returns the result without recording metrics.
-func (p *PgSQLSelectQuery) countInternal(ctx context.Context) (int, error) {
+// countInternal executes the COUNT query and returns the result and the SQL string without recording metrics.
+func (p *PgSQLSelectQuery) countInternal(ctx context.Context) (rowCount int, querySQL string, retErr error) {
 	var sb strings.Builder
 	sb.WriteString("SELECT COUNT(*) FROM ")
 	sb.WriteString(p.tableName)
@@ -571,9 +571,9 @@ func (p *PgSQLSelectQuery) countInternal(ctx context.Context) (int, error) {
 
 	var count int
 	if err := row.Scan(&count); err != nil {
-		return 0, err
+		return 0, query, err
 	}
-	return count, nil
+	return count, query, nil
 }
 
 func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
@@ -584,9 +584,11 @@ func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
 		}
 	}()
 	startedAt := time.Now()
-	count, err = p.countInternal(ctx)
+	var sqlStr string
+	count, sqlStr, err = p.countInternal(ctx)
 	if err != nil {
 		logger.Error("PgSQL COUNT failed: %v", err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(p.metricsEnabled, "COUNT", p.schema, p.entity, p.tableName, startedAt, err)
 	return count, err
@@ -600,9 +602,11 @@ func (p *PgSQLSelectQuery) Exists(ctx context.Context) (exists bool, err error) 
 		}
 	}()
 	startedAt := time.Now()
-	count, err := p.countInternal(ctx)
+	var sqlStr string
+	count, sqlStr, err := p.countInternal(ctx)
 	if err != nil {
 		logger.Error("PgSQL EXISTS failed: %v", err)
+		err = common.WrapSQLError(err, sqlStr)
 	}
 	recordQueryMetrics(p.metricsEnabled, "EXISTS", p.schema, p.entity, p.tableName, startedAt, err)
 	return count > 0, err
@@ -702,7 +706,7 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL INSERT failed: %v", err)
-		return nil, err
+		return nil, common.WrapSQLError(err, query)
 	}
 
 	return &PgSQLResult{result: result}, nil
@@ -750,7 +754,10 @@ func (p *PgSQLInsertQuery) Scan(ctx context.Context, dest interface{}) (err erro
 		row = p.db.QueryRowContext(ctx, query, args...)
 	}
 
-	return row.Scan(dest)
+	if err := row.Scan(dest); err != nil {
+		return common.WrapSQLError(err, query)
+	}
+	return nil
 }
 
 // PgSQLUpdateQuery implements UpdateQuery for PostgreSQL
@@ -929,7 +936,7 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL UPDATE failed: %v", err)
-		return nil, err
+		return nil, common.WrapSQLError(err, query)
 	}
 
 	return &PgSQLResult{result: result}, nil
@@ -1007,7 +1014,7 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 
 	if err != nil {
 		logger.Error("PgSQL DELETE failed: %v", err)
-		return nil, err
+		return nil, common.WrapSQLError(err, query)
 	}
 
 	return &PgSQLResult{result: result}, nil
@@ -1088,7 +1095,7 @@ func (p *PgSQLTxAdapter) Exec(ctx context.Context, query string, args ...interfa
 	if err != nil {
 		logger.Error("PgSQL Tx Exec failed: %v", err)
 		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
-		return nil, err
+		return nil, common.WrapSQLError(err, query)
 	}
 	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
@@ -1102,7 +1109,7 @@ func (p *PgSQLTxAdapter) Query(ctx context.Context, dest interface{}, query stri
 	if err != nil {
 		logger.Error("PgSQL Tx Query failed: %v", err)
 		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
-		return err
+		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 

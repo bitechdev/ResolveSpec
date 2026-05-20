@@ -3,6 +3,7 @@ package websocketspec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -16,6 +17,17 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
+
+// newErrorResponseFromErr creates an error response from a Go error, including the SQL
+// query in the error info when the error is a database SQLError.
+func newErrorResponseFromErr(id, code string, err error) *ResponseMessage {
+	resp := NewErrorResponse(id, code, err.Error())
+	var sqlErr *common.SQLError
+	if errors.As(err, &sqlErr) {
+		resp.Error.SQL = sqlErr.SQL
+	}
+	return resp
+}
 
 // Handler handles WebSocket connections and messages
 type Handler struct {
@@ -236,7 +248,7 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 
 	if err != nil {
 		logger.Error("[WebSocketSpec] Read operation failed: %v", err)
-		errResp := NewErrorResponse(msg.ID, "read_error", err.Error())
+		errResp := newErrorResponseFromErr(msg.ID, "read_error", err)
 		_ = conn.SendJSON(errResp)
 		return
 	}
@@ -272,7 +284,7 @@ func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookCont
 	data, err := h.create(hookCtx)
 	if err != nil {
 		logger.Error("[WebSocketSpec] Create operation failed: %v", err)
-		errResp := NewErrorResponse(msg.ID, "create_error", err.Error())
+		errResp := newErrorResponseFromErr(msg.ID, "create_error", err)
 		_ = conn.SendJSON(errResp)
 		return
 	}
@@ -310,7 +322,7 @@ func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookCont
 	data, err := h.update(hookCtx)
 	if err != nil {
 		logger.Error("[WebSocketSpec] Update operation failed: %v", err)
-		errResp := NewErrorResponse(msg.ID, "update_error", err.Error())
+		errResp := newErrorResponseFromErr(msg.ID, "update_error", err)
 		_ = conn.SendJSON(errResp)
 		return
 	}
@@ -348,7 +360,7 @@ func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookCont
 	err := h.delete(hookCtx)
 	if err != nil {
 		logger.Error("[WebSocketSpec] Delete operation failed: %v", err)
-		errResp := NewErrorResponse(msg.ID, "delete_error", err.Error())
+		errResp := newErrorResponseFromErr(msg.ID, "delete_error", err)
 		_ = conn.SendJSON(errResp)
 		return
 	}

@@ -3,6 +3,7 @@ package funcspec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1071,6 +1072,10 @@ func sendError(w http.ResponseWriter, status int, code, message string, err erro
 	}
 	if err != nil {
 		errObj.Detail = err.Error()
+		var sqlErr *common.SQLError
+		if errors.As(err, &sqlErr) {
+			errObj.SQL = sqlErr.SQL
+		}
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{

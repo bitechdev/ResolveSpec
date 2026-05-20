@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -579,8 +580,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	// preload LEFT JOIN (to prevent "table name specified more than once" errors).
 	if len(options.CustomSQLJoin) > 0 {
 		preloadAliasSet := make(map[string]bool, len(options.Preload))
-		for _, p := range options.Preload {
-			if alias := common.RelationPathToBunAlias(p.Relation); alias != "" {
+		for i := range options.Preload {
+			if alias := common.RelationPathToBunAlias(options.Preload[i].Relation); alias != "" {
 				preloadAliasSet[alias] = true
 			}
 		}
@@ -2645,6 +2646,12 @@ func (h *Handler) sendError(w common.ResponseWriter, statusCode int, code, messa
 		"_error":  errorMsg,
 		"_retval": 1,
 	}
+
+	var sqlErr *common.SQLError
+	if errors.As(err, &sqlErr) {
+		response["_sql"] = sqlErr.SQL
+	}
+
 	w.SetHeader("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	if jsonErr := w.WriteJSON(response); jsonErr != nil {

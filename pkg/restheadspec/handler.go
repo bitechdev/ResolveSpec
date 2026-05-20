@@ -619,16 +619,19 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		logger.Debug("FetchRowNumber: Row number %d for PK %s = %s", rowNum, pkName, fetchRowNumberPKValue)
 
 		// Now filter the main query to this specific primary key
-		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), fetchRowNumberPKValue)
+		tableAlias := reflection.ExtractTableNameOnly(tableName)
+		query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), fetchRowNumberPKValue)
 	} else if id != "" {
 		// If ID is provided (and not FetchRowNumber), filter by ID
 		pkName := reflection.GetPrimaryKeyName(model)
 		logger.Debug("Filtering by ID=%s: %s", pkName, id)
 
-		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+		tableAlias := reflection.ExtractTableNameOnly(tableName)
+		query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), id)
 	}
 
 	// Apply sorting
+	tableAlias := reflection.ExtractTableNameOnly(tableName)
 	for _, sort := range options.Sort {
 		direction := "ASC"
 		if strings.EqualFold(sort.Direction, "desc") {
@@ -640,9 +643,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
 			// For expressions, pass as raw SQL to prevent auto-quoting
 			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
+		} else if strings.Contains(sort.Column, ".") {
+			// Already qualified (e.g. alias.column) - pass as raw expression to preserve the dot
+			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
 		} else {
-			// Regular column - let Bun handle quoting
-			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+			// Unqualified column - prefix with main table alias to avoid ambiguity on JOINs
+			query = query.OrderExpr(fmt.Sprintf("%s.%s %s", common.QuoteIdent(tableAlias), common.QuoteIdent(sort.Column), direction))
 		}
 	}
 

@@ -49,9 +49,15 @@ func (f *HTMLFallbackStrategy) GetFallbackPath(filePath string) string {
 	return f.indexFile
 }
 
-// isStaticAsset checks if the path looks like a static asset (has a file extension).
+// isStaticAsset checks if the path looks like a static asset (has a non-HTML file extension).
+// Paths with no extension are not considered static assets so fallback logic can resolve
+// them to path.html or path/index.html.
 func (f *HTMLFallbackStrategy) isStaticAsset(filePath string) bool {
-	return path.Ext(filePath) != ""
+	ext := strings.ToLower(path.Ext(filePath))
+	if ext == "" || ext == ".html" || ext == ".htm" {
+		return false
+	}
+	return true
 }
 
 // ExtensionBasedFallback implements a fallback strategy that skips fallback for known static file extensions.

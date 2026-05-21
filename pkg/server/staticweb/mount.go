@@ -75,10 +75,20 @@ func (m *mountPoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fallbackPath := m.fallbackStrategy.GetFallbackPath(filePath)
 			file, err = m.provider.Open(strings.TrimPrefix(fallbackPath, "/"))
 			if err == nil {
-				// Successfully opened fallback file
 				defer file.Close()
 				m.serveFile(w, r, fallbackPath, file)
 				return
+			}
+
+			// For extensionless paths, also try path/index.html
+			if path.Ext(filePath) == "" {
+				indexFallback := path.Join(filePath, "index.html")
+				file, err = m.provider.Open(strings.TrimPrefix(indexFallback, "/"))
+				if err == nil {
+					defer file.Close()
+					m.serveFile(w, r, indexFallback, file)
+					return
+				}
 			}
 		}
 

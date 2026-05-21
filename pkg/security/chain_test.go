@@ -37,6 +37,8 @@ func (s *stubAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequ
 	return s.Logout(ctx, req)
 }
 
+func (s *stubAuthenticator) SetAuthenticateCallback(_ func(r *http.Request) (*UserContext, error)) {}
+
 func TestChainAuthenticator_Authenticate(t *testing.T) {
 	successCtx := &UserContext{UserID: 42, UserName: "alice"}
 	failStub := &stubAuthenticator{err: fmt.Errorf("no token")}

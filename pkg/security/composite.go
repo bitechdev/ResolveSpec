@@ -63,6 +63,11 @@ func (c *CompositeSecurityProvider) Authenticate(r *http.Request) (*UserContext,
 	return c.auth.Authenticate(r)
 }
 
+// SetAuthenticateCallback delegates to the authenticator
+func (c *CompositeSecurityProvider) SetAuthenticateCallback(fn func(r *http.Request) (*UserContext, error)) {
+	c.auth.SetAuthenticateCallback(fn)
+}
+
 // GetColumnSecurity delegates to the column security provider
 func (c *CompositeSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
 	return c.colSec.GetColumnSecurity(ctx, userID, schema, table)

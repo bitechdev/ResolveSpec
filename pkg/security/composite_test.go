@@ -39,6 +39,8 @@ func (m *mockAuth) Authenticate(r *http.Request) (*UserContext, error) {
 	return m.authUser, m.authErr
 }
 
+func (m *mockAuth) SetAuthenticateCallback(_ func(r *http.Request) (*UserContext, error)) {}
+
 // Optional interface implementations
 func (m *mockAuth) RefreshToken(ctx context.Context, refreshToken string) (*LoginResponse, error) {
 	if !m.supportsRefresh {

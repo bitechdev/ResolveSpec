@@ -17,8 +17,9 @@ import (
 //  2. Authorization: ApiKey <key>
 //  3. X-API-Key header
 type KeyStoreAuthenticator struct {
-	keyStore KeyStore
-	keyType  KeyType // empty = accept any type
+	keyStore             KeyStore
+	keyType              KeyType // empty = accept any type
+	authenticateCallback func(r *http.Request) (*UserContext, error)
 }
 
 // NewKeyStoreAuthenticator creates a KeyStoreAuthenticator.
@@ -32,9 +33,24 @@ func (a *KeyStoreAuthenticator) Login(_ context.Context, _ LoginRequest) (*Login
 	return nil, fmt.Errorf("keystore authenticator does not support login")
 }
 
+// LoginWithCookie is not supported for keystore authentication.
+func (a *KeyStoreAuthenticator) LoginWithCookie(_ context.Context, _ LoginRequest, _ http.ResponseWriter) (*LoginResponse, error) {
+	return nil, fmt.Errorf("keystore authenticator does not support login")
+}
+
 // Logout is not supported for keystore authentication.
 func (a *KeyStoreAuthenticator) Logout(_ context.Context, _ LogoutRequest) error {
 	return nil
+}
+
+// LogoutWithCookie is not supported for keystore authentication.
+func (a *KeyStoreAuthenticator) LogoutWithCookie(_ context.Context, _ LogoutRequest, _ http.ResponseWriter) error {
+	return nil
+}
+
+// SetAuthenticateCallback registers a fallback called when key authentication fails.
+func (a *KeyStoreAuthenticator) SetAuthenticateCallback(fn func(r *http.Request) (*UserContext, error)) {
+	a.authenticateCallback = fn
 }
 
 // Authenticate extracts an API key from the request and validates it against the KeyStore.
@@ -42,11 +58,17 @@ func (a *KeyStoreAuthenticator) Logout(_ context.Context, _ LogoutRequest) error
 func (a *KeyStoreAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 	rawKey := extractAPIKey(r)
 	if rawKey == "" {
+		if a.authenticateCallback != nil {
+			return a.authenticateCallback(r)
+		}
 		return nil, fmt.Errorf("API key required (Authorization: Bearer/ApiKey <key> or X-API-Key header)")
 	}
 
 	userKey, err := a.keyStore.ValidateKey(r.Context(), rawKey, a.keyType)
 	if err != nil {
+		if a.authenticateCallback != nil {
+			return a.authenticateCallback(r)
+		}
 		return nil, fmt.Errorf("invalid API key: %w", err)
 	}
 

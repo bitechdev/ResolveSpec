@@ -99,6 +99,10 @@ type Authenticator interface {
 	// Authenticate extracts and validates user from HTTP request
 	// Returns UserContext or error if authentication fails
 	Authenticate(r *http.Request) (*UserContext, error)
+
+	// SetAuthenticateCallback registers a fallback called when primary authentication fails.
+	// If the callback returns a non-nil UserContext, that result is used instead of the error.
+	SetAuthenticateCallback(fn func(r *http.Request) (*UserContext, error))
 }
 
 // Registrable allows providers to support user registration

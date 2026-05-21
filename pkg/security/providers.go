@@ -88,6 +88,9 @@ type DatabaseAuthenticator struct {
 
 	// Passkey provider (optional)
 	passkeyProvider PasskeyProvider
+
+	// Optional fallback called when primary authentication fails
+	authenticateCallback func(r *http.Request) (*UserContext, error)
 }
 
 // DatabaseAuthenticatorOptions configures the database authenticator
@@ -113,6 +116,10 @@ type DatabaseAuthenticatorOptions struct {
 	// CookieOptions configures the session cookie written by LoginWithCookie.
 	// Only used when EnableCookieSession is true.
 	CookieOptions SessionCookieOptions
+	// AuthenticateCallback is a fallback called when the primary authentication (database
+	// session lookup) fails. If non-nil and the callback returns a non-nil UserContext,
+	// that result is used in place of the failure.
+	AuthenticateCallback func(r *http.Request) (*UserContext, error)
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
@@ -134,14 +141,15 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
 
 	return &DatabaseAuthenticator{
-		db:                  db,
-		dbFactory:           opts.DBFactory,
-		cache:               cacheInstance,
-		cacheTTL:            opts.CacheTTL,
-		sqlNames:            sqlNames,
-		passkeyProvider:     opts.PasskeyProvider,
-		enableCookieSession: opts.EnableCookieSession,
-		cookieOptions:       opts.CookieOptions,
+		db:                   db,
+		dbFactory:            opts.DBFactory,
+		cache:                cacheInstance,
+		cacheTTL:             opts.CacheTTL,
+		sqlNames:             sqlNames,
+		passkeyProvider:      opts.PasskeyProvider,
+		enableCookieSession:  opts.EnableCookieSession,
+		cookieOptions:        opts.CookieOptions,
+		authenticateCallback: opts.AuthenticateCallback,
 	}
 }
 
@@ -179,6 +187,10 @@ func (a *DatabaseAuthenticator) runDBOpWithReconnect(run func(*sql.DB) error) er
 	}
 
 	return err
+}
+
+func (a *DatabaseAuthenticator) SetAuthenticateCallback(fn func(r *http.Request) (*UserContext, error)) {
+	a.authenticateCallback = fn
 }
 
 func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
@@ -345,6 +357,9 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 	}
 
 	if len(tokens) == 0 {
+		if a.authenticateCallback != nil {
+			return a.authenticateCallback(r)
+		}
 		return nil, fmt.Errorf("session token required")
 	}
 
@@ -407,7 +422,10 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 		return &userCtx, nil
 	}
 
-	// All tokens failed
+	// All tokens failed — try callback before returning error
+	if a.authenticateCallback != nil {
+		return a.authenticateCallback(r)
+	}
 	if lastErr != nil {
 		return nil, lastErr
 	}

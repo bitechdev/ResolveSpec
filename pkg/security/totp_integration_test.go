@@ -59,6 +59,8 @@ func (m *MockAuthenticator) Authenticate(r *http.Request) (*security.UserContext
 	return m.users["testuser"], nil
 }
 
+func (m *MockAuthenticator) SetAuthenticateCallback(_ func(r *http.Request) (*security.UserContext, error)) {}
+
 func TestTwoFactorAuthenticator_Setup(t *testing.T) {
 	baseAuth := NewMockAuthenticator()
 	provider := security.NewMemoryTwoFactorProvider(nil)

@@ -266,11 +266,24 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 
 	// Filter Preload columns
 	validPreloads := make([]PreloadOption, 0, len(options.Preload))
+	modelType := reflect.TypeOf(v.model)
+	if modelType != nil && modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
 	for idx := range options.Preload {
 		preload := options.Preload[idx]
 		filteredPreload := preload
-		filteredPreload.Columns = v.FilterValidColumns(preload.Columns)
-		filteredPreload.OmitColumns = v.FilterValidColumns(preload.OmitColumns)
+
+		// Use the related model's validator for preload columns/filters/sorts
+		preloadValidator := v
+		if modelType != nil {
+			if relInfo := GetRelationshipInfo(modelType, preload.Relation); relInfo != nil && relInfo.RelatedModel != nil {
+				preloadValidator = NewColumnValidator(relInfo.RelatedModel)
+			}
+		}
+
+		filteredPreload.Columns = preloadValidator.FilterValidColumns(preload.Columns)
+		filteredPreload.OmitColumns = preloadValidator.FilterValidColumns(preload.OmitColumns)
 
 		// Preserve SqlJoins and JoinAliases for preloads with custom joins
 		filteredPreload.SqlJoins = preload.SqlJoins
@@ -279,7 +292,7 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 		// Filter preload filters
 		validPreloadFilters := make([]FilterOption, 0, len(preload.Filters))
 		for _, filter := range preload.Filters {
-			if v.IsValidColumn(filter.Column) {
+			if preloadValidator.IsValidColumn(filter.Column) {
 				validPreloadFilters = append(validPreloadFilters, filter)
 			} else {
 				// Check if the filter column references a joined table alias
@@ -302,7 +315,7 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 		// Filter preload sort columns
 		validPreloadSorts := make([]SortOption, 0, len(preload.Sort))
 		for _, sort := range preload.Sort {
-			if v.IsValidColumn(sort.Column) {
+			if preloadValidator.IsValidColumn(sort.Column) {
 				validPreloadSorts = append(validPreloadSorts, sort)
 			} else if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
 				// Allow sort by expression/subquery, but validate for security

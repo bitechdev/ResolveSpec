@@ -43,8 +43,16 @@ func (m *MockAuthenticator) Login(ctx context.Context, req security.LoginRequest
 	}, nil
 }
 
+func (m *MockAuthenticator) LoginWithCookie(ctx context.Context, req security.LoginRequest, _ http.ResponseWriter) (*security.LoginResponse, error) {
+	return m.Login(ctx, req)
+}
+
 func (m *MockAuthenticator) Logout(ctx context.Context, req security.LogoutRequest) error {
 	return nil
+}
+
+func (m *MockAuthenticator) LogoutWithCookie(ctx context.Context, req security.LogoutRequest, _ http.ResponseWriter) error {
+	return m.Logout(ctx, req)
 }
 
 func (m *MockAuthenticator) Authenticate(r *http.Request) (*security.UserContext, error) {

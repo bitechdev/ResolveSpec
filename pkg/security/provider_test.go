@@ -22,8 +22,16 @@ func (m *mockSecurityProvider) Login(ctx context.Context, req LoginRequest) (*Lo
 	return m.loginResponse, m.loginError
 }
 
+func (m *mockSecurityProvider) LoginWithCookie(ctx context.Context, req LoginRequest, _ http.ResponseWriter) (*LoginResponse, error) {
+	return m.Login(ctx, req)
+}
+
 func (m *mockSecurityProvider) Logout(ctx context.Context, req LogoutRequest) error {
 	return m.logoutError
+}
+
+func (m *mockSecurityProvider) LogoutWithCookie(ctx context.Context, req LogoutRequest, _ http.ResponseWriter) error {
+	return m.Logout(ctx, req)
 }
 
 func (m *mockSecurityProvider) Authenticate(r *http.Request) (*UserContext, error) {

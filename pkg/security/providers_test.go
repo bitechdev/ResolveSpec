@@ -511,6 +511,10 @@ func TestDatabaseAuthenticator(t *testing.T) {
 	})
 
 	t.Run("authenticate with cookie", func(t *testing.T) {
+		cookieAuth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{
+			EnableCookieSession: true,
+		})
+
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.AddCookie(&http.Cookie{
 			Name:  "session_token",
@@ -524,7 +528,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("cookie-token-456", "cookie").
 			WillReturnRows(rows)
 
-		userCtx, err := auth.Authenticate(req)
+		userCtx, err := cookieAuth.Authenticate(req)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}

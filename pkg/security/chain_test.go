@@ -25,8 +25,16 @@ func (s *stubAuthenticator) Login(_ context.Context, _ LoginRequest) (*LoginResp
 	return &LoginResponse{Token: "tok"}, nil
 }
 
+func (s *stubAuthenticator) LoginWithCookie(ctx context.Context, req LoginRequest, _ http.ResponseWriter) (*LoginResponse, error) {
+	return s.Login(ctx, req)
+}
+
 func (s *stubAuthenticator) Logout(_ context.Context, _ LogoutRequest) error {
 	return s.err
+}
+
+func (s *stubAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequest, _ http.ResponseWriter) error {
+	return s.Logout(ctx, req)
 }
 
 func TestChainAuthenticator_Authenticate(t *testing.T) {

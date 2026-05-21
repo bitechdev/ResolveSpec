@@ -1367,7 +1367,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// First, read the existing record from the database
 		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		selectQuery := tx.NewSelect().Model(existingRecord).Column("*").Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return fmt.Errorf("record not found with ID: %v", targetID)

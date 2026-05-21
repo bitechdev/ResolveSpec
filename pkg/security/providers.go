@@ -70,6 +70,10 @@ type DatabaseAuthenticator struct {
 	cacheTTL  time.Duration
 	sqlNames  *SQLNames
 
+	// Cookie session support (optional, gated by enableCookieSession)
+	enableCookieSession bool
+	cookieOptions       SessionCookieOptions
+
 	// OAuth2 providers registry (multiple providers supported)
 	oauth2Providers      map[string]*OAuth2Provider
 	oauth2ProvidersMutex sync.RWMutex
@@ -93,6 +97,14 @@ type DatabaseAuthenticatorOptions struct {
 	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
 	// If nil, reconnection is disabled.
 	DBFactory func() (*sql.DB, error)
+	// EnableCookieSession enables cookie-based session management.
+	// When true, Authenticate reads the session token from the cookie named by
+	// CookieOptions.Name (default "session_token") in addition to the Authorization header,
+	// and LoginWithCookie / LogoutWithCookie automatically set / clear the cookie.
+	EnableCookieSession bool
+	// CookieOptions configures the session cookie written by LoginWithCookie.
+	// Only used when EnableCookieSession is true.
+	CookieOptions SessionCookieOptions
 }
 
 func NewDatabaseAuthenticator(db *sql.DB) *DatabaseAuthenticator {
@@ -114,12 +126,14 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
 
 	return &DatabaseAuthenticator{
-		db:              db,
-		dbFactory:       opts.DBFactory,
-		cache:           cacheInstance,
-		cacheTTL:        opts.CacheTTL,
-		sqlNames:        sqlNames,
-		passkeyProvider: opts.PasskeyProvider,
+		db:                  db,
+		dbFactory:           opts.DBFactory,
+		cache:               cacheInstance,
+		cacheTTL:            opts.CacheTTL,
+		sqlNames:            sqlNames,
+		passkeyProvider:     opts.PasskeyProvider,
+		enableCookieSession: opts.EnableCookieSession,
+		cookieOptions:       opts.CookieOptions,
 	}
 }
 
@@ -265,6 +279,33 @@ func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) e
 	return nil
 }
 
+// LoginWithCookie performs a login and, when EnableCookieSession is true, writes the
+// session cookie to w using the configured CookieOptions. The LoginResponse is returned
+// regardless of whether cookie sessions are enabled.
+func (a *DatabaseAuthenticator) LoginWithCookie(ctx context.Context, req LoginRequest, w http.ResponseWriter) (*LoginResponse, error) {
+	resp, err := a.Login(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if a.enableCookieSession {
+		SetSessionCookie(w, resp, a.cookieOptions)
+	}
+	return resp, nil
+}
+
+// LogoutWithCookie performs a logout and, when EnableCookieSession is true, clears the
+// session cookie on w. The logout itself is performed regardless of the cookie flag.
+func (a *DatabaseAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error {
+	err := a.Logout(ctx, req)
+	if err != nil {
+		return err
+	}
+	if a.enableCookieSession {
+		ClearSessionCookie(w, a.cookieOptions)
+	}
+	return nil
+}
+
 func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 	// Extract session token from header or cookie
 	sessionToken := r.Header.Get("Authorization")
@@ -272,10 +313,11 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 	var tokens []string
 
 	if sessionToken == "" {
-		// Try cookie
-		if token := GetSessionCookie(r); token != "" {
-			tokens = []string{token}
-			reference = "cookie"
+		if a.enableCookieSession {
+			if token := GetSessionCookie(r, a.cookieOptions); token != "" {
+				tokens = []string{token}
+				reference = "cookie"
+			}
 		}
 	} else {
 		// Parse Authorization header which may contain multiple comma-separated tokens

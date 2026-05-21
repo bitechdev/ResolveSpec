@@ -43,9 +43,19 @@ func (c *CompositeSecurityProvider) Login(ctx context.Context, req LoginRequest)
 	return c.auth.Login(ctx, req)
 }
 
+// LoginWithCookie delegates to the authenticator
+func (c *CompositeSecurityProvider) LoginWithCookie(ctx context.Context, req LoginRequest, w http.ResponseWriter) (*LoginResponse, error) {
+	return c.auth.LoginWithCookie(ctx, req, w)
+}
+
 // Logout delegates to the authenticator
 func (c *CompositeSecurityProvider) Logout(ctx context.Context, req LogoutRequest) error {
 	return c.auth.Logout(ctx, req)
+}
+
+// LogoutWithCookie delegates to the authenticator
+func (c *CompositeSecurityProvider) LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error {
+	return c.auth.LogoutWithCookie(ctx, req, w)
 }
 
 // Authenticate delegates to the authenticator

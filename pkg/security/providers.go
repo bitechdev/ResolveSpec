@@ -30,8 +30,16 @@ func (a *HeaderAuthenticator) Login(ctx context.Context, req LoginRequest) (*Log
 	return nil, fmt.Errorf("header authentication does not support login")
 }
 
+func (a *HeaderAuthenticator) LoginWithCookie(ctx context.Context, req LoginRequest, w http.ResponseWriter) (*LoginResponse, error) {
+	return a.Login(ctx, req)
+}
+
 func (a *HeaderAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
 	return nil
+}
+
+func (a *HeaderAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error {
+	return a.Logout(ctx, req)
 }
 
 func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
@@ -623,6 +631,14 @@ func (a *JWTAuthenticator) Logout(ctx context.Context, req LogoutRequest) error 
 	}
 
 	return nil
+}
+
+func (a *JWTAuthenticator) LoginWithCookie(ctx context.Context, req LoginRequest, w http.ResponseWriter) (*LoginResponse, error) {
+	return a.Login(ctx, req)
+}
+
+func (a *JWTAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error {
+	return a.Logout(ctx, req)
 }
 
 func (a *JWTAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {

@@ -83,8 +83,18 @@ type Authenticator interface {
 	// Login authenticates credentials and returns a token
 	Login(ctx context.Context, req LoginRequest) (*LoginResponse, error)
 
+	// LoginWithCookie authenticates credentials and, when cookie sessions are enabled,
+	// writes the session cookie to w. Implementations that do not support cookies
+	// should delegate to Login and ignore w.
+	LoginWithCookie(ctx context.Context, req LoginRequest, w http.ResponseWriter) (*LoginResponse, error)
+
 	// Logout invalidates a user's session/token
 	Logout(ctx context.Context, req LogoutRequest) error
+
+	// LogoutWithCookie invalidates a user's session/token and, when cookie sessions are
+	// enabled, clears the session cookie on w. Implementations that do not support cookies
+	// should delegate to Logout and ignore w.
+	LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error
 
 	// Authenticate extracts and validates user from HTTP request
 	// Returns UserContext or error if authentication fails

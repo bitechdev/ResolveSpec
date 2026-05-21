@@ -66,7 +66,7 @@ func (s *SentryProvider) CaptureError(ctx context.Context, err error, severity S
 	}
 
 	if extra != nil {
-		event.Extra = extra
+		event.Contexts["extra"] = sentry.Context(extra)
 	}
 
 	hub.CaptureEvent(event)
@@ -88,7 +88,7 @@ func (s *SentryProvider) CaptureMessage(ctx context.Context, message string, sev
 	event.Message = message
 
 	if extra != nil {
-		event.Extra = extra
+		event.Contexts["extra"] = sentry.Context(extra)
 	}
 
 	hub.CaptureEvent(event)
@@ -115,12 +115,15 @@ func (s *SentryProvider) CapturePanic(ctx context.Context, recovered interface{}
 		},
 	}
 
-	if extra != nil {
-		event.Extra = extra
+	extraCtx := sentry.Context{}
+	for k, v := range extra {
+		extraCtx[k] = v
 	}
-
 	if stackTrace != nil {
-		event.Extra["stack_trace"] = string(stackTrace)
+		extraCtx["stack_trace"] = string(stackTrace)
+	}
+	if len(extraCtx) > 0 {
+		event.Contexts["extra"] = extraCtx
 	}
 
 	hub.CaptureEvent(event)

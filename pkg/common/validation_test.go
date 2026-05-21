@@ -464,3 +464,84 @@ func TestFilterRequestOptions_WithSortExpressions(t *testing.T) {
 		t.Errorf("Expected third sort to be 'name', got '%s'", filtered.Sort[2].Column)
 	}
 }
+
+// RelatedModel is used by PreloadParentModel to test preload column validation.
+type RelatedModel struct {
+	RelatedID    int64  `bun:"related_id,pk"`
+	Functionname string `bun:"functionname"`
+}
+
+// PreloadParentModel has a has-one relation to RelatedModel. The json tag on
+// the relation field is the name used in x-preload headers.
+type PreloadParentModel struct {
+	ID      int64        `bun:"id,pk"`
+	Name    string       `bun:"name"`
+	RELATED *RelatedModel `json:"RELATED" bun:"rel:has-one,join:id=related_id"`
+}
+
+// TestFilterRequestOptions_PreloadColumnsValidatedAgainstRelatedModel verifies
+// that preload columns are validated against the related model's fields, not the
+// parent model's fields. This is the fix for the bug where specifying a column
+// that exists only on the relation (e.g. "functionname") was incorrectly filtered
+// out because it doesn't exist on the parent model.
+func TestFilterRequestOptions_PreloadColumnsValidatedAgainstRelatedModel(t *testing.T) {
+	validator := NewColumnValidator(PreloadParentModel{})
+
+	options := RequestOptions{
+		Preload: []PreloadOption{
+			{
+				Relation: "RELATED",
+				// "functionname" exists on RelatedModel but NOT on PreloadParentModel.
+				// "name" exists on PreloadParentModel but NOT on RelatedModel.
+				// "nonexistent" exists on neither.
+				Columns: []string{"functionname", "name", "nonexistent"},
+			},
+		},
+	}
+
+	filtered := validator.FilterRequestOptions(options)
+
+	if len(filtered.Preload) != 1 {
+		t.Fatalf("Expected 1 preload, got %d", len(filtered.Preload))
+	}
+
+	cols := filtered.Preload[0].Columns
+	// Only "functionname" should survive: it belongs to RelatedModel.
+	if len(cols) != 1 {
+		t.Errorf("Expected 1 preload column, got %d: %v", len(cols), cols)
+	}
+	if len(cols) > 0 && cols[0] != "functionname" {
+		t.Errorf("Expected preload column 'functionname', got '%s'", cols[0])
+	}
+}
+
+// TestFilterRequestOptions_PreloadColumnsParentModelFallback verifies that when
+// a preload relation is not found on the parent model, column validation falls
+// back to the parent model's validator (no panic, no silent pass-through).
+func TestFilterRequestOptions_PreloadColumnsParentModelFallback(t *testing.T) {
+	validator := NewColumnValidator(PreloadParentModel{})
+
+	options := RequestOptions{
+		Preload: []PreloadOption{
+			{
+				Relation: "UNKNOWN_RELATION",
+				Columns:  []string{"id", "functionname"},
+			},
+		},
+	}
+
+	filtered := validator.FilterRequestOptions(options)
+
+	if len(filtered.Preload) != 1 {
+		t.Fatalf("Expected 1 preload, got %d", len(filtered.Preload))
+	}
+
+	cols := filtered.Preload[0].Columns
+	// Falls back to parent model: only "id" is valid on PreloadParentModel.
+	if len(cols) != 1 {
+		t.Errorf("Expected 1 preload column (fallback to parent), got %d: %v", len(cols), cols)
+	}
+	if len(cols) > 0 && cols[0] != "id" {
+		t.Errorf("Expected preload column 'id', got '%s'", cols[0])
+	}
+}

@@ -70,6 +70,25 @@ func (m *mountPoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Try to open the file
 	file, err := m.provider.Open(strings.TrimPrefix(filePath, "/"))
 	if err != nil {
+		// For extensionless paths, also try path/index.html
+		if path.Ext(filePath) == "" {
+			indexFallback := path.Join(filePath, "index.html")
+			file, err = m.provider.Open(strings.TrimPrefix(indexFallback, "/"))
+			if err == nil {
+				defer file.Close()
+				m.serveFile(w, r, indexFallback, file)
+				return
+			}
+
+			indexFallback = fmt.Sprintf("%s.html", filePath)
+			file, err = m.provider.Open(strings.TrimPrefix(indexFallback, "/"))
+			if err == nil {
+				defer file.Close()
+				m.serveFile(w, r, indexFallback, file)
+				return
+			}
+		}
+
 		// File doesn't exist - check if we should use fallback
 		if m.fallbackStrategy != nil && m.fallbackStrategy.ShouldFallback(filePath) {
 			fallbackPath := m.fallbackStrategy.GetFallbackPath(filePath)
@@ -80,16 +99,6 @@ func (m *mountPoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// For extensionless paths, also try path/index.html
-			if path.Ext(filePath) == "" {
-				indexFallback := path.Join(filePath, "index.html")
-				file, err = m.provider.Open(strings.TrimPrefix(indexFallback, "/"))
-				if err == nil {
-					defer file.Close()
-					m.serveFile(w, r, indexFallback, file)
-					return
-				}
-			}
 		}
 
 		// No fallback or fallback failed - return 404

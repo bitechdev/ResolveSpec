@@ -174,7 +174,7 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			varName := kw[1 : len(kw)-1] // strip [ and ]
 			if val, ok := variables[varName]; ok {
 				if strVal := fmt.Sprintf("%v", val); strVal != "" {
-					sqlquery = strings.ReplaceAll(sqlquery, kw, ValidSQL(strVal, "colvalue"))
+					sqlquery = strings.ReplaceAll(sqlquery, kw, safeSubstituteVar(sqlquery, kw, strVal))
 					continue
 				}
 			}
@@ -533,7 +533,7 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			varName := kw[1 : len(kw)-1] // strip [ and ]
 			if val, ok := variables[varName]; ok {
 				if strVal := fmt.Sprintf("%v", val); strVal != "" {
-					sqlquery = strings.ReplaceAll(sqlquery, kw, ValidSQL(strVal, "colvalue"))
+					sqlquery = strings.ReplaceAll(sqlquery, kw, safeSubstituteVar(sqlquery, kw, strVal))
 					continue
 				}
 			}
@@ -1004,6 +1004,37 @@ func sqlQryWhere(sqlquery, condition string) string {
 func IsNumeric(s string) bool {
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil
+}
+
+// isInsideDollarQuote reports whether the first occurrence of placeholder in sqlquery
+// is immediately surrounded by dollar-sign characters (i.e. inside a $...$-quoted string).
+// Dollar-quoted strings pass content through literally — no backslash processing — so
+// values placed there must NOT have their backslashes escaped.
+func isInsideDollarQuote(sqlquery, placeholder string) bool {
+	idx := strings.Index(sqlquery, placeholder)
+	if idx < 0 {
+		return false
+	}
+	endIdx := idx + len(placeholder)
+	charBefore := byte(0)
+	charAfter := byte(0)
+	if idx > 0 {
+		charBefore = sqlquery[idx-1]
+	}
+	if endIdx < len(sqlquery) {
+		charAfter = sqlquery[endIdx]
+	}
+	return charBefore == '$' || charAfter == '$'
+}
+
+// safeSubstituteVar returns value sanitised for the quoting context that surrounds
+// placeholder in sqlquery: raw (no backslash escaping) for dollar-quoted contexts,
+// ValidSQL("colvalue") escaping for everything else.
+func safeSubstituteVar(sqlquery, placeholder, value string) string {
+	if isInsideDollarQuote(sqlquery, placeholder) {
+		return value
+	}
+	return ValidSQL(value, "colvalue")
 }
 
 // getReplacementForBlankParam determines the replacement value for an unused parameter

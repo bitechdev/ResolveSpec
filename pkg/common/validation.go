@@ -236,7 +236,11 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	validFilters := make([]FilterOption, 0, len(options.Filters))
 	for _, filter := range options.Filters {
 		if strings.EqualFold(filter.Column, "all") {
-			for _, col := range v.Columns() {
+			allCols := v.Columns()
+			if len(filtered.Columns) > 0 {
+				allCols = filtered.Columns
+			}
+			for _, col := range allCols {
 				expanded := filter
 				expanded.Column = col
 				expanded.LogicOperator = "OR"

@@ -1218,8 +1218,8 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			if provider, ok := modelValue.(common.TableNameProvider); !ok || provider.TableName() == "" {
 				query = query.Table(tableName)
 			}
-
-			query = query.Returning("*")
+			fields := reflection.GetSQLModelColumns(model)
+			query = query.Returning(fields...)
 
 			// Execute BeforeScan hooks - pass query chain so hooks can modify it
 			itemHookCtx := &HookContext{

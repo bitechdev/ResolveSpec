@@ -1489,7 +1489,7 @@ func (b *BunInsertQuery) OnConflict(action string) common.InsertQuery {
 
 func (b *BunInsertQuery) Returning(columns ...string) common.InsertQuery {
 	if len(columns) > 0 {
-		b.query = b.query.Returning(columns[0])
+		b.query = b.query.Returning(strings.Join(columns, ", "))
 	}
 	return b
 }
@@ -1606,7 +1606,7 @@ func (b *BunUpdateQuery) Where(query string, args ...interface{}) common.UpdateQ
 
 func (b *BunUpdateQuery) Returning(columns ...string) common.UpdateQuery {
 	if len(columns) > 0 {
-		b.query = b.query.Returning(columns[0])
+		b.query = b.query.Returning(strings.Join(columns, ", "))
 	}
 	return b
 }

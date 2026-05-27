@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -43,7 +44,7 @@ func (v *ColumnValidator) buildValidColumns() {
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
 
-		if !field.IsExported() {
+		if !field.IsExported() || field.Anonymous {
 			continue
 		}
 
@@ -123,6 +124,16 @@ func (v *ColumnValidator) ValidateColumn(column string) error {
 // Returns true if valid, false if invalid
 func (v *ColumnValidator) IsValidColumn(column string) bool {
 	return v.ValidateColumn(column) == nil
+}
+
+// Columns returns all valid column names known to this validator
+func (v *ColumnValidator) Columns() []string {
+	cols := make([]string, 0, len(v.validColumns))
+	for col := range v.validColumns {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	return cols
 }
 
 // FilterValidColumns filters a list of columns, returning only valid ones
@@ -224,7 +235,15 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	// Filter Filter columns
 	validFilters := make([]FilterOption, 0, len(options.Filters))
 	for _, filter := range options.Filters {
-		if v.IsValidColumn(filter.Column) {
+		if strings.ToLower(filter.Column) == "all" {
+			for _, col := range v.Columns() {
+				expanded := filter
+				expanded.Column = col
+				expanded.LogicOperator = "OR"
+
+				validFilters = append(validFilters, expanded)
+			}
+		} else if v.IsValidColumn(filter.Column) {
 			validFilters = append(validFilters, filter)
 		} else {
 			logger.Warn("Invalid column in filter '%s' removed", filter.Column)

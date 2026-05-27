@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"sort"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
@@ -140,9 +141,21 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 		combinedParams[strings.ToLower(key)] = value
 	}
 
+	sortedKeys := make([]string, 0, len(combinedParams))
+	for key := range combinedParams {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		if sortedKeys[i] != sortedKeys[j] {
+			return sortedKeys[i] < sortedKeys[j]
+		}
+		return combinedParams[sortedKeys[i]] < combinedParams[sortedKeys[j]]
+	})
+
 	// Process each parameter (from both headers and query params)
 	// Note: keys are already normalized to lowercase in combinedParams
-	for key, value := range combinedParams {
+	for _, key := range sortedKeys {
+		value := combinedParams[key]
 		// Decode value if it's base64 encoded
 		decodedValue := decodeHeaderValue(value)
 

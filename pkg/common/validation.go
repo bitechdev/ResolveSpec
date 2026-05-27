@@ -235,7 +235,7 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	// Filter Filter columns
 	validFilters := make([]FilterOption, 0, len(options.Filters))
 	for _, filter := range options.Filters {
-		if strings.ToLower(filter.Column) == "all" {
+		if strings.EqualFold(filter.Column, "all") {
 			for _, col := range v.Columns() {
 				expanded := filter
 				expanded.Column = col

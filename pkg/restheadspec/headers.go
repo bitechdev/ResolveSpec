@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"

@@ -1480,18 +1480,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			}
 		}
 
-		// Fetch the updated record to return the new values
-		modelValue := reflect.New(reflect.TypeOf(model)).Interface()
-		selectQuery = tx.NewSelect().Model(modelValue).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
-		if err := selectQuery.ScanModel(ctx); err != nil {
-			return fmt.Errorf("failed to fetch updated record: %w", err)
-		}
-
-		updatedRecord = modelValue
-
-		// Store result for hooks
-		hookCtx.Result = updatedRecord
-		_ = result // Keep result variable for potential future use
+		_ = result
 		return nil
 	})
 
@@ -1500,6 +1489,16 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		h.sendError(w, http.StatusInternalServerError, "update_error", "Error updating record", err)
 		return
 	}
+
+	// Fetch the updated record after the transaction commits to capture any trigger changes
+	fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
+	selectQuery := h.db.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+	if err := selectQuery.ScanModel(ctx); err != nil {
+		logger.Error("Failed to fetch updated record: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
+		return
+	}
+	updatedRecord = fetchedRecord
 
 	// Merge the updated record with the original request data
 	// This preserves extra keys from the request and updates values from the database

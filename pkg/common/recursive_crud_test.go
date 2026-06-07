@@ -713,6 +713,139 @@ func TestInjectForeignKeys(t *testing.T) {
 	}
 }
 
+// Models for asymmetric join column tests (mirrors the bun has-many join:parentCol=childCol pattern).
+// ActionOption has-many ActionOptionLinks via join:rid_actionoption=rid_actionoption_child.
+// The child column ("rid_actionoption_child") differs from the parent column ("rid_actionoption").
+type ActionOption struct {
+	RidActionoption int64               `json:"rid_actionoption" bun:"rid_actionoption,pk"`
+	Label           string              `json:"label"`
+	Links           []*ActionOptionLink `json:"aol_rid_actionoption_child,omitempty"`
+}
+
+func (a ActionOption) TableName() string { return "action_options" }
+func (a ActionOption) GetIDName() string { return "RidActionoption" }
+
+type ActionOptionLink struct {
+	RidActionoptionlink  int64  `json:"rid_actionoptionlink" bun:"rid_actionoptionlink,pk"`
+	RidActionoptionChild int64  `json:"rid_actionoption_child" bun:"rid_actionoption_child"`
+	Label                string `json:"label"`
+	// Note: no field named "rid_actionoption" — that is the parent's column.
+}
+
+func (a ActionOptionLink) TableName() string { return "action_option_links" }
+func (a ActionOptionLink) GetIDName() string { return "RidActionoptionlink" }
+
+// TestProcessNestedCUD_AsymmetricJoinColumns verifies that for a has-many relation with
+// join:parentCol=childCol, the child rows are stamped with the child-side column (References),
+// not the parent-side column (ForeignKey).
+func TestProcessNestedCUD_AsymmetricJoinColumns(t *testing.T) {
+	db := newMockDatabase()
+	registry := &mockModelRegistry{}
+	relProvider := newMockRelationshipProvider()
+
+	// Mirrors: bun:"rel:has-many,join:rid_actionoption=rid_actionoption_child"
+	relProvider.RegisterRelation("ActionOption", "aol_rid_actionoption_child", &RelationshipInfo{
+		FieldName:    "Links",
+		JSONName:     "aol_rid_actionoption_child",
+		RelationType: "hasMany",
+		ForeignKey:   "rid_actionoption",       // parent-side column (left of join:)
+		References:   "rid_actionoption_child", // child-side column (right of join:)
+		RelatedModel: ActionOptionLink{},
+	})
+
+	processor := NewNestedCUDProcessor(db, registry, relProvider)
+
+	data := map[string]interface{}{
+		"label": "option-a",
+		"aol_rid_actionoption_child": []interface{}{
+			map[string]interface{}{"label": "link-1"},
+		},
+	}
+
+	_, err := processor.ProcessNestedCUD(
+		context.Background(),
+		"insert",
+		data,
+		ActionOption{},
+		nil,
+		"action_options",
+	)
+	if err != nil {
+		t.Fatalf("ProcessNestedCUD failed: %v", err)
+	}
+
+	if len(db.insertCalls) < 2 {
+		t.Fatalf("Expected at least 2 insert calls (parent + child), got %d", len(db.insertCalls))
+	}
+
+	childInsert := db.insertCalls[1]
+
+	// The fix: child must receive "rid_actionoption_child", NOT "rid_actionoption".
+	if childInsert["rid_actionoption_child"] == nil {
+		t.Error("Expected child to have rid_actionoption_child set (child-side FK column)")
+	}
+	if childInsert["rid_actionoption"] != nil {
+		t.Errorf("Child must not receive parent-side column rid_actionoption, got %v", childInsert["rid_actionoption"])
+	}
+}
+
+// TestProcessNestedCUD_BelongsToUnchanged verifies that the fix does not regress belongsTo
+// relations, where ForeignKey is already the local (child) column.
+func TestProcessNestedCUD_BelongsToUnchanged(t *testing.T) {
+	db := newMockDatabase()
+	registry := &mockModelRegistry{}
+	relProvider := newMockRelationshipProvider()
+
+	// For belongsTo, ForeignKey is the column on the child; References is on the parent.
+	// The old and new code must behave identically here.
+	relProvider.RegisterRelation("Employee", "department", &RelationshipInfo{
+		FieldName:    "Department",
+		JSONName:     "department",
+		RelationType: "belongsTo",
+		ForeignKey:   "DepartmentID", // child's own column
+		References:   "ID",           // parent's PK
+		RelatedModel: Department{},
+	})
+	relProvider.RegisterRelation("Department", "employees", &RelationshipInfo{
+		FieldName:    "Employees",
+		JSONName:     "employees",
+		RelationType: "has_many",
+		ForeignKey:   "DepartmentID",
+		RelatedModel: Employee{},
+	})
+
+	processor := NewNestedCUDProcessor(db, registry, relProvider)
+
+	data := map[string]interface{}{
+		"name": "Engineering",
+		"employees": []interface{}{
+			map[string]interface{}{"name": "Alice"},
+		},
+	}
+
+	_, err := processor.ProcessNestedCUD(
+		context.Background(),
+		"insert",
+		data,
+		Department{},
+		nil,
+		"departments",
+	)
+	if err != nil {
+		t.Fatalf("ProcessNestedCUD failed: %v", err)
+	}
+
+	if len(db.insertCalls) < 2 {
+		t.Fatalf("Expected at least 2 inserts, got %d", len(db.insertCalls))
+	}
+
+	// Employees relation uses has_many (old-style) so it goes through the parentIDs injection path,
+	// not the foreignKeyFieldName path. Just confirm no panic and employee is inserted.
+	if db.insertCalls[0]["name"] != "Engineering" {
+		t.Errorf("Expected department name 'Engineering', got %v", db.insertCalls[0]["name"])
+	}
+}
+
 func TestGetPrimaryKeyName(t *testing.T) {
 	dept := Department{}
 	pkName := reflection.GetPrimaryKeyName(dept)

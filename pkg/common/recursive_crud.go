@@ -471,13 +471,17 @@ func (p *NestedCUDProcessor) processChildRelations(
 		// Priority: Use foreign key field name if specified
 		var foreignKeyFieldName string
 		if relInfo.ForeignKey != "" {
-			// Get the JSON name for the foreign key field in the child model
-			foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, relInfo.ForeignKey)
-			if foreignKeyFieldName == "" {
-				// Fallback to lowercase field name
-				foreignKeyFieldName = strings.ToLower(relInfo.ForeignKey)
+			// For has-many/has-one: join:parentCol=childCol
+			// ForeignKey = parent side, References = child side (where we actually set the value)
+			childField := relInfo.ForeignKey
+			if (relInfo.RelationType == "hasMany" || relInfo.RelationType == "hasOne") && relInfo.References != "" {
+				childField = relInfo.References
 			}
-			logger.Debug("Using foreign key field for direct assignment: %s (from FK %s)", foreignKeyFieldName, relInfo.ForeignKey)
+			foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, childField)
+			if foreignKeyFieldName == "" {
+				foreignKeyFieldName = strings.ToLower(childField)
+			}
+			logger.Debug("Using foreign key field for direct assignment: %s (from FK %s -> child %s)", foreignKeyFieldName, relInfo.ForeignKey, childField)
 		}
 
 		// Get the primary key name for the child model to avoid overwriting it in recursive relationships

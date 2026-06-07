@@ -2011,11 +2011,15 @@ func (h *Handler) processChildRelationsForField(
 	// Priority: Use foreign key field name if specified, otherwise use parent's PK name
 	var foreignKeyFieldName string
 	if relInfo.ForeignKey != "" {
-		// Get the JSON name for the foreign key field in the child model
-		foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, relInfo.ForeignKey)
+		// For has-many/has-one: join:parentCol=childCol
+		// ForeignKey = parent side, References = child side (where we actually set the value)
+		childField := relInfo.ForeignKey
+		if (relInfo.RelationType == "hasMany" || relInfo.RelationType == "hasOne") && relInfo.References != "" {
+			childField = relInfo.References
+		}
+		foreignKeyFieldName = reflection.GetJSONNameForField(relatedModelType, childField)
 		if foreignKeyFieldName == "" {
-			// Fallback to lowercase field name
-			foreignKeyFieldName = strings.ToLower(relInfo.ForeignKey)
+			foreignKeyFieldName = strings.ToLower(childField)
 		}
 	} else {
 		// Fallback: use parent's primary key name

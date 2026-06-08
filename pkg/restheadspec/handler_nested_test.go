@@ -352,6 +352,45 @@ func (m *mockRegistry) GetAllModels() map[string]interface{} {
 	return m.models
 }
 
+// TestIsValidNestedRequest verifies that only the allowed _request verbs are accepted
+// and that items missing the key are rejected.
+func TestIsValidNestedRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		item     map[string]interface{}
+		expected bool
+	}{
+		// Valid verbs
+		{name: "insert", item: map[string]interface{}{"_request": "insert"}, expected: true},
+		{name: "add", item: map[string]interface{}{"_request": "add"}, expected: true},
+		{name: "update", item: map[string]interface{}{"_request": "update"}, expected: true},
+		{name: "change", item: map[string]interface{}{"_request": "change"}, expected: true},
+		{name: "delete", item: map[string]interface{}{"_request": "delete"}, expected: true},
+		{name: "remove", item: map[string]interface{}{"_request": "remove"}, expected: true},
+		// Case-insensitive
+		{name: "INSERT uppercase", item: map[string]interface{}{"_request": "INSERT"}, expected: true},
+		{name: "Remove mixed case", item: map[string]interface{}{"_request": "Remove"}, expected: true},
+		// Whitespace trimmed
+		{name: "insert with spaces", item: map[string]interface{}{"_request": "  insert  "}, expected: true},
+		// Invalid / missing
+		{name: "missing _request", item: map[string]interface{}{"name": "foo"}, expected: false},
+		{name: "empty string", item: map[string]interface{}{"_request": ""}, expected: false},
+		{name: "unknown verb", item: map[string]interface{}{"_request": "create"}, expected: false},
+		{name: "unknown verb modify", item: map[string]interface{}{"_request": "modify"}, expected: false},
+		{name: "non-string value", item: map[string]interface{}{"_request": 42}, expected: false},
+		{name: "nil value", item: map[string]interface{}{"_request": nil}, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isValidNestedRequest(tt.item)
+			if got != tt.expected {
+				t.Errorf("isValidNestedRequest(%v) = %v, want %v", tt.item, got, tt.expected)
+			}
+		})
+	}
+}
+
 // TestMultiLevelRelationExtraction tests extracting deeply nested relations
 func TestMultiLevelRelationExtraction(t *testing.T) {
 	registry := &mockRegistry{

@@ -846,6 +846,87 @@ func TestProcessNestedCUD_BelongsToUnchanged(t *testing.T) {
 	}
 }
 
+func TestProcessNestedCUD_AddAlias(t *testing.T) {
+	db := newMockDatabase()
+	registry := &mockModelRegistry{}
+	relProvider := newMockRelationshipProvider()
+
+	processor := NewNestedCUDProcessor(db, registry, relProvider)
+
+	data := map[string]interface{}{
+		"_request": "add",
+		"name":     "New Department",
+	}
+
+	result, err := processor.ProcessNestedCUD(context.Background(), "insert", data, Department{}, nil, "departments")
+	if err != nil {
+		t.Fatalf("ProcessNestedCUD with _request=add failed: %v", err)
+	}
+	if result.ID == nil {
+		t.Error("Expected result.ID to be set after add")
+	}
+	if len(db.insertCalls) != 1 {
+		t.Errorf("Expected 1 insert call, got %d", len(db.insertCalls))
+	}
+}
+
+func TestProcessNestedCUD_RemoveAlias(t *testing.T) {
+	db := newMockDatabase()
+	registry := &mockModelRegistry{}
+	relProvider := newMockRelationshipProvider()
+
+	processor := NewNestedCUDProcessor(db, registry, relProvider)
+
+	data := map[string]interface{}{
+		"_request": "remove",
+		"ID":       int64(42),
+	}
+
+	_, err := processor.ProcessNestedCUD(context.Background(), "delete", data, Department{}, nil, "departments")
+	if err != nil {
+		t.Fatalf("ProcessNestedCUD with _request=remove failed: %v", err)
+	}
+	if len(db.deleteCalls) != 1 {
+		t.Errorf("Expected 1 delete call, got %d", len(db.deleteCalls))
+	}
+}
+
+func TestProcessNestedCUD_NestedAddRemoveAliases(t *testing.T) {
+	db := newMockDatabase()
+	registry := &mockModelRegistry{}
+	relProvider := newMockRelationshipProvider()
+
+	relProvider.RegisterRelation("Department", "employees", &RelationshipInfo{
+		FieldName:    "Employees",
+		JSONName:     "employees",
+		RelationType: "has_many",
+		ForeignKey:   "DepartmentID",
+		RelatedModel: Employee{},
+	})
+
+	processor := NewNestedCUDProcessor(db, registry, relProvider)
+
+	data := map[string]interface{}{
+		"ID":   int64(1),
+		"name": "Engineering",
+		"employees": []interface{}{
+			map[string]interface{}{"_request": "add", "name": "Alice"},
+			map[string]interface{}{"_request": "remove", "ID": int64(5)},
+		},
+	}
+
+	_, err := processor.ProcessNestedCUD(context.Background(), "update", data, Department{}, nil, "departments")
+	if err != nil {
+		t.Fatalf("ProcessNestedCUD with nested add/remove failed: %v", err)
+	}
+	if len(db.insertCalls) != 1 {
+		t.Errorf("Expected 1 insert (add alias) for employee, got %d", len(db.insertCalls))
+	}
+	if len(db.deleteCalls) != 1 {
+		t.Errorf("Expected 1 delete (remove alias) for employee, got %d", len(db.deleteCalls))
+	}
+}
+
 func TestGetPrimaryKeyName(t *testing.T) {
 	dept := Department{}
 	pkName := reflection.GetPrimaryKeyName(dept)

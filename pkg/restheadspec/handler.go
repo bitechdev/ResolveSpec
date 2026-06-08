@@ -2120,7 +2120,7 @@ func isValidNestedRequest(item map[string]interface{}) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "insert", "create", "add", "change", "update", "modify", "delete", "remove":
+	case "insert", "add", "change", "update", "delete", "remove":
 		return true
 	}
 	return false

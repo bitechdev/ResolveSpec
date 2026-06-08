@@ -174,7 +174,9 @@ func (h *HTTPResponseWriter) Write(data []byte) (int, error) {
 
 func (h *HTTPResponseWriter) WriteJSON(data interface{}) error {
 	h.SetHeader("Content-Type", "application/json")
-	return json.NewEncoder(h.resp).Encode(data)
+	enc := json.NewEncoder(h.resp)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(data)
 }
 
 // UnderlyingResponseWriter returns the underlying http.ResponseWriter

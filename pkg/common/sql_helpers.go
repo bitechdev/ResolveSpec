@@ -614,6 +614,15 @@ func extractTableAndColumn(cond string) (table string, column string) {
 	// Remove any quotes
 	columnRef = strings.Trim(columnRef, "`\"'")
 
+	// If the left side is a parenthesized subquery (starts with '(' and contains SQL keywords),
+	// don't attempt prefix extraction from inside it.
+	if len(columnRef) > 0 && columnRef[0] == '(' {
+		lowerRef := strings.ToLower(columnRef)
+		if strings.Contains(lowerRef, "select ") || strings.Contains(lowerRef, " from ") || strings.Contains(lowerRef, " where ") {
+			return "", ""
+		}
+	}
+
 	// Check if there's a function call (contains opening parenthesis)
 	openParenIdx := strings.Index(columnRef, "(")
 

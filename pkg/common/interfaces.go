@@ -178,7 +178,9 @@ func (s *StandardResponseWriter) Write(data []byte) (int, error) {
 
 func (s *StandardResponseWriter) WriteJSON(data interface{}) error {
 	s.SetHeader("Content-Type", "application/json")
-	return json.NewEncoder(s.w).Encode(data)
+	enc := json.NewEncoder(s.w)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(data)
 }
 
 func (s *StandardResponseWriter) UnderlyingResponseWriter() http.ResponseWriter {

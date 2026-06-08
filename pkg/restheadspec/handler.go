@@ -2043,7 +2043,10 @@ func (h *Handler) processChildRelationsForField(
 	// Process based on relation type and data structure
 	switch v := relationValue.(type) {
 	case map[string]interface{}:
-		// Single related object - add parent ID to foreign key field
+		if !isValidNestedRequest(v) {
+			logger.Debug("Skipping single relation %s - missing or invalid _request value", relationName)
+			return nil
+		}
 		// IMPORTANT: In recursive relationships, don't overwrite the primary key
 		if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 			v[foreignKeyFieldName] = parentID
@@ -2060,7 +2063,10 @@ func (h *Handler) processChildRelationsForField(
 		// Multiple related objects
 		for i, item := range v {
 			if itemMap, ok := item.(map[string]interface{}); ok {
-				// Add parent ID to foreign key field
+				if !isValidNestedRequest(itemMap) {
+					logger.Debug("Skipping relation array[%d] %s - missing or invalid _request value", i, relationName)
+					continue
+				}
 				// IMPORTANT: In recursive relationships, don't overwrite the primary key
 				if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 					itemMap[foreignKeyFieldName] = parentID
@@ -2078,7 +2084,10 @@ func (h *Handler) processChildRelationsForField(
 	case []map[string]interface{}:
 		// Multiple related objects (typed slice)
 		for i, itemMap := range v {
-			// Add parent ID to foreign key field
+			if !isValidNestedRequest(itemMap) {
+				logger.Debug("Skipping relation typed array[%d] %s - missing or invalid _request value", i, relationName)
+				continue
+			}
 			// IMPORTANT: In recursive relationships, don't overwrite the primary key
 			if parentID != nil && foreignKeyFieldName != "" && foreignKeyFieldName != childPKFieldName {
 				itemMap[foreignKeyFieldName] = parentID
@@ -2097,6 +2106,24 @@ func (h *Handler) processChildRelationsForField(
 	}
 
 	return nil
+}
+
+// isValidNestedRequest returns true only when the item carries a _request key
+// whose value is one of the recognised mutation verbs.
+func isValidNestedRequest(item map[string]interface{}) bool {
+	raw, ok := item["_request"]
+	if !ok {
+		return false
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "insert", "create", "add", "change", "update", "modify", "delete", "remove":
+		return true
+	}
+	return false
 }
 
 // getTableNameForRelatedModel gets the table name for a related model.

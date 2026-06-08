@@ -113,7 +113,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 
 	// Process based on operation
 	switch strings.ToLower(operation) {
-	case "insert", "create":
+	case "insert", "create", "add":
 		// Only perform insert if we have data to insert
 		if hasData {
 			id, err := p.processInsert(ctx, regularData, tableName)
@@ -141,7 +141,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			logger.Debug("Skipping insert for %s - no data columns besides _request", tableName)
 		}
 
-	case "update", "change":
+	case "update", "change", "modify":
 		// Only perform update if we have data to update
 		if reflection.IsEmptyValue(data[pkName]) {
 			logger.Warn("Skipping update for %s - no primary key", tableName)
@@ -174,7 +174,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			result.ID = data[pkName]
 		}
 
-	case "delete":
+	case "delete", "remove":
 		if reflection.IsEmptyValue(data[pkName]) {
 			logger.Warn("Skipping delete for %s - no primary key", tableName)
 			return result, nil

@@ -671,6 +671,12 @@ func (h *Handler) create(hookCtx *HookContext) (interface{}, error) {
 		return nil, fmt.Errorf("failed to create record: %w", err)
 	}
 
+	// Re-fetch the created record to capture DB-generated defaults/triggers.
+	if pkVal := reflection.GetPrimaryKeyValue(hookCtx.ModelPtr); pkVal != nil {
+		hookCtx.ID = fmt.Sprintf("%v", pkVal)
+		return h.readByID(hookCtx)
+	}
+
 	return hookCtx.ModelPtr, nil
 }
 

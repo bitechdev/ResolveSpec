@@ -428,6 +428,8 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 	// Use potentially modified data
 	data = hookCtx.Data
 
+	pkName := reflection.GetPrimaryKeyName(model)
+
 	switch v := data.(type) {
 	case map[string]interface{}:
 		query := h.db.NewInsert().Table(tableName)
@@ -436,6 +438,23 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 		}
 		if _, err := query.Exec(ctx); err != nil {
 			return nil, fmt.Errorf("create error: %w", err)
+		}
+		// Re-fetch after insert to capture DB-generated defaults/triggers.
+		if pkVal, ok := v[pkName]; ok && pkVal != nil {
+			modelType := reflect.TypeOf(model)
+			if modelType.Kind() == reflect.Ptr {
+				modelType = modelType.Elem()
+			}
+			fetchedRecord := reflect.New(modelType).Interface()
+			if err := h.db.NewSelect().Model(fetchedRecord).
+				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), pkVal).
+				ScanModel(ctx); err == nil {
+				jsonData, _ := json.Marshal(fetchedRecord)
+				var fetchedMap map[string]interface{}
+				if json.Unmarshal(jsonData, &fetchedMap) == nil {
+					v = fetchedMap
+				}
+			}
 		}
 		hookCtx.Result = v
 		if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
@@ -584,6 +603,25 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 	if err != nil {
 		return nil, err
 	}
+
+	// Re-fetch the record after transaction commits to capture DB-generated changes.
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+	fetchedRecord := reflect.New(modelType).Interface()
+	if err := h.db.NewSelect().Model(fetchedRecord).
+		Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id).
+		ScanModel(ctx); err == nil {
+		jsonData, marshalErr := json.Marshal(fetchedRecord)
+		if marshalErr == nil {
+			var fetchedMap map[string]interface{}
+			if json.Unmarshal(jsonData, &fetchedMap) == nil {
+				updateResult = fetchedMap
+			}
+		}
+	}
+
 	return updateResult, nil
 }
 

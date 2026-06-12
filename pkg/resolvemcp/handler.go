@@ -436,24 +436,27 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 		for key, value := range v {
 			query = query.Value(key, value)
 		}
-		if _, err := query.Exec(ctx); err != nil {
-			return nil, fmt.Errorf("create error: %w", err)
-		}
-		// Re-fetch after insert to capture DB-generated defaults/triggers.
-		if pkVal, ok := v[pkName]; ok && pkVal != nil {
+		if pkName != "" {
+			var insertedID interface{}
+			if err := query.Returning(pkName).Scan(ctx, &insertedID); err != nil {
+				return nil, fmt.Errorf("create error: %w", err)
+			}
+			// Re-fetch after insert to capture DB-generated defaults/triggers.
 			modelType := reflect.TypeOf(model)
 			if modelType.Kind() == reflect.Ptr {
 				modelType = modelType.Elem()
 			}
 			fetchedRecord := reflect.New(modelType).Interface()
 			if err := h.db.NewSelect().Model(fetchedRecord).
-				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), pkVal).
+				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), insertedID).
 				ScanModel(ctx); err == nil {
-				jsonData, _ := json.Marshal(fetchedRecord)
-				var fetchedMap map[string]interface{}
-				if json.Unmarshal(jsonData, &fetchedMap) == nil {
-					v = fetchedMap
-				}
+				v = mergeWithInput(fetchedRecord, v)
+			} else {
+				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, insertedID, err)
+			}
+		} else {
+			if _, err := query.Exec(ctx); err != nil {
+				return nil, fmt.Errorf("create error: %w", err)
 			}
 		}
 		hookCtx.Result = v
@@ -463,7 +466,12 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 		return v, nil
 
 	case []interface{}:
-		results := make([]interface{}, 0, len(v))
+		modelType := reflect.TypeOf(model)
+		if modelType.Kind() == reflect.Ptr {
+			modelType = modelType.Elem()
+		}
+		originals := make([]map[string]interface{}, 0, len(v))
+		insertedIDs := make([]interface{}, 0, len(v))
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range v {
 				itemMap, ok := item.(map[string]interface{})
@@ -474,15 +482,42 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 				for key, value := range itemMap {
 					q = q.Value(key, value)
 				}
-				if _, err := q.Exec(ctx); err != nil {
+				if pkName == "" {
+					if _, err := q.Exec(ctx); err != nil {
+						return err
+					}
+					originals = append(originals, itemMap)
+					insertedIDs = append(insertedIDs, nil)
+					continue
+				}
+				var returnedID interface{}
+				if err := q.Returning(pkName).Scan(ctx, &returnedID); err != nil {
 					return err
 				}
-				results = append(results, item)
+				originals = append(originals, itemMap)
+				insertedIDs = append(insertedIDs, returnedID)
 			}
 			return nil
 		})
 		if err != nil {
 			return nil, fmt.Errorf("batch create error: %w", err)
+		}
+		// Re-fetch each record after transaction commits; fall back to input on failure.
+		results := make([]interface{}, 0, len(insertedIDs))
+		for i, pkVal := range insertedIDs {
+			if pkVal == nil {
+				results = append(results, originals[i])
+				continue
+			}
+			fetchedRecord := reflect.New(modelType).Interface()
+			if err := h.db.NewSelect().Model(fetchedRecord).
+				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), pkVal).
+				ScanModel(ctx); err == nil {
+				results = append(results, mergeWithInput(fetchedRecord, originals[i]))
+			} else {
+				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, pkVal, err)
+				results = append(results, originals[i])
+			}
 		}
 		hookCtx.Result = results
 		if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
@@ -785,6 +820,28 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (condition st
 		return fmt.Sprintf("%s IS NOT NULL", filter.Column), nil
 	}
 	return "", nil
+}
+
+// mergeWithInput merges a database record with the original request data.
+// DB values take precedence (capturing triggers/defaults), while extra
+// input keys that have no DB column are preserved in the response.
+func mergeWithInput(dbRecord interface{}, input map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(input))
+	for k, v := range input {
+		result[k] = v
+	}
+	jsonData, err := json.Marshal(dbRecord)
+	if err != nil {
+		return result
+	}
+	var dbMap map[string]interface{}
+	if err := json.Unmarshal(jsonData, &dbMap); err != nil {
+		return result
+	}
+	for k, v := range dbMap {
+		result[k] = v
+	}
+	return result
 }
 
 func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, preloads []common.PreloadOption) (common.SelectQuery, error) {

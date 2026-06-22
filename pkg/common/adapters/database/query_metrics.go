@@ -71,7 +71,7 @@ func entityNameFromModel(model interface{}, table string) string {
 	}
 
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -108,7 +108,7 @@ func tableNameProviderFromModel(model interface{}) (common.TableNameProvider, bo
 	}
 
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 

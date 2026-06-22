@@ -840,7 +840,7 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
 	// Get the reflect value of the records
 	recordsValue := reflect.ValueOf(records)
-	if recordsValue.Kind() == reflect.Ptr {
+	if recordsValue.Kind() == reflect.Pointer {
 		recordsValue = recordsValue.Elem()
 	}
 
@@ -855,7 +855,7 @@ func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
 		record := recordsValue.Index(i)
 
 		// Dereference if it's a pointer
-		if record.Kind() == reflect.Ptr {
+		if record.Kind() == reflect.Pointer {
 			if record.IsNil() {
 				continue
 			}

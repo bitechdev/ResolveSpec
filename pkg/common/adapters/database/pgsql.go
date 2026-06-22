@@ -1195,7 +1195,7 @@ func (p *PgSQLSelectQuery) applySubqueryPreloads(ctx context.Context, dest inter
 
 	// Use reflection to process the destination
 	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() != reflect.Ptr {
+	if destValue.Kind() != reflect.Pointer {
 		return fmt.Errorf("dest must be a pointer")
 	}
 
@@ -1222,7 +1222,7 @@ func (p *PgSQLSelectQuery) applySubqueryPreloads(ctx context.Context, dest inter
 
 // loadPreloadsForRecord loads all preload relationships for a single record
 func (p *PgSQLSelectQuery) loadPreloadsForRecord(ctx context.Context, record reflect.Value, preloads []preloadConfig) error {
-	if record.Kind() == reflect.Ptr {
+	if record.Kind() == reflect.Pointer {
 		if record.IsNil() {
 			return nil
 		}
@@ -1299,7 +1299,7 @@ func (p *PgSQLSelectQuery) executePreloadQuery(ctx context.Context, field reflec
 	} else {
 		// Single struct - create a pointer if needed
 		var target reflect.Value
-		if field.Kind() == reflect.Ptr {
+		if field.Kind() == reflect.Pointer {
 			target = reflect.New(field.Type().Elem())
 		} else {
 			target = reflect.New(field.Type())
@@ -1312,7 +1312,7 @@ func (p *PgSQLSelectQuery) executePreloadQuery(ctx context.Context, field reflec
 		}
 
 		// Set the field
-		if field.Kind() == reflect.Ptr {
+		if field.Kind() == reflect.Pointer {
 			field.Set(target)
 		} else {
 			field.Set(target.Elem())
@@ -1329,7 +1329,7 @@ func (p *PgSQLSelectQuery) getRelationMetadata(fieldName string) *relationMetada
 	}
 
 	modelType := reflect.TypeOf(p.model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 
@@ -1378,7 +1378,7 @@ func (p *PgSQLSelectQuery) getRelationMetadataFromField(modelType reflect.Type, 
 	if fieldType.Kind() == reflect.Slice {
 		fieldType = fieldType.Elem()
 	}
-	if fieldType.Kind() == reflect.Ptr {
+	if fieldType.Kind() == reflect.Pointer {
 		fieldType = fieldType.Elem()
 	}
 
@@ -1411,7 +1411,7 @@ func scanRows(rows *sql.Rows, dest interface{}) error {
 
 	// Get destination type
 	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() != reflect.Ptr {
+	if destValue.Kind() != reflect.Pointer {
 		return fmt.Errorf("dest must be a pointer")
 	}
 
@@ -1466,7 +1466,7 @@ func scanRowsToMapSlice(rows *sql.Rows, columns []string, destValue reflect.Valu
 // scanRowsToStructSlice scans rows into a slice of structs
 func scanRowsToStructSlice(rows *sql.Rows, columns []string, destValue reflect.Value) error {
 	elemType := destValue.Type().Elem()
-	isPtr := elemType.Kind() == reflect.Ptr
+	isPtr := elemType.Kind() == reflect.Pointer
 
 	if isPtr {
 		elemType = elemType.Elem()

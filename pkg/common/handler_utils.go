@@ -25,7 +25,7 @@ func ValidateAndUnwrapModel(model interface{}) (*ValidateAndUnwrapModelResult, e
 	originalType := modelType
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -126,15 +126,15 @@ func GetRelationshipInfo(modelType reflect.Type, relationName string) *Relations
 				// Get related model type
 				if field.Type.Kind() == reflect.Slice {
 					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
+					if elemType.Kind() == reflect.Pointer {
 						elemType = elemType.Elem()
 					}
 					if elemType.Kind() == reflect.Struct {
 						info.RelatedModel = reflect.New(elemType).Elem().Interface()
 					}
-				} else if field.Type.Kind() == reflect.Ptr || field.Type.Kind() == reflect.Struct {
+				} else if field.Type.Kind() == reflect.Pointer || field.Type.Kind() == reflect.Struct {
 					elemType := field.Type
-					if elemType.Kind() == reflect.Ptr {
+					if elemType.Kind() == reflect.Pointer {
 						elemType = elemType.Elem()
 					}
 					if elemType.Kind() == reflect.Struct {
@@ -155,16 +155,16 @@ func GetRelationshipInfo(modelType reflect.Type, relationName string) *Relations
 					info.RelationType = "hasMany"
 					// Get the element type for slice
 					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
+					if elemType.Kind() == reflect.Pointer {
 						elemType = elemType.Elem()
 					}
 					if elemType.Kind() == reflect.Struct {
 						info.RelatedModel = reflect.New(elemType).Elem().Interface()
 					}
-				} else if field.Type.Kind() == reflect.Ptr || field.Type.Kind() == reflect.Struct {
+				} else if field.Type.Kind() == reflect.Pointer || field.Type.Kind() == reflect.Struct {
 					info.RelationType = "belongsTo"
 					elemType := field.Type
-					if elemType.Kind() == reflect.Ptr {
+					if elemType.Kind() == reflect.Pointer {
 						elemType = elemType.Elem()
 					}
 					if elemType.Kind() == reflect.Struct {
@@ -177,7 +177,7 @@ func GetRelationshipInfo(modelType reflect.Type, relationName string) *Relations
 				// Get the element type for many2many (always slice)
 				if field.Type.Kind() == reflect.Slice {
 					elemType := field.Type.Elem()
-					if elemType.Kind() == reflect.Ptr {
+					if elemType.Kind() == reflect.Pointer {
 						elemType = elemType.Elem()
 					}
 					if elemType.Kind() == reflect.Struct {
@@ -239,7 +239,7 @@ func GetTableNameFromModel(model interface{}) string {
 	modelType := reflect.TypeOf(model)
 
 	// Unwrap pointers
-	for modelType != nil && modelType.Kind() == reflect.Ptr {
+	for modelType != nil && modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 

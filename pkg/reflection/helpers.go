@@ -9,7 +9,7 @@ func Len(v any) int {
 	val := reflect.ValueOf(v)
 	valKind := val.Kind()
 
-	if valKind == reflect.Ptr {
+	if valKind == reflect.Pointer {
 		val = val.Elem()
 	}
 
@@ -57,7 +57,7 @@ func IsEmptyValue(v any) bool {
 		return true
 	}
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Ptr {
+	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return true
 		}
@@ -80,12 +80,12 @@ func IsEmptyValue(v any) bool {
 // If the type is a slice of pointers, it returns the element type of the pointer within the slice.
 // If neither condition is met, it returns the original type.
 func GetPointerElement(v reflect.Type) reflect.Type {
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		return v.Elem()
 	}
-	if v.Kind() == reflect.Slice && v.Elem().Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Slice && v.Elem().Kind() == reflect.Pointer {
 		subElem := v.Elem()
-		if subElem.Elem().Kind() == reflect.Ptr {
+		if subElem.Elem().Kind() == reflect.Pointer {
 			return subElem.Elem().Elem()
 		}
 		return v.Elem()
@@ -104,7 +104,7 @@ func GetJSONNameForField(modelType reflect.Type, fieldName string) string {
 	// Unwrap pointer and slice indirections to reach the struct type
 	for {
 		switch modelType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			modelType = modelType.Elem()
 			continue
 		}

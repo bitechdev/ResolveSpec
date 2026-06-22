@@ -67,7 +67,7 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 
 	// Unwrap to base struct type
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice) {
 		modelType = modelType.Elem()
 	}
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -87,7 +87,7 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 		fieldType, found := modelType.FieldByName(d.Name)
 		if found {
 			ft := fieldType.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			isUserStruct := ft.Kind() == reflect.Struct && ft.Name() != "Time" && ft.PkgPath() != ""
@@ -106,7 +106,7 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 		goType := d.DataType
 		if goType == "" && found {
 			ft := fieldType.Type
-			for ft.Kind() == reflect.Ptr {
+			for ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			goType = ft.Name()

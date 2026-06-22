@@ -977,7 +977,7 @@ func (h *Handler) resolveRelationName(model interface{}, nameOrTable string) str
 	}
 
 	// Dereference pointer if needed
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 
@@ -1012,13 +1012,13 @@ func (h *Handler) resolveRelationName(model interface{}, nameOrTable string) str
 		var targetType reflect.Type
 		if fieldType.Kind() == reflect.Slice {
 			targetType = fieldType.Elem()
-		} else if fieldType.Kind() == reflect.Ptr {
+		} else if fieldType.Kind() == reflect.Pointer {
 			targetType = fieldType.Elem()
 		}
 
 		if targetType != nil {
 			// Dereference pointer if the slice contains pointers
-			if targetType.Kind() == reflect.Ptr {
+			if targetType.Kind() == reflect.Pointer {
 				targetType = targetType.Elem()
 			}
 
@@ -1062,7 +1062,7 @@ func (h *Handler) resolveRelationNameWithJoinKey(model interface{}, nameOrTable 
 	if modelType == nil {
 		return nameOrTable
 	}
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -1089,10 +1089,10 @@ func (h *Handler) resolveRelationNameWithJoinKey(model interface{}, nameOrTable 
 		var targetType reflect.Type
 		if fieldType.Kind() == reflect.Slice {
 			targetType = fieldType.Elem()
-		} else if fieldType.Kind() == reflect.Ptr {
+		} else if fieldType.Kind() == reflect.Pointer {
 			targetType = fieldType.Elem()
 		}
-		if targetType != nil && targetType.Kind() == reflect.Ptr {
+		if targetType != nil && targetType.Kind() == reflect.Pointer {
 			targetType = targetType.Elem()
 		}
 		if targetType == nil || targetType.Kind() != reflect.Struct {

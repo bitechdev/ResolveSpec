@@ -443,7 +443,7 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 			}
 			// Re-fetch after insert to capture DB-generated defaults/triggers.
 			modelType := reflect.TypeOf(model)
-			if modelType.Kind() == reflect.Ptr {
+			if modelType.Kind() == reflect.Pointer {
 				modelType = modelType.Elem()
 			}
 			fetchedRecord := reflect.New(modelType).Interface()
@@ -467,7 +467,7 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 
 	case []interface{}:
 		modelType := reflect.TypeOf(model)
-		if modelType.Kind() == reflect.Ptr {
+		if modelType.Kind() == reflect.Pointer {
 			modelType = modelType.Elem()
 		}
 		originals := make([]map[string]interface{}, 0, len(v))
@@ -567,7 +567,7 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 	err = h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		// Read existing record
 		modelType := reflect.TypeOf(model)
-		if modelType.Kind() == reflect.Ptr {
+		if modelType.Kind() == reflect.Pointer {
 			modelType = modelType.Elem()
 		}
 		existingRecord := reflect.New(modelType).Interface()
@@ -641,7 +641,7 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 
 	// Re-fetch the record after transaction commits to capture DB-generated changes.
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 	fetchedRecord := reflect.New(modelType).Interface()
@@ -701,7 +701,7 @@ func (h *Handler) executeDelete(ctx context.Context, schema, entity, id string) 
 	}
 
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 

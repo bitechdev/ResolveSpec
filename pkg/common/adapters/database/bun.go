@@ -39,7 +39,7 @@ func (h *QueryDebugHook) AfterQuery(ctx context.Context, event *bun.QueryEvent) 
 // This helps identify which specific field is causing scanning issues
 func debugScanIntoStruct(rows interface{}, dest interface{}) error {
 	v := reflect.ValueOf(dest)
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return fmt.Errorf("dest must be a pointer")
 	}
 
@@ -59,7 +59,7 @@ func debugScanIntoStruct(rows interface{}, dest interface{}) error {
 		logger.Debug("  Slice element type: %s", elemType)
 
 		// If slice of pointers, get the underlying type
-		if elemType.Kind() == reflect.Ptr {
+		if elemType.Kind() == reflect.Pointer {
 			structType = elemType.Elem()
 		} else {
 			structType = elemType
@@ -747,7 +747,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 
 	// Get the first parent to check the relation field
 	firstParent := parents.Index(0)
-	if firstParent.Kind() == reflect.Ptr {
+	if firstParent.Kind() == reflect.Pointer {
 		firstParent = firstParent.Elem()
 	}
 
@@ -762,7 +762,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 		// Check if any parent has a non-empty slice
 		for i := 0; i < parents.Len(); i++ {
 			parent := parents.Index(i)
-			if parent.Kind() == reflect.Ptr {
+			if parent.Kind() == reflect.Pointer {
 				parent = parent.Elem()
 			}
 			field := parent.FieldByName(relationName)
@@ -771,7 +771,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 				allRelated := reflect.MakeSlice(field.Type(), 0, field.Len()*parents.Len())
 				for j := 0; j < parents.Len(); j++ {
 					p := parents.Index(j)
-					if p.Kind() == reflect.Ptr {
+					if p.Kind() == reflect.Pointer {
 						p = p.Elem()
 					}
 					f := p.FieldByName(relationName)
@@ -784,7 +784,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 				return allRelated, true
 			}
 		}
-	} else if relationField.Kind() == reflect.Ptr {
+	} else if relationField.Kind() == reflect.Pointer {
 		// Check if it's a pointer (has-one/belongs-to)
 		if !relationField.IsNil() {
 			// Already loaded! Collect all related records from all parents
@@ -792,7 +792,7 @@ func checkIfRelationAlreadyLoaded(parents reflect.Value, relationName string) (r
 			allRelated := reflect.MakeSlice(reflect.SliceOf(relatedType), 0, parents.Len())
 			for j := 0; j < parents.Len(); j++ {
 				p := parents.Index(j)
-				if p.Kind() == reflect.Ptr {
+				if p.Kind() == reflect.Pointer {
 					p = p.Elem()
 				}
 				f := p.FieldByName(relationName)
@@ -816,7 +816,7 @@ func (b *BunSelectQuery) loadCustomPreloads(ctx context.Context) error {
 
 	// Get the actual data from the model
 	modelValue := reflect.ValueOf(model.Value())
-	if modelValue.Kind() == reflect.Ptr {
+	if modelValue.Kind() == reflect.Pointer {
 		modelValue = modelValue.Elem()
 	}
 
@@ -884,7 +884,7 @@ func (b *BunSelectQuery) loadRelationLevel(ctx context.Context, parentRecords re
 
 	// Get the first record to inspect the struct type
 	firstRecord := parentRecords.Index(0)
-	if firstRecord.Kind() == reflect.Ptr {
+	if firstRecord.Kind() == reflect.Pointer {
 		firstRecord = firstRecord.Elem()
 	}
 
@@ -930,7 +930,7 @@ func (b *BunSelectQuery) loadRelationLevel(ctx context.Context, parentRecords re
 	if isSlice {
 		relatedType = relatedType.Elem()
 	}
-	if relatedType.Kind() == reflect.Ptr {
+	if relatedType.Kind() == reflect.Pointer {
 		relatedType = relatedType.Elem()
 	}
 
@@ -1018,7 +1018,7 @@ func extractForeignKeyValues(records reflect.Value, fkFieldName string) ([]inter
 
 	for i := 0; i < records.Len(); i++ {
 		record := records.Index(i)
-		if record.Kind() == reflect.Ptr {
+		if record.Kind() == reflect.Pointer {
 			record = record.Elem()
 		}
 
@@ -1083,7 +1083,7 @@ func associateRelatedRecords(parents, related reflect.Value, fieldName string, r
 	for i := 0; i < related.Len(); i++ {
 		relRecord := related.Index(i)
 		relRecordElem := relRecord
-		if relRecordElem.Kind() == reflect.Ptr {
+		if relRecordElem.Kind() == reflect.Pointer {
 			relRecordElem = relRecordElem.Elem()
 		}
 
@@ -1109,7 +1109,7 @@ func associateRelatedRecords(parents, related reflect.Value, fieldName string, r
 	for i := 0; i < parents.Len(); i++ {
 		parentPtr := parents.Index(i)
 		parent := parentPtr
-		if parent.Kind() == reflect.Ptr {
+		if parent.Kind() == reflect.Pointer {
 			parent = parent.Elem()
 		}
 
@@ -1332,11 +1332,11 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 				modelInfo = fmt.Sprintf("Model type: %T", modelValue)
 
 				v := reflect.ValueOf(modelValue)
-				if v.Kind() == reflect.Ptr {
+				if v.Kind() == reflect.Pointer {
 					v = v.Elem()
 				}
 				if v.Kind() == reflect.Slice {
-					if v.Type().Elem().Kind() == reflect.Ptr {
+					if v.Type().Elem().Kind() == reflect.Pointer {
 						modelInfo += fmt.Sprintf(", Slice of: %s", v.Type().Elem().Elem().Name())
 					} else {
 						modelInfo += fmt.Sprintf(", Slice of: %s", v.Type().Elem().Name())

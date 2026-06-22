@@ -31,7 +31,7 @@ func (v *ColumnValidator) buildValidColumns() {
 	modelType := reflect.TypeOf(v.model)
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -290,7 +290,7 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	// Filter Preload columns
 	validPreloads := make([]PreloadOption, 0, len(options.Preload))
 	modelType := reflect.TypeOf(v.model)
-	if modelType != nil && modelType.Kind() == reflect.Ptr {
+	if modelType != nil && modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 	for idx := range options.Preload {

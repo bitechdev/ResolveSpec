@@ -387,7 +387,7 @@ func (g *Generator) generateModelSchema(model interface{}) Schema {
 	}
 
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 	if modelType.Kind() != reflect.Struct {
@@ -418,7 +418,7 @@ func (g *Generator) generateModelSchema(model interface{}) Schema {
 		schema.Properties[fieldName] = propSchema
 
 		// Check if field is required (not a pointer and no omitempty)
-		if field.Type.Kind() != reflect.Ptr && !strings.Contains(jsonTag, "omitempty") {
+		if field.Type.Kind() != reflect.Pointer && !strings.Contains(jsonTag, "omitempty") {
 			schema.Required = append(schema.Required, fieldName)
 		}
 	}
@@ -431,7 +431,7 @@ func (g *Generator) generatePropertySchema(field reflect.StructField) *Schema {
 	schema := &Schema{}
 
 	fieldType := field.Type
-	if fieldType.Kind() == reflect.Ptr {
+	if fieldType.Kind() == reflect.Pointer {
 		fieldType = fieldType.Elem()
 	}
 
@@ -453,7 +453,7 @@ func (g *Generator) generatePropertySchema(field reflect.StructField) *Schema {
 	case reflect.Slice, reflect.Array:
 		schema.Type = "array"
 		elemType := fieldType.Elem()
-		if elemType.Kind() == reflect.Ptr {
+		if elemType.Kind() == reflect.Pointer {
 			elemType = elemType.Elem()
 		}
 		if elemType.Kind() == reflect.Struct {

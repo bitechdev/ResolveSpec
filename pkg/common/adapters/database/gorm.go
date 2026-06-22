@@ -800,7 +800,7 @@ func (g *GormInsertQuery) Scan(ctx context.Context, dest interface{}) (err error
 		col := g.returningColumns[0]
 		if g.model != nil {
 			val := reflect.ValueOf(g.model)
-			if val.Kind() == reflect.Ptr {
+			if val.Kind() == reflect.Pointer {
 				val = val.Elem()
 			}
 			if val.Kind() == reflect.Struct {

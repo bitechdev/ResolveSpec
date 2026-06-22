@@ -107,7 +107,7 @@ func (r *DefaultModelRegistry) RegisterModel(name string, model interface{}) err
 	originalType := modelType
 
 	// Unwrap pointers, slices, and arrays to check the underlying type
-	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array {
+	for modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array {
 		modelType = modelType.Elem()
 	}
 
@@ -124,7 +124,7 @@ func (r *DefaultModelRegistry) RegisterModel(name string, model interface{}) err
 
 	// Additional check: ensure model is not a pointer
 	finalType := reflect.TypeOf(model)
-	if finalType.Kind() == reflect.Ptr {
+	if finalType.Kind() == reflect.Pointer {
 		return fmt.Errorf("model must be a non-pointer struct, got pointer to %s. Use MyModel{} instead of &MyModel{}", finalType.Elem().Name())
 	}
 

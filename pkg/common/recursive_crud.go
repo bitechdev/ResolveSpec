@@ -69,7 +69,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 
 	// Get model type for reflection
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -224,7 +224,7 @@ func (p *NestedCUDProcessor) filterValidFields(data map[string]interface{}, mode
 	}
 
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -410,7 +410,7 @@ func (p *NestedCUDProcessor) processChildRelations(
 		if relatedModelType.Kind() == reflect.Slice {
 			relatedModelType = relatedModelType.Elem()
 		}
-		if relatedModelType.Kind() == reflect.Ptr {
+		if relatedModelType.Kind() == reflect.Pointer {
 			relatedModelType = relatedModelType.Elem()
 		}
 
@@ -590,7 +590,7 @@ func shouldUseNestedProcessorDepth(data map[string]interface{}, model interface{
 
 	// Get model type
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 

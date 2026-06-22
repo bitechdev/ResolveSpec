@@ -90,7 +90,7 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 
 		// Get primary key name from model
 		modelType := reflect.TypeOf(model)
-		if modelType.Kind() == reflect.Ptr {
+		if modelType.Kind() == reflect.Pointer {
 			modelType = modelType.Elem()
 		}
 
@@ -155,13 +155,13 @@ func applyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) err
 
 	// Get model type
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 
 	// Apply column security masking
 	resultValue := reflect.ValueOf(result)
-	if resultValue.Kind() == reflect.Ptr {
+	if resultValue.Kind() == reflect.Pointer {
 		resultValue = resultValue.Elem()
 	}
 

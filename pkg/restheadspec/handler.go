@@ -349,7 +349,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	// Validate and unwrap model type to get base struct
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -1892,7 +1892,7 @@ func (h *Handler) extractNestedRelations(
 ) (_cleanedData map[string]interface{}, _relations map[string]interface{}, _err error) {
 	// Get model type for reflection
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -1934,7 +1934,7 @@ func (h *Handler) processChildRelationsWithParentID(
 ) error {
 	// Get model type for reflection
 	modelType := reflect.TypeOf(parentModel)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -1990,7 +1990,7 @@ func (h *Handler) processChildRelationsForField(
 	if relatedModelType.Kind() == reflect.Slice {
 		relatedModelType = relatedModelType.Elem()
 	}
-	if relatedModelType.Kind() == reflect.Ptr {
+	if relatedModelType.Kind() == reflect.Pointer {
 		relatedModelType = relatedModelType.Elem()
 	}
 
@@ -2413,7 +2413,7 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 	modelType := reflect.TypeOf(model)
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
-	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array {
+	for modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array {
 		modelType = modelType.Elem()
 	}
 
@@ -2462,7 +2462,7 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 		// Check if this is a relation field (slice or struct, but not time.Time)
 		if field.Type.Kind() == reflect.Slice ||
 			(field.Type.Kind() == reflect.Struct && field.Type.Name() != "Time") ||
-			(field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct && field.Type.Elem().Name() != "Time") {
+			(field.Type.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.Struct && field.Type.Elem().Name() != "Time") {
 			metadata.Relations = append(metadata.Relations, jsonName)
 			continue
 		}
@@ -2508,7 +2508,7 @@ func (h *Handler) getColumnType(t reflect.Type) string {
 		return "float"
 	case reflect.Bool:
 		return "boolean"
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return h.getColumnType(t.Elem())
 	default:
 		return "unknown"
@@ -2516,7 +2516,7 @@ func (h *Handler) getColumnType(t reflect.Type) string {
 }
 
 func (h *Handler) isNullable(field reflect.StructField) bool {
-	return field.Type.Kind() == reflect.Ptr
+	return field.Type.Kind() == reflect.Pointer
 }
 
 func (h *Handler) sendResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata) {
@@ -2561,7 +2561,7 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 
 	// Use reflection to check if data is a slice or array
 	dataValue := reflect.ValueOf(data)
-	if dataValue.Kind() == reflect.Ptr {
+	if dataValue.Kind() == reflect.Pointer {
 		dataValue = dataValue.Elem()
 	}
 
@@ -2594,7 +2594,7 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 	}
 
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 	if modelType == nil || modelType.Kind() != reflect.Struct {
@@ -2615,7 +2615,7 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 
 		// Skip relation fields (slices, structs that aren't time.Time, ptrs to struct)
 		ft := field.Type
-		if ft.Kind() == reflect.Ptr {
+		if ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
 		if ft.Kind() == reflect.Slice ||
@@ -2647,7 +2647,7 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 			sqlKey = "unique"
 		}
 
-		nullable := field.Type.Kind() == reflect.Ptr
+		nullable := field.Type.Kind() == reflect.Pointer
 		if strings.Contains(gormLower, "not null") {
 			nullable = false
 		} else if strings.Contains(gormLower, "nullable") || strings.Contains(gormLower, ",null") {
@@ -3015,7 +3015,7 @@ func (h *Handler) buildFilterSQL(filter *common.FilterOption, tableName string) 
 func (h *Handler) setRowNumbersOnRecords(records any, offset int) {
 	// Get the reflect value of the records
 	recordsValue := reflect.ValueOf(records)
-	if recordsValue.Kind() == reflect.Ptr {
+	if recordsValue.Kind() == reflect.Pointer {
 		recordsValue = recordsValue.Elem()
 	}
 
@@ -3030,7 +3030,7 @@ func (h *Handler) setRowNumbersOnRecords(records any, offset int) {
 		record := recordsValue.Index(i)
 
 		// Dereference if it's a pointer
-		if record.Kind() == reflect.Ptr {
+		if record.Kind() == reflect.Pointer {
 			if record.IsNil() {
 				continue
 			}
@@ -3085,7 +3085,7 @@ func (h *Handler) filterExtendedOptions(validator *common.ColumnValidator, optio
 	// Filter Expand columns using the expand relation's model
 	filteredExpands := make([]ExpandOption, 0, len(options.Expand))
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 

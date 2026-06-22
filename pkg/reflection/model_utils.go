@@ -226,7 +226,7 @@ func buildJSONToDBMap(modelType reflect.Type, result map[string]string, scanOnly
 		// Handle embedded structs
 		if field.Anonymous {
 			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			isScanOnly := scanOnly
@@ -544,7 +544,7 @@ func IsColumnWritable(model any, columnName string) bool {
 	// Unwrap pointers and slices to get to the base struct type
 	for modelType != nil {
 		switch modelType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			modelType = modelType.Elem()
 			continue
 		}
@@ -709,7 +709,7 @@ func GetColumnTypeFromModel(model interface{}, colName string) reflect.Kind {
 
 	modelType := reflect.TypeOf(model)
 	// Dereference pointer if needed
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 
@@ -886,7 +886,7 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 	// Unwrap pointer → slice → pointer chains to reach the underlying struct
 	for {
 		switch modelType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			modelType = modelType.Elem()
 			continue
 		}
@@ -947,7 +947,7 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 				// Slice indicates has-many or many-to-many
 				return RelationHasMany
 			}
-			if fieldType.Kind() == reflect.Ptr {
+			if fieldType.Kind() == reflect.Pointer {
 				// Pointer to single struct usually indicates belongs-to or has-one
 				// Check if it has foreignKey (belongs-to) or references (has-one)
 				if strings.Contains(gormTag, "foreignKey:") {
@@ -963,7 +963,7 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 			// Slice of structs → has-many
 			return RelationHasMany
 		}
-		if fieldType.Kind() == reflect.Ptr || fieldType.Kind() == reflect.Struct {
+		if fieldType.Kind() == reflect.Pointer || fieldType.Kind() == reflect.Struct {
 			// Single struct → belongs-to (default assumption for safety)
 			// Using belongs-to as default ensures we use JOIN, which is safer
 			return RelationBelongsTo
@@ -990,7 +990,7 @@ func GetRelationType(model interface{}, fieldName string) RelationType {
 //     Strategy 1 is skipped if the matched field is a declared relation (rel:) or
 //     has a GORM tag but carries no explicit FK — callers should use convention.
 func GetForeignKeyColumn(modelType reflect.Type, parentKey string) []string {
-	for modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice {
+	for modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice {
 		modelType = modelType.Elem()
 	}
 	if modelType.Kind() != reflect.Struct {
@@ -1123,7 +1123,7 @@ func MapToStruct(dataMap map[string]interface{}, target interface{}) error {
 	}
 
 	targetValue := reflect.ValueOf(target)
-	if targetValue.Kind() != reflect.Ptr {
+	if targetValue.Kind() != reflect.Pointer {
 		return fmt.Errorf("target must be a pointer to a struct")
 	}
 
@@ -1226,8 +1226,8 @@ func setFieldValue(field reflect.Value, value interface{}) error {
 	}
 
 	// Handle pointer fields
-	if field.Kind() == reflect.Ptr {
-		if valueReflect.Kind() != reflect.Ptr {
+	if field.Kind() == reflect.Pointer {
+		if valueReflect.Kind() != reflect.Pointer {
 			// Create a new pointer and set its value
 			newPtr := reflect.New(field.Type().Elem())
 			if err := setFieldValue(newPtr.Elem(), value); err != nil {
@@ -1418,14 +1418,14 @@ func convertSlice(targetSlice reflect.Value, sourceSlice reflect.Value) error {
 		// Handle nil elements
 		if sourceValue == nil {
 			// For pointer types, nil is valid
-			if targetElemType.Kind() == reflect.Ptr {
+			if targetElemType.Kind() == reflect.Pointer {
 				targetElem.Set(reflect.Zero(targetElemType))
 			}
 			continue
 		}
 
 		// If target element type is a pointer to struct, we need to create new instances
-		if targetElemType.Kind() == reflect.Ptr {
+		if targetElemType.Kind() == reflect.Pointer {
 			// Create a new instance of the pointed-to type
 			newElemPtr := reflect.New(targetElemType.Elem())
 
@@ -1588,7 +1588,7 @@ func GetValidJSONFieldNames(modelType reflect.Type) map[string]bool {
 	// Unwrap pointers and slices to get to the base struct type
 	for modelType != nil {
 		switch modelType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			modelType = modelType.Elem()
 			continue
 		}
@@ -1616,7 +1616,7 @@ func collectValidFieldNames(typ reflect.Type, validFields map[string]bool) {
 		// Check for embedded structs
 		if field.Anonymous {
 			fieldType := field.Type
-			if fieldType.Kind() == reflect.Ptr {
+			if fieldType.Kind() == reflect.Pointer {
 				fieldType = fieldType.Elem()
 			}
 			if fieldType.Kind() == reflect.Struct {
@@ -1655,7 +1655,7 @@ func getRelationModelSingleLevel(model interface{}, fieldName string) interface{
 
 	for {
 		switch modelType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			modelType = modelType.Elem()
 			continue
 		}
@@ -1724,7 +1724,7 @@ func getRelationModelSingleLevel(model interface{}, fieldName string) interface{
 
 	for {
 		switch targetType.Kind() {
-		case reflect.Ptr, reflect.Slice:
+		case reflect.Pointer, reflect.Slice:
 			targetType = targetType.Elem()
 			if targetType == nil {
 				return nil

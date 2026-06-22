@@ -243,7 +243,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	// Validate and unwrap model type to get base struct
 	modelType := reflect.TypeOf(model)
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -1547,7 +1547,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
-	if modelType.Kind() == reflect.Ptr {
+	if modelType.Kind() == reflect.Pointer {
 		modelType = modelType.Elem()
 	}
 	recordToDelete := reflect.New(modelType).Interface()
@@ -1822,7 +1822,7 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 	modelType := reflect.TypeOf(model)
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -1966,7 +1966,7 @@ func getColumnType(field reflect.StructField) string {
 
 func isNullable(field reflect.StructField) bool {
 	// Check if it's a pointer type
-	if field.Type.Kind() == reflect.Ptr {
+	if field.Type.Kind() == reflect.Pointer {
 		return true
 	}
 
@@ -1992,7 +1992,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 	modelType := reflect.TypeOf(model)
 
 	// Unwrap pointers, slices, and arrays to get to the base struct type
-	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
 		modelType = modelType.Elem()
 	}
 
@@ -2140,7 +2140,7 @@ func toSnakeCase(s string) string {
 func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
 	// Get the reflect value of the records
 	recordsValue := reflect.ValueOf(records)
-	if recordsValue.Kind() == reflect.Ptr {
+	if recordsValue.Kind() == reflect.Pointer {
 		recordsValue = recordsValue.Elem()
 	}
 
@@ -2155,7 +2155,7 @@ func (h *Handler) setRowNumbersOnRecords(records interface{}, offset int) {
 		record := recordsValue.Index(i)
 
 		// Dereference if it's a pointer
-		if record.Kind() == reflect.Ptr {
+		if record.Kind() == reflect.Pointer {
 			if record.IsNil() {
 				continue
 			}

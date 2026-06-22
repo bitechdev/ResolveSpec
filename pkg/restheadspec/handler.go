@@ -289,7 +289,8 @@ func (h *Handler) HandleGet(w common.ResponseWriter, r common.Request, params ma
 		Limit:    0,
 		Offset:   0,
 	}
-	h.sendFormattedResponse(w, tableMetadata, responseMetadata, options)
+	tableName := h.getTableName(schema, entity, model)
+	h.sendFormattedResponse(w, tableMetadata, responseMetadata, tableName, model, options)
 }
 
 // handleMeta processes meta operation requests
@@ -848,7 +849,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		return
 	}
 
-	h.sendFormattedResponse(w, modelPtr, metadata, options)
+	h.sendFormattedResponse(w, modelPtr, metadata, tableName, model, options)
 }
 
 // applyPreloadWithRecursion applies a preload with support for ComputedQL and recursive preloading
@@ -2585,8 +2586,103 @@ func (h *Handler) normalizeResultArray(data interface{}) interface{} {
 	return data
 }
 
-// sendFormattedResponse sends response with formatting options
-func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, options ExtendedRequestOptions) {
+// buildDetailFields returns the field metadata list for the detail API format,
+// containing only non-relation scalar columns derived from the model's struct tags.
+func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDetail {
+	if model == nil {
+		return []reflection.ModelFieldDetail{}
+	}
+
+	modelType := reflect.TypeOf(model)
+	for modelType != nil && (modelType.Kind() == reflect.Ptr || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+		modelType = modelType.Elem()
+	}
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return []reflection.ModelFieldDetail{}
+	}
+
+	fields := make([]reflection.ModelFieldDetail, 0, modelType.NumField())
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "-" {
+			continue
+		}
+
+		// Skip relation fields (slices, structs that aren't time.Time, ptrs to struct)
+		ft := field.Type
+		if ft.Kind() == reflect.Ptr {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Slice ||
+			(ft.Kind() == reflect.Struct && ft.Name() != "Time") {
+			continue
+		}
+
+		jsonName := strings.Split(jsonTag, ",")[0]
+		if jsonName == "" {
+			jsonName = field.Name
+		}
+
+		gormTag := field.Tag.Get("gorm")
+		sqlName := fnFindTagVal(gormTag, "column:")
+		if sqlName == "" {
+			sqlName = jsonName
+		}
+
+		sqlDataType := fnFindTagVal(gormTag, "type:")
+
+		var sqlKey string
+		gormLower := strings.ToLower(gormTag)
+		switch {
+		case strings.Contains(gormLower, "identity") || strings.Contains(gormLower, "primary_key") || strings.Contains(gormLower, "primarykey"):
+			sqlKey = "primary_key"
+		case strings.Contains(gormLower, "uniqueindex"):
+			sqlKey = "uniqueindex"
+		case strings.Contains(gormLower, "unique"):
+			sqlKey = "unique"
+		}
+
+		nullable := field.Type.Kind() == reflect.Ptr
+		if strings.Contains(gormLower, "not null") {
+			nullable = false
+		} else if strings.Contains(gormLower, "nullable") || strings.Contains(gormLower, ",null") {
+			nullable = true
+		}
+
+		fields = append(fields, reflection.ModelFieldDetail{
+			Name:        jsonName,
+			DataType:    h.getColumnType(field.Type),
+			SQLName:     sqlName,
+			SQLDataType: sqlDataType,
+			SQLKey:      sqlKey,
+			Nullable:    nullable,
+		})
+	}
+	return fields
+}
+
+// fnFindTagVal extracts a value from a semicolon-separated struct tag string.
+func fnFindTagVal(tag, key string) string {
+	lower := strings.ToLower(tag)
+	idx := strings.Index(lower, strings.ToLower(key))
+	if idx < 0 {
+		return ""
+	}
+	val := tag[idx+len(key):]
+	if end := strings.Index(val, ";"); end >= 0 {
+		val = val[:end]
+	}
+	return val
+}
+
+// sendFormattedResponse sends response with formatting options.
+// model is used when ResponseFormat is "detail" to generate the fields metadata list.
+func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{}, metadata *common.Metadata, tableName string, model interface{}, options ExtendedRequestOptions) {
 	// Handle nil data - convert to empty array
 	if data == nil {
 		data = []interface{}{}
@@ -2639,8 +2735,29 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 		if err := w.WriteJSON(response); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
+	case "detail":
+		// Detail format: { count, fields, items, tablename, tableprefix, total }
+		var count, total int64
+		if metadata != nil {
+			count = metadata.Count
+			total = metadata.Total
+		}
+		tablePrefix := reflection.ExtractTableNameOnly(tableName)
+		fieldList := h.buildDetailFields(model)
+		response := map[string]interface{}{
+			"count":       strconv.FormatInt(count, 10),
+			"fields":      fieldList,
+			"items":       data,
+			"tablename":   tableName,
+			"tableprefix": tablePrefix,
+			"total":       strconv.FormatInt(total, 10),
+		}
+		w.WriteHeader(http.StatusOK)
+		if err := w.WriteJSON(response); err != nil {
+			logger.Error("Failed to write JSON response: %v", err)
+		}
 	default:
-		// Default/detail format: standard response with metadata
+		// Default format: standard response with metadata
 		response := common.Response{
 			Success:  true,
 			Data:     data,

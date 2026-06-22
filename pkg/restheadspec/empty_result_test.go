@@ -95,7 +95,7 @@ func TestSendFormattedResponse_NoDataFoundHeader(t *testing.T) {
 
 	// Test with empty data
 	emptyData := []interface{}{}
-	handler.sendFormattedResponse(mockWriter, emptyData, metadata, options)
+	handler.sendFormattedResponse(mockWriter, emptyData, metadata, "", nil, options)
 
 	// Check if X-No-Data-Found header was set
 	if mockWriter.headers["X-No-Data-Found"] != "true" {

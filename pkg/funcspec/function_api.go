@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
+	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 	"github.com/bitechdev/ResolveSpec/pkg/restheadspec"
 	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
@@ -367,13 +368,17 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			}
 
 		case "detail":
-			// Detail format: complex API with metadata
+			// Detail format: { count, fields, items, tablename, tableprefix, total }
+			tableName := r.URL.Path
+			tablePrefix := reflection.ExtractTableNameOnly(tableName)
+			fields := buildDetailFieldsFromRows(dbobjlist)
 			metaobj := map[string]interface{}{
-				"items":       dbobjlist,
 				"count":       fmt.Sprintf("%d", len(dbobjlist)),
+				"fields":      fields,
+				"items":       dbobjlist,
+				"tablename":   tableName,
+				"tableprefix": tablePrefix,
 				"total":       fmt.Sprintf("%d", total),
-				"tablename":   r.URL.Path,
-				"tableprefix": "gsql",
 			}
 			data, err := json.Marshal(metaobj)
 			if err != nil {
@@ -1078,6 +1083,49 @@ func getReplacementForBlankParam(sqlquery, param string) string {
 // 	}
 // 	return result
 // }
+
+// buildDetailFieldsFromRows builds a field metadata list from the column names and value types
+// of a raw SQL result set. Used when no model struct is available (funcspec raw queries).
+func buildDetailFieldsFromRows(rows []map[string]interface{}) []reflection.ModelFieldDetail {
+	if len(rows) == 0 {
+		return []reflection.ModelFieldDetail{}
+	}
+	first := rows[0]
+	fields := make([]reflection.ModelFieldDetail, 0, len(first))
+	for colName, val := range first {
+		dataType := inferGoType(val)
+		fields = append(fields, reflection.ModelFieldDetail{
+			Name:        colName,
+			DataType:    dataType,
+			SQLName:     colName,
+			SQLDataType: "",
+			SQLKey:      "",
+			Nullable:    val == nil,
+		})
+	}
+	return fields
+}
+
+// inferGoType returns a simple type name for a value, used for detail field metadata.
+func inferGoType(val interface{}) string {
+	if val == nil {
+		return "interface{}"
+	}
+	switch val.(type) {
+	case bool:
+		return "bool"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return "int64"
+	case float32, float64:
+		return "float64"
+	case string:
+		return "string"
+	case []byte:
+		return "[]byte"
+	default:
+		return "interface{}"
+	}
+}
 
 // getIPAddress extracts the real IP address from the request
 func getIPAddress(r *http.Request) string {

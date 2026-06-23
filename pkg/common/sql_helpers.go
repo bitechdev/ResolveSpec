@@ -453,7 +453,7 @@ func containsTopLevelOR(clause string) bool {
 func splitByAND(where string) []string {
 	conditions := []string{}
 	currentCondition := strings.Builder{}
-	depth := 0         // parenthesis nesting depth
+	depth := 0 // parenthesis nesting depth
 	inSingleQuote := false
 	afterBetween := false // true after seeing BETWEEN at depth 0; next AND belongs to it
 	i := 0

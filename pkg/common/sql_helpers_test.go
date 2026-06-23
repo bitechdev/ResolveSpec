@@ -520,6 +520,38 @@ func TestSplitByAND(t *testing.T) {
 			input:    "a = 1 AND b = 2 AND c = 3 and (select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3",
 			expected: []string{"a = 1", "b = 2", "c = 3", "(select s from generate_series(1,10) s where s < 10 and s > 0 offset 2 limit 1) = 3"},
 		},
+		// BETWEEN-aware cases: the AND inside BETWEEN x AND y must not cause a split.
+		{
+			name:     "BETWEEN does not split on its AND",
+			input:    "col between '2025-08-31' and '1970-01-01'",
+			expected: []string{"col between '2025-08-31' and '1970-01-01'"},
+		},
+		{
+			name:     "BETWEEN uppercase AND",
+			input:    "col BETWEEN '2025-08-31' AND '1970-01-01'",
+			expected: []string{"col BETWEEN '2025-08-31' AND '1970-01-01'"},
+		},
+		{
+			name:     "BETWEEN followed by a regular AND conjunction",
+			input:    "col between 1 and 5 and other = 'x'",
+			expected: []string{"col between 1 and 5", "other = 'x'"},
+		},
+		{
+			name:     "two BETWEEN conditions joined by AND",
+			input:    "col1 between 1 and 5 and col2 between 10 and 20",
+			expected: []string{"col1 between 1 and 5", "col2 between 10 and 20"},
+		},
+		{
+			name:  "complex OR block with multiple BETWEENs (real-world case)",
+			input: "tbl.applicationdate between '2025-08-31' and '1970-01-01'\n  or tbl.capturedate between '2025-08-31' and '1970-01-01'\n  or tbl.startdate between '2025-08-31' AND '1970-01-01'",
+			expected: []string{"tbl.applicationdate between '2025-08-31' and '1970-01-01'\n  or tbl.capturedate between '2025-08-31' and '1970-01-01'\n  or tbl.startdate between '2025-08-31' AND '1970-01-01'"},
+		},
+		// Quote-aware cases: AND inside a string literal must not split.
+		{
+			name:     "AND inside single-quoted string is not a split point",
+			input:    "comment = 'this and that' and status = 'active'",
+			expected: []string{"comment = 'this and that'", "status = 'active'"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -916,6 +948,25 @@ name:      "Unregistered table with true - should not prefix true",
 where:     "(true AND status = 'active')",
 tableName: "unregistered_table",
 expected:  "(true AND unregistered_table.status = 'active')",
+},
+// BETWEEN regression: date literals inside BETWEEN must not be prefixed as columns.
+{
+name:      "BETWEEN date range - second date must not be prefixed",
+where:     "applicationdate between '2025-08-31' and '1970-01-01'",
+tableName: "unregistered_table",
+expected:  "unregistered_table.applicationdate between '2025-08-31' and '1970-01-01'",
+},
+{
+name:      "Already-prefixed BETWEEN column - unchanged",
+where:     `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
+tableName: "v_webui_clients",
+expected:  `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
+},
+{
+name:      "Complex OR block with multiple BETWEENs - date values must not be prefixed",
+where:     `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
+tableName: "v_webui_clients",
+expected:  `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
 },
 }
 

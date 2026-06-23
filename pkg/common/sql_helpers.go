@@ -446,18 +446,36 @@ func containsTopLevelOR(clause string) bool {
 	return false
 }
 
-// splitByAND splits a WHERE clause by AND operators (case-insensitive)
-// This is parenthesis-aware and won't split on AND operators inside subqueries
+// splitByAND splits a WHERE clause by AND operators (case-insensitive).
+// It is parenthesis-aware (won't split inside subqueries), quote-aware
+// (won't split on AND inside single-quoted strings), and BETWEEN-aware
+// (won't split on the AND that separates the two operands of BETWEEN x AND y).
 func splitByAND(where string) []string {
 	conditions := []string{}
 	currentCondition := strings.Builder{}
-	depth := 0 // Track parenthesis depth
+	depth := 0         // parenthesis nesting depth
+	inSingleQuote := false
+	afterBetween := false // true after seeing BETWEEN at depth 0; next AND belongs to it
 	i := 0
 
 	for i < len(where) {
 		ch := where[i]
 
-		// Track parenthesis depth
+		// Track single-quote state so we never split on AND inside string literals.
+		if ch == '\'' {
+			inSingleQuote = !inSingleQuote
+			currentCondition.WriteByte(ch)
+			i++
+			continue
+		}
+
+		if inSingleQuote {
+			currentCondition.WriteByte(ch)
+			i++
+			continue
+		}
+
+		// Track parenthesis depth (outside quotes only).
 		if ch == '(' {
 			depth++
 			currentCondition.WriteByte(ch)
@@ -470,32 +488,39 @@ func splitByAND(where string) []string {
 			continue
 		}
 
-		// Only look for AND operators at depth 0 (not inside parentheses)
+		// All keyword checks only apply at depth 0 (not inside subqueries).
 		if depth == 0 {
-			// Check if we're at an AND operator (case-insensitive)
-			// We need at least " AND " (5 chars) or " and " (5 chars)
-			if i+5 <= len(where) {
-				substring := where[i : i+5]
-				lowerSubstring := strings.ToLower(substring)
+			// Detect " BETWEEN " (9 chars, case-insensitive) so the very next
+			// top-level AND is recognised as part of the BETWEEN syntax.
+			if i+9 <= len(where) && strings.ToLower(where[i:i+9]) == " between " {
+				afterBetween = true
+				currentCondition.WriteString(where[i : i+9])
+				i += 9
+				continue
+			}
 
-				if lowerSubstring == " and " {
-					// Found an AND operator at the top level
-					// Add the current condition to the list
-					conditions = append(conditions, currentCondition.String())
-					currentCondition.Reset()
-					// Skip past the AND operator
+			// Detect " AND " (5 chars, case-insensitive).
+			if i+5 <= len(where) && strings.ToLower(where[i:i+5]) == " and " {
+				if afterBetween {
+					// This AND closes a BETWEEN expression — do NOT split.
+					afterBetween = false
+					currentCondition.WriteString(where[i : i+5])
 					i += 5
 					continue
 				}
+				// Regular conjunction — split here.
+				conditions = append(conditions, currentCondition.String())
+				currentCondition.Reset()
+				i += 5
+				continue
 			}
 		}
 
-		// Not an AND operator or we're inside parentheses, just add the character
 		currentCondition.WriteByte(ch)
 		i++
 	}
 
-	// Add the last condition
+	// Add the last condition.
 	if currentCondition.Len() > 0 {
 		conditions = append(conditions, currentCondition.String())
 	}

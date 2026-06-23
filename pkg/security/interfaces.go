@@ -18,6 +18,8 @@ type UserContext struct {
 	Claims           map[string]any `json:"claims"`
 	Meta             map[string]any `json:"meta"`               // Additional metadata that can hold any JSON-serializable values
 	TwoFactorEnabled bool           `json:"two_factor_enabled"` // Indicates if 2FA is enabled for this user
+	ProgramUserID    int            `json:"program_user_id"`
+	ProgramUserTable string         `json:"program_user_table"`
 }
 
 // LoginRequest contains credentials for login

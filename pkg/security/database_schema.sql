@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP,
+    -- Program-level user mapping
+    program_user_id INTEGER DEFAULT 0,
+    program_user_table VARCHAR(255) DEFAULT '',
     -- OAuth2 fields
     remote_id VARCHAR(255), -- Provider's user ID (e.g., Google sub, GitHub id)
     auth_provider VARCHAR(50), -- 'local', 'google', 'github', 'microsoft', 'facebook', etc.
@@ -99,6 +102,8 @@ DECLARE
     v_expires_at TIMESTAMP;
     v_ip_address TEXT;
     v_user_agent TEXT;
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Extract login request fields
     v_username := p_request->>'username';
@@ -106,8 +111,8 @@ BEGIN
     v_user_agent := p_request->'claims'->>'user_agent';
 
     -- Validate user credentials
-    SELECT id, username, email, password, user_level, roles
-    INTO v_user_id, v_username, v_email, v_password_hash, v_user_level, v_roles
+    SELECT id, username, email, password, user_level, roles, program_user_id, program_user_table
+    INTO v_user_id, v_username, v_email, v_password_hash, v_user_level, v_roles, v_program_user_id, v_program_user_table
     FROM users
     WHERE username = v_username AND is_active = true;
 
@@ -146,7 +151,9 @@ BEGIN
                 'email', v_email,
                 'user_level', v_user_level,
                 'roles', string_to_array(COALESCE(v_roles, ''), ','),
-                'session_id', v_session_token
+                'session_id', v_session_token,
+                'program_user_id', COALESCE(v_program_user_id, 0),
+                'program_user_table', COALESCE(v_program_user_table, '')
             ),
             'expires_in', 86400 -- 24 hours in seconds
         );
@@ -195,12 +202,16 @@ DECLARE
     v_user_level INTEGER;
     v_roles TEXT;
     v_session_id TEXT;
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Query session and user data
     SELECT
-        s.user_id, u.username, u.email, u.user_level, u.roles, s.session_token
+        s.user_id, u.username, u.email, u.user_level, u.roles, s.session_token,
+        u.program_user_id, u.program_user_table
     INTO
-        v_user_id, v_username, v_email, v_user_level, v_roles, v_session_id
+        v_user_id, v_username, v_email, v_user_level, v_roles, v_session_id,
+        v_program_user_id, v_program_user_table
     FROM user_sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.session_token = p_session_token
@@ -222,7 +233,9 @@ BEGIN
             'email', v_email,
             'user_level', v_user_level,
             'session_id', v_session_id,
-            'roles', string_to_array(COALESCE(v_roles, ''), ',')
+            'roles', string_to_array(COALESCE(v_roles, ''), ','),
+            'program_user_id', COALESCE(v_program_user_id, 0),
+            'program_user_table', COALESCE(v_program_user_table, '')
         );
 END;
 $$ LANGUAGE plpgsql;
@@ -266,10 +279,14 @@ DECLARE
     v_expires_at TIMESTAMP;
     v_ip_address TEXT;
     v_user_agent TEXT;
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Verify old session exists and is valid
-    SELECT s.user_id, u.username, u.email, u.user_level, u.roles, s.ip_address, s.user_agent
-    INTO v_user_id, v_username, v_email, v_user_level, v_roles, v_ip_address, v_user_agent
+    SELECT s.user_id, u.username, u.email, u.user_level, u.roles, s.ip_address, s.user_agent,
+           u.program_user_id, u.program_user_table
+    INTO v_user_id, v_username, v_email, v_user_level, v_roles, v_ip_address, v_user_agent,
+         v_program_user_id, v_program_user_table
     FROM user_sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.session_token = p_old_session_token
@@ -302,7 +319,9 @@ BEGIN
             'email', v_email,
             'user_level', v_user_level,
             'session_id', v_new_session_token,
-            'roles', string_to_array(COALESCE(v_roles, ''), ',')
+            'roles', string_to_array(COALESCE(v_roles, ''), ','),
+            'program_user_id', COALESCE(v_program_user_id, 0),
+            'program_user_table', COALESCE(v_program_user_table, '')
         );
 END;
 $$ LANGUAGE plpgsql;
@@ -439,6 +458,8 @@ DECLARE
     v_ip_address TEXT;
     v_user_agent TEXT;
     v_roles_array TEXT[];
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Extract registration request fields
     v_username := p_request->>'username';
@@ -447,6 +468,8 @@ BEGIN
     v_user_level := COALESCE((p_request->>'user_level')::integer, 0);
     v_ip_address := p_request->'claims'->>'ip_address';
     v_user_agent := p_request->'claims'->>'user_agent';
+    v_program_user_id := COALESCE((p_request->>'program_user_id')::integer, 0);
+    v_program_user_table := COALESCE(p_request->>'program_user_table', '');
     
     -- Convert roles array from JSON to comma-separated string
     SELECT array_to_string(ARRAY(SELECT jsonb_array_elements_text(p_request->'roles')), ',')
@@ -485,8 +508,8 @@ BEGIN
     -- v_password := crypt(v_password, gen_salt('bf'));
 
     -- Create new user
-    INSERT INTO users (username, email, password, user_level, roles, is_active, created_at, updated_at)
-    VALUES (v_username, v_email, v_password, v_user_level, v_roles, true, now(), now())
+    INSERT INTO users (username, email, password, user_level, roles, is_active, created_at, updated_at, program_user_id, program_user_table)
+    VALUES (v_username, v_email, v_password, v_user_level, v_roles, true, now(), now(), v_program_user_id, v_program_user_table)
     RETURNING id INTO v_user_id;
 
     -- Generate session token
@@ -512,7 +535,9 @@ BEGIN
                 'email', v_email,
                 'user_level', v_user_level,
                 'roles', string_to_array(COALESCE(v_roles, ''), ','),
-                'session_id', v_session_token
+                'session_id', v_session_token,
+                'program_user_id', v_program_user_id,
+                'program_user_table', v_program_user_table
             ),
             'expires_in', 86400 -- 24 hours in seconds
         );
@@ -671,12 +696,16 @@ DECLARE
     v_user_level INTEGER;
     v_roles TEXT;
     v_expires_at TIMESTAMP;
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Query session and user data from user_sessions table
     SELECT
-        s.user_id, u.username, u.email, u.user_level, u.roles, s.expires_at
+        s.user_id, u.username, u.email, u.user_level, u.roles, s.expires_at,
+        u.program_user_id, u.program_user_table
     INTO
-        v_user_id, v_username, v_email, v_user_level, v_roles, v_expires_at
+        v_user_id, v_username, v_email, v_user_level, v_roles, v_expires_at,
+        v_program_user_id, v_program_user_table
     FROM user_sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.session_token = p_session_token
@@ -698,7 +727,9 @@ BEGIN
             'email', v_email,
             'user_level', v_user_level,
             'session_id', p_session_token,
-            'roles', string_to_array(COALESCE(v_roles, ''), ',')
+            'roles', string_to_array(COALESCE(v_roles, ''), ','),
+            'program_user_id', COALESCE(v_program_user_id, 0),
+            'program_user_table', COALESCE(v_program_user_table, '')
         );
 END;
 $$ LANGUAGE plpgsql;
@@ -815,10 +846,12 @@ DECLARE
     v_email TEXT;
     v_user_level INTEGER;
     v_roles TEXT;
+    v_program_user_id INTEGER;
+    v_program_user_table TEXT;
 BEGIN
     -- Query user data
-    SELECT username, email, user_level, roles
-    INTO v_username, v_email, v_user_level, v_roles
+    SELECT username, email, user_level, roles, program_user_id, program_user_table
+    INTO v_username, v_email, v_user_level, v_roles, v_program_user_id, v_program_user_table
     FROM users
     WHERE id = p_user_id
       AND is_active = true;
@@ -837,7 +870,9 @@ BEGIN
             'user_name', v_username,
             'email', v_email,
             'user_level', v_user_level,
-            'roles', string_to_array(COALESCE(v_roles, ''), ',')
+            'roles', string_to_array(COALESCE(v_roles, ''), ','),
+            'program_user_id', COALESCE(v_program_user_id, 0),
+            'program_user_table', COALESCE(v_program_user_table, '')
         );
 END;
 $$ LANGUAGE plpgsql;

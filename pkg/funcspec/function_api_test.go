@@ -618,6 +618,91 @@ func TestSqlQueryList(t *testing.T) {
 			},
 		},
 		{
+			name:        "x-detailapi header returns detail format",
+			sqlQuery:    "SELECT * FROM myschema.myentity",
+			noCount:     false,
+			blankParams: false,
+			allowFilter: false,
+			headers:     map[string]string{"x-detailapi": "true"},
+			setupDB: func() *MockDatabase {
+				return &MockDatabase{
+					RunInTransactionFunc: func(ctx context.Context, fn func(common.Database) error) error {
+						db := &MockDatabase{
+							QueryFunc: func(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+								if strings.Contains(query, "COUNT") {
+									dest.(*struct{ Count int64 }).Count = 3
+									return nil
+								}
+								*dest.(*[]map[string]interface{}) = []map[string]interface{}{
+									{"id": float64(1), "name": "Alice"},
+									{"id": float64(2), "name": "Bob"},
+									{"id": float64(3), "name": "Carol"},
+								}
+								return nil
+							},
+						}
+						return fn(db)
+					},
+				}
+			},
+			expectedStatus: 200,
+			validateResp: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var resp map[string]json.RawMessage
+				if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("expected JSON object, got: %s", w.Body.String())
+				}
+
+				for _, key := range []string{"count", "fields", "items", "tablename", "tableprefix", "total"} {
+					if _, ok := resp[key]; !ok {
+						t.Errorf("missing key %q in detail response", key)
+					}
+				}
+
+				var count, total string
+				json.Unmarshal(resp["count"], &count)
+				json.Unmarshal(resp["total"], &total)
+				if count != "3" {
+					t.Errorf("expected count %q, got %q", "3", count)
+				}
+				if total != "3" {
+					t.Errorf("expected total %q, got %q", "3", total)
+				}
+
+				var items []map[string]interface{}
+				if err := json.Unmarshal(resp["items"], &items); err != nil {
+					t.Fatalf("items is not an array: %v", err)
+				}
+				if len(items) != 3 {
+					t.Errorf("expected 3 items, got %d", len(items))
+				}
+
+				var fields []map[string]interface{}
+				if err := json.Unmarshal(resp["fields"], &fields); err != nil {
+					t.Fatalf("fields is not an array: %v", err)
+				}
+				if len(fields) == 0 {
+					t.Error("expected non-empty fields list")
+				}
+				for _, f := range fields {
+					for _, key := range []string{"name", "datatype", "sqlname", "sqldatatype", "sqlkey", "nullable"} {
+						if _, ok := f[key]; !ok {
+							t.Errorf("field %v missing key %q", f, key)
+						}
+					}
+				}
+
+				var tablename, tableprefix string
+				json.Unmarshal(resp["tablename"], &tablename)
+				json.Unmarshal(resp["tableprefix"], &tableprefix)
+				if tablename == "" {
+					t.Error("expected non-empty tablename")
+				}
+				if tableprefix == "" {
+					t.Error("expected non-empty tableprefix")
+				}
+			},
+		},
+		{
 			name:        "List query with noCount",
 			sqlQuery:    "SELECT * FROM users",
 			noCount:     true,

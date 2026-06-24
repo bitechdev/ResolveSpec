@@ -2711,9 +2711,12 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	}
 
 	w.SetHeader("Content-Type", "application/json")
-	w.SetHeader("Content-Range", fmt.Sprintf("%d-%d/%d", metadata.Offset, int64(metadata.Offset)+metadata.Count, metadata.Filtered))
+	w.SetHeader("Content-Range", fmt.Sprintf("items %d-%d/%d", metadata.Offset, int64(metadata.Offset)+metadata.Count, metadata.Filtered))
 	w.SetHeader("X-Api-Range-Total", fmt.Sprintf("%d", metadata.Filtered))
 	w.SetHeader("X-Api-Range-Size", fmt.Sprintf("%d", metadata.Count))
+	w.SetHeader("X-Api-Range-From", fmt.Sprintf("%d", metadata.Offset))
+	w.SetHeader("X-Api-Range-Etotal", fmt.Sprintf("%d", metadata.Filtered))
+	w.SetHeader("X-Api-Modelname", tableName)
 
 	// Format response based on response format option
 	switch options.ResponseFormat {

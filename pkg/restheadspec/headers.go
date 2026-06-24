@@ -225,12 +225,13 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 			limitValueParts := strings.Split(limitValue, ",")
 
 			if len(limitValueParts) > 1 {
-				if offset, err := strconv.Atoi(limitValueParts[0]); err == nil {
-					options.Offset = &offset
-				}
-				if limit, err := strconv.Atoi(limitValueParts[1]); err == nil {
+				if limit, err := strconv.Atoi(limitValueParts[0]); err == nil {
 					options.Limit = &limit
 				}
+				if offset, err := strconv.Atoi(limitValueParts[1]); err == nil {
+					options.Offset = &offset
+				}
+
 			} else {
 				if limit, err := strconv.Atoi(limitValueParts[0]); err == nil {
 					options.Limit = &limit

@@ -488,6 +488,7 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	// For the current process, set GODEBUG=http2xconnect=1 in the environment before launch.
 	if httpServer.Protocols == nil {
 		httpServer.Protocols = &http.Protocols{}
+		httpServer.Protocols.SetHTTP1(true)
 	}
 	if cfg.HTTP2 {
 		if existing := os.Getenv("GODEBUG"); !strings.Contains(existing, "http2xconnect=1") {
@@ -503,6 +504,7 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		httpServer.Protocols.SetHTTP2(true)
 		httpServer.Protocols.SetUnencryptedHTTP2(true)
 	} else {
+		httpServer.Protocols.SetHTTP1(true)
 		httpServer.Protocols.SetHTTP2(false)
 	}
 

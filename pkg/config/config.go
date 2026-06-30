@@ -50,6 +50,10 @@ type ServerInstanceConfig struct {
 	// GZIP enables GZIP compression middleware
 	GZIP bool `mapstructure:"gzip"`
 
+	// HTTP2 enables HTTP/2 with the Extended CONNECT protocol (RFC 8441) for WebSocket support.
+	// Requires TLS; pair with SSLCert/SSLKey, SelfSignedSSL, or AutoTLS.
+	HTTP2 bool `mapstructure:"http2"`
+
 	// TLS/HTTPS configuration options (mutually exclusive)
 	// Option 1: Provide certificate and key files directly
 	SSLCert string `mapstructure:"ssl_cert"`

@@ -16,6 +16,7 @@ func FromConfigInstanceToServerConfig(sic *config.ServerInstanceConfig, handler 
 		Description: sic.Description,
 		Handler:     handler,
 		GZIP:        sic.GZIP,
+		HTTP2:       sic.HTTP2,
 
 		SSLCert:         sic.SSLCert,
 		SSLKey:          sic.SSLKey,

@@ -486,6 +486,10 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		if httpServer.HTTP2 == nil {
 			httpServer.HTTP2 = &http.HTTP2Config{}
 		}
+		httpServer.Protocols.SetHTTP2(true)
+		httpServer.Protocols.SetUnencryptedHTTP2(true)
+	} else {
+		httpServer.Protocols.SetHTTP2(false)
 	}
 
 	gracefulSrv := &gracefulServer{

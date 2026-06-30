@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -461,15 +462,34 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	}
 
 	// Create gracefulServer
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		IdleTimeout:  cfg.IdleTimeout,
+		TLSConfig:    tlsConfig,
+	}
+
+	// Enable HTTP/2 with Extended CONNECT (RFC 8441) for WebSocket-over-H2 support.
+	// The GODEBUG=http2xconnect=1 flag is read by net/http's init(); setting it here
+	// ensures it propagates to subprocesses and any future process restarts.
+	// For the current process, set GODEBUG=http2xconnect=1 in the environment before launch.
+	if cfg.HTTP2 {
+		if existing := os.Getenv("GODEBUG"); !strings.Contains(existing, "http2xconnect=1") {
+			if existing == "" {
+				os.Setenv("GODEBUG", "http2xconnect=1")
+			} else {
+				os.Setenv("GODEBUG", existing+",http2xconnect=1")
+			}
+		}
+		if httpServer.HTTP2 == nil {
+			httpServer.HTTP2 = &http.HTTP2Config{}
+		}
+	}
+
 	gracefulSrv := &gracefulServer{
-		server: &http.Server{
-			Addr:         addr,
-			Handler:      handler,
-			ReadTimeout:  cfg.ReadTimeout,
-			WriteTimeout: cfg.WriteTimeout,
-			IdleTimeout:  cfg.IdleTimeout,
-			TLSConfig:    tlsConfig,
-		},
+		server:           httpServer,
 		shutdownTimeout:  cfg.ShutdownTimeout,
 		drainTimeout:     cfg.DrainTimeout,
 		shutdownComplete: make(chan struct{}),

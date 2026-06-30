@@ -42,6 +42,10 @@ type Config struct {
 	// AutoTLSEmail is the email for Let's Encrypt registration (optional but recommended)
 	AutoTLSEmail string
 
+	// PanicHandler is called when a request handler panics.
+	// If nil, the default middleware.PanicRecovery is used (logs, records metric, returns 500).
+	PanicHandler func(w http.ResponseWriter, r *http.Request, rcv any)
+
 	// Graceful shutdown configuration
 	// ShutdownTimeout is the maximum time to wait for graceful shutdown
 	// Default: 30 seconds

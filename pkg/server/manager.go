@@ -452,8 +452,19 @@ func newInstance(cfg Config) (*serverInstance, error) {
 		handler = gz(handler)
 	}
 
-	// Wrap with the panic recovery middleware
-	handler = middleware.PanicRecovery(handler)
+	// Wrap with panic recovery — use caller-supplied handler if provided
+	if cfg.PanicHandler != nil {
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rcv := recover(); rcv != nil {
+					cfg.PanicHandler(w, r, rcv)
+				}
+			}()
+			handler.ServeHTTP(w, r)
+		})
+	} else {
+		handler = middleware.PanicRecovery(handler)
+	}
 
 	// Configure TLS if any TLS option is enabled
 	tlsConfig, certFile, keyFile, err := configureTLS(cfg)
@@ -475,6 +486,9 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	// The GODEBUG=http2xconnect=1 flag is read by net/http's init(); setting it here
 	// ensures it propagates to subprocesses and any future process restarts.
 	// For the current process, set GODEBUG=http2xconnect=1 in the environment before launch.
+	if httpServer.Protocols == nil {
+		httpServer.Protocols = &http.Protocols{}
+	}
 	if cfg.HTTP2 {
 		if existing := os.Getenv("GODEBUG"); !strings.Contains(existing, "http2xconnect=1") {
 			if existing == "" {

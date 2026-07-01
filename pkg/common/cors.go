@@ -115,32 +115,39 @@ func GetHeadSpecHeaders() []string {
 
 // SetCORSHeaders sets CORS headers on a response writer
 func SetCORSHeaders(w ResponseWriter, r Request, config CORSConfig) {
-	// Set allowed origins
-	// if len(config.AllowedOrigins) > 0 {
-	// 	w.SetHeader("Access-Control-Allow-Origin", strings.Join(config.AllowedOrigins, ", "))
-	// }
-
-	// Todo origin list parsing
-	w.SetHeader("Access-Control-Allow-Origin", "*")
+	// Reflect the request origin; fall back to wildcard only when no origin is present
+	origin := r.Header("Origin")
+	if origin == "" {
+		origin = "*"
+	} else {
+		// Vary must be set so caches don't serve one origin's response to another
+		httpW := w.UnderlyingResponseWriter()
+		httpW.Header().Set("Vary", "Origin")
+	}
+	w.SetHeader("Access-Control-Allow-Origin", origin)
 
 	// Set allowed methods
 	if len(config.AllowedMethods) > 0 {
 		w.SetHeader("Access-Control-Allow-Methods", strings.Join(config.AllowedMethods, ", "))
 	}
 
-	// Set allowed headers
-	// if len(config.AllowedHeaders) > 0 {
-	// 	w.SetHeader("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
-	// }
-	w.SetHeader("Access-Control-Allow-Headers", "*")
+	// Reflect the preflight request headers when present; otherwise use the explicit config list
+	requestedHeaders := r.Header("Access-Control-Request-Headers")
+	if requestedHeaders != "" {
+		w.SetHeader("Access-Control-Allow-Headers", requestedHeaders)
+	} else if len(config.AllowedHeaders) > 0 {
+		w.SetHeader("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
+	}
 
 	// Set max age
 	if config.MaxAge > 0 {
 		w.SetHeader("Access-Control-Max-Age", fmt.Sprintf("%d", config.MaxAge))
 	}
 
-	// Allow credentials
-	w.SetHeader("Access-Control-Allow-Credentials", "true")
+	// Allow credentials only when a specific origin is reflected (not wildcard)
+	if origin != "*" {
+		w.SetHeader("Access-Control-Allow-Credentials", "true")
+	}
 
 	// Expose headers that clients can read
 	exposeHeaders := config.AllowedHeaders

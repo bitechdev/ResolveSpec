@@ -44,6 +44,10 @@ type OAuthTokenInfo struct {
 
 // OAuthRegisterClient persists an OAuth2 client registration.
 func (a *DatabaseAuthenticator) OAuthRegisterClient(ctx context.Context, client *OAuthServerClient) (*OAuthServerClient, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthRegisterClient) {
+		return a.oauthRegisterClientDirect(ctx, client)
+	}
+
 	input, err := json.Marshal(client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal client: %w", err)
@@ -76,6 +80,10 @@ func (a *DatabaseAuthenticator) OAuthRegisterClient(ctx context.Context, client 
 
 // OAuthGetClient retrieves a registered client by ID.
 func (a *DatabaseAuthenticator) OAuthGetClient(ctx context.Context, clientID string) (*OAuthServerClient, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthGetClient) {
+		return a.oauthGetClientDirect(ctx, clientID)
+	}
+
 	var success bool
 	var errMsg *string
 	var data []byte
@@ -103,6 +111,10 @@ func (a *DatabaseAuthenticator) OAuthGetClient(ctx context.Context, clientID str
 
 // OAuthSaveCode persists an authorization code.
 func (a *DatabaseAuthenticator) OAuthSaveCode(ctx context.Context, code *OAuthCode) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthSaveCode) {
+		return a.oauthSaveCodeDirect(ctx, code)
+	}
+
 	input, err := json.Marshal(code)
 	if err != nil {
 		return fmt.Errorf("failed to marshal code: %w", err)
@@ -129,6 +141,10 @@ func (a *DatabaseAuthenticator) OAuthSaveCode(ctx context.Context, code *OAuthCo
 
 // OAuthExchangeCode retrieves and deletes an authorization code (single use).
 func (a *DatabaseAuthenticator) OAuthExchangeCode(ctx context.Context, code string) (*OAuthCode, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthExchangeCode) {
+		return a.oauthExchangeCodeDirect(ctx, code)
+	}
+
 	var success bool
 	var errMsg *string
 	var data []byte
@@ -157,6 +173,10 @@ func (a *DatabaseAuthenticator) OAuthExchangeCode(ctx context.Context, code stri
 
 // OAuthIntrospectToken validates a token and returns its metadata (RFC 7662).
 func (a *DatabaseAuthenticator) OAuthIntrospectToken(ctx context.Context, token string) (*OAuthTokenInfo, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthIntrospect) {
+		return a.oauthIntrospectTokenDirect(ctx, token)
+	}
+
 	var success bool
 	var errMsg *string
 	var data []byte
@@ -184,6 +204,10 @@ func (a *DatabaseAuthenticator) OAuthIntrospectToken(ctx context.Context, token 
 
 // OAuthRevokeToken revokes a token by deleting the session (RFC 7009).
 func (a *DatabaseAuthenticator) OAuthRevokeToken(ctx context.Context, token string) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthRevoke) {
+		return a.oauthRevokeTokenDirect(ctx, token)
+	}
+
 	var success bool
 	var errMsg *string
 

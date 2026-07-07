@@ -23,6 +23,10 @@ type DatabaseKeyStoreOptions struct {
 	CacheTTL time.Duration
 	// SQLNames provides custom procedure names. If nil, uses DefaultKeyStoreSQLNames().
 	SQLNames *KeyStoreSQLNames
+	// TableNames provides custom table names for Direct mode. If nil, uses DefaultKeyStoreTableNames().
+	TableNames *KeyStoreTableNames
+	// QueryMode selects stored-procedure vs Direct-mode SQL. Default (zero value) is ModeAuto.
+	QueryMode QueryMode
 	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
 	// If nil, reconnection is disabled.
 	DBFactory func() (*sql.DB, error)
@@ -38,12 +42,15 @@ type DatabaseKeyStoreOptions struct {
 // cache TTL, a deleted key may continue to authenticate for up to CacheTTL
 // (default 2 minutes) if the cache entry cannot be invalidated.
 type DatabaseKeyStore struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	sqlNames  *KeyStoreSQLNames
-	cache     *cache.Cache
-	cacheTTL  time.Duration
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	sqlNames   *KeyStoreSQLNames
+	tableNames *KeyStoreTableNames
+	queryMode  QueryMode
+	capability *dbCapability
+	cache      *cache.Cache
+	cacheTTL   time.Duration
 }
 
 // NewDatabaseKeyStore creates a DatabaseKeyStore with optional configuration.
@@ -60,12 +67,16 @@ func NewDatabaseKeyStore(db *sql.DB, opts ...DatabaseKeyStoreOptions) *DatabaseK
 		c = cache.GetDefaultCache()
 	}
 	names := MergeKeyStoreSQLNames(DefaultKeyStoreSQLNames(), o.SQLNames)
+	tableNames := resolveKeyStoreTableNames(o.TableNames)
 	return &DatabaseKeyStore{
-		db:        db,
-		dbFactory: o.DBFactory,
-		sqlNames:  names,
-		cache:     c,
-		cacheTTL:  o.CacheTTL,
+		db:         db,
+		dbFactory:  o.DBFactory,
+		sqlNames:   names,
+		tableNames: tableNames,
+		queryMode:  o.QueryMode,
+		capability: newDBCapability(),
+		cache:      c,
+		cacheTTL:   o.CacheTTL,
 	}
 }
 
@@ -86,6 +97,9 @@ func (ks *DatabaseKeyStore) reconnectDB() error {
 	ks.dbMu.Lock()
 	ks.db = newDB
 	ks.dbMu.Unlock()
+	if ks.capability != nil {
+		ks.capability.reset()
+	}
 	return nil
 }
 
@@ -98,6 +112,14 @@ func (ks *DatabaseKeyStore) CreateKey(ctx context.Context, req CreateKeyRequest)
 	}
 	rawKey := base64.RawURLEncoding.EncodeToString(rawBytes)
 	hash := hashSHA256Hex(rawKey)
+
+	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.CreateKey) {
+		key, err := ks.createKeyDirect(ctx, req, hash)
+		if err != nil {
+			return nil, err
+		}
+		return &CreateKeyResponse{Key: *key, RawKey: rawKey}, nil
+	}
 
 	type createRequest struct {
 		UserID    int            `json:"user_id"`
@@ -145,6 +167,10 @@ func (ks *DatabaseKeyStore) CreateKey(ctx context.Context, req CreateKeyRequest)
 // GetUserKeys returns all active, non-expired keys for the given user.
 // Pass an empty KeyType to return all types.
 func (ks *DatabaseKeyStore) GetUserKeys(ctx context.Context, userID int, keyType KeyType) ([]UserKey, error) {
+	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.GetUserKeys) {
+		return ks.getUserKeysDirect(ctx, userID, keyType)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 	var keysJSON sql.NullString
@@ -173,6 +199,10 @@ func (ks *DatabaseKeyStore) GetUserKeys(ctx context.Context, userID int, keyType
 // The delete procedure returns the key_hash so no separate lookup is needed.
 // Note: cache invalidation is best-effort; a cached entry may persist for up to CacheTTL.
 func (ks *DatabaseKeyStore) DeleteKey(ctx context.Context, userID int, keyID int64) error {
+	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.DeleteKey) {
+		return ks.deleteKeyDirect(ctx, userID, keyID)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 	var keyHash sql.NullString
@@ -205,6 +235,17 @@ func (ks *DatabaseKeyStore) ValidateKey(ctx context.Context, rawKey string, keyT
 			}
 			return nil, errors.New("invalid or expired key")
 		}
+	}
+
+	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.ValidateKey) {
+		key, err := ks.validateKeyDirect(ctx, hash, keyType)
+		if err != nil {
+			return nil, err
+		}
+		if ks.cache != nil {
+			_ = ks.cache.Set(ctx, cacheKey, *key, ks.cacheTTL)
+		}
+		return key, nil
 	}
 
 	var success bool

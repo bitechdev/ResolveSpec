@@ -226,6 +226,10 @@ func (a *DatabaseAuthenticator) getOAuth2Provider(providerName string) (*OAuth2P
 
 // oauth2GetOrCreateUser finds or creates a user based on OAuth2 info using stored procedure
 func (a *DatabaseAuthenticator) oauth2GetOrCreateUser(ctx context.Context, userCtx *UserContext, providerName string) (int, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthGetOrCreateUser) {
+		return a.oauth2GetOrCreateUserDirect(ctx, userCtx, providerName)
+	}
+
 	userData := map[string]interface{}{
 		"username":      userCtx.UserName,
 		"email":         userCtx.Email,
@@ -269,6 +273,10 @@ func (a *DatabaseAuthenticator) oauth2GetOrCreateUser(ctx context.Context, userC
 
 // oauth2CreateSession creates a new OAuth2 session using stored procedure
 func (a *DatabaseAuthenticator) oauth2CreateSession(ctx context.Context, sessionToken string, userID int, token *oauth2.Token, expiresAt time.Time, providerName string) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthCreateSession) {
+		return a.oauth2CreateSessionDirect(ctx, sessionToken, userID, token, expiresAt, providerName)
+	}
+
 	sessionData := map[string]interface{}{
 		"session_token": sessionToken,
 		"user_id":       userID,
@@ -381,35 +389,9 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	}
 
 	// Get session by refresh token from database
-	var success bool
-	var errMsg *string
-	var sessionData []byte
-
-	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT p_success, p_error, p_data::text
-		FROM %s($1)
-	`, a.sqlNames.OAuthGetRefreshToken), refreshToken).Scan(&success, &errMsg, &sessionData)
-
+	session, err := a.oauthGetByRefreshToken(ctx, refreshToken)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get session by refresh token: %w", err)
-	}
-
-	if !success {
-		if errMsg != nil {
-			return nil, fmt.Errorf("%s", *errMsg)
-		}
-		return nil, fmt.Errorf("invalid or expired refresh token")
-	}
-
-	// Parse session data
-	var session struct {
-		UserID      int       `json:"user_id"`
-		AccessToken string    `json:"access_token"`
-		TokenType   string    `json:"token_type"`
-		Expiry      time.Time `json:"expiry"`
-	}
-	if err := json.Unmarshal(sessionData, &session); err != nil {
-		return nil, fmt.Errorf("failed to parse session data: %w", err)
+		return nil, err
 	}
 
 	// Create oauth2.Token from stored data
@@ -434,64 +416,14 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	}
 
 	// Update session in database with new tokens
-	updateData := map[string]interface{}{
-		"user_id":           session.UserID,
-		"old_refresh_token": refreshToken,
-		"new_session_token": newSessionToken,
-		"new_access_token":  newToken.AccessToken,
-		"new_refresh_token": newToken.RefreshToken,
-		"expires_at":        newToken.Expiry,
-	}
-
-	updateJSON, err := json.Marshal(updateData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal update data: %w", err)
-	}
-
-	var updateSuccess bool
-	var updateErrMsg *string
-
-	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT p_success, p_error
-		FROM %s($1::jsonb)
-	`, a.sqlNames.OAuthUpdateRefreshToken), updateJSON).Scan(&updateSuccess, &updateErrMsg)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to update session: %w", err)
-	}
-
-	if !updateSuccess {
-		if updateErrMsg != nil {
-			return nil, fmt.Errorf("%s", *updateErrMsg)
-		}
-		return nil, fmt.Errorf("failed to update session")
+	if err := a.oauthUpdateRefreshTokenRecord(ctx, session.UserID, refreshToken, newSessionToken, newToken.AccessToken, newToken.RefreshToken, newToken.Expiry); err != nil {
+		return nil, err
 	}
 
 	// Get user data
-	var userSuccess bool
-	var userErrMsg *string
-	var userData []byte
-
-	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT p_success, p_error, p_data::text
-		FROM %s($1)
-	`, a.sqlNames.OAuthGetUser), session.UserID).Scan(&userSuccess, &userErrMsg, &userData)
-
+	userCtx, err := a.oauthGetUserByID(ctx, session.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user data: %w", err)
-	}
-
-	if !userSuccess {
-		if userErrMsg != nil {
-			return nil, fmt.Errorf("%s", *userErrMsg)
-		}
-		return nil, fmt.Errorf("failed to get user data")
-	}
-
-	// Parse user context
-	var userCtx UserContext
-	if err := json.Unmarshal(userData, &userCtx); err != nil {
-		return nil, fmt.Errorf("failed to parse user context: %w", err)
+		return nil, err
 	}
 
 	userCtx.SessionID = newSessionToken
@@ -499,7 +431,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	return &LoginResponse{
 		Token:        newSessionToken,
 		RefreshToken: newToken.RefreshToken,
-		User:         &userCtx,
+		User:         userCtx,
 		ExpiresIn:    int64(time.Until(newToken.Expiry).Seconds()),
 	}, nil
 }

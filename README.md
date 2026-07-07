@@ -524,9 +524,9 @@ For documentation, see [pkg/cache/README.md](pkg/cache/README.md).
 
 #### Security
 
-Authentication and authorization framework with hooks integration.
+Authentication and authorization framework with hooks integration. Database-backed providers use PostgreSQL stored procedures by default, with a portable Direct mode (plain Go/SQL) for SQLite, MySQL, or Postgres without the procedures installed.
 
-For documentation, see [pkg/security/README.md](pkg/security/README.md).
+For documentation, see [pkg/security/README.md](pkg/security/README.md) (see "Direct Mode" for the SQLite/portable-SQL path).
 
 #### Middleware
 

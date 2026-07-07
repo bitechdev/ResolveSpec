@@ -14,14 +14,17 @@ import (
 // DatabasePasskeyProvider implements PasskeyProvider using database storage
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabasePasskeyProvider struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	rpID      string // Relying Party ID (domain)
-	rpName    string // Relying Party display name
-	rpOrigin  string // Expected origin for WebAuthn
-	timeout   int64  // Timeout in milliseconds (default: 60000)
-	sqlNames  *SQLNames
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	rpID       string // Relying Party ID (domain)
+	rpName     string // Relying Party display name
+	rpOrigin   string // Expected origin for WebAuthn
+	timeout    int64  // Timeout in milliseconds (default: 60000)
+	sqlNames   *SQLNames
+	tableNames *TableNames
+	queryMode  QueryMode
+	capability *dbCapability
 }
 
 // DatabasePasskeyProviderOptions configures the passkey provider
@@ -36,6 +39,10 @@ type DatabasePasskeyProviderOptions struct {
 	Timeout int64
 	// SQLNames provides custom SQL procedure/function names. If nil, uses DefaultSQLNames().
 	SQLNames *SQLNames
+	// TableNames provides custom table names for Direct mode. If nil, uses DefaultTableNames().
+	TableNames *TableNames
+	// QueryMode selects stored-procedure vs Direct-mode SQL. Default (zero value) is ModeAuto.
+	QueryMode QueryMode
 	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
 	// If nil, reconnection is disabled.
 	DBFactory func() (*sql.DB, error)
@@ -48,15 +55,19 @@ func NewDatabasePasskeyProvider(db *sql.DB, opts DatabasePasskeyProviderOptions)
 	}
 
 	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
+	tableNames := resolveTableNames(opts.TableNames)
 
 	return &DatabasePasskeyProvider{
-		db:        db,
-		dbFactory: opts.DBFactory,
-		rpID:      opts.RPID,
-		rpName:    opts.RPName,
-		rpOrigin:  opts.RPOrigin,
-		timeout:   opts.Timeout,
-		sqlNames:  sqlNames,
+		db:         db,
+		dbFactory:  opts.DBFactory,
+		rpID:       opts.RPID,
+		rpName:     opts.RPName,
+		rpOrigin:   opts.RPOrigin,
+		timeout:    opts.Timeout,
+		sqlNames:   sqlNames,
+		tableNames: tableNames,
+		queryMode:  opts.QueryMode,
+		capability: newDBCapability(),
 	}
 }
 
@@ -77,7 +88,24 @@ func (p *DatabasePasskeyProvider) reconnectDB() error {
 	p.dbMu.Lock()
 	p.db = newDB
 	p.dbMu.Unlock()
+	if p.capability != nil {
+		p.capability.reset()
+	}
 	return nil
+}
+
+func (p *DatabasePasskeyProvider) runDBOpWithReconnect(run func(*sql.DB) error) error {
+	db := p.getDB()
+	if db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	err := run(db)
+	if isDBClosed(err) {
+		if reconnErr := p.reconnectDB(); reconnErr == nil {
+			err = run(p.getDB())
+		}
+	}
+	return err
 }
 
 // BeginRegistration creates registration options for a new passkey
@@ -145,10 +173,40 @@ func (p *DatabasePasskeyProvider) CompleteRegistration(ctx context.Context, user
 	// For now, this is a placeholder that stores the credential data
 	// In production, you MUST use a proper WebAuthn library
 
+	credIDB64 := base64.StdEncoding.EncodeToString(response.RawID)
+	pubKeyB64 := base64.StdEncoding.EncodeToString(response.Response.AttestationObject)
+
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyStoreCredential) {
+		credentialID, err := p.storeCredentialDirect(ctx, storeCredentialParams{
+			UserID:          userID,
+			CredentialID:    credIDB64,
+			PublicKey:       pubKeyB64,
+			AttestationType: "none",
+			SignCount:       0,
+			Transports:      response.Transports,
+			BackupEligible:  false,
+			BackupState:     false,
+			Name:            "Passkey",
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &PasskeyCredential{
+			ID:              fmt.Sprintf("%d", credentialID),
+			UserID:          userID,
+			CredentialID:    response.RawID,
+			PublicKey:       response.Response.AttestationObject,
+			AttestationType: "none",
+			Transports:      response.Transports,
+			CreatedAt:       time.Now(),
+			LastUsedAt:      time.Now(),
+		}, nil
+	}
+
 	credData := map[string]any{
 		"user_id":          userID,
-		"credential_id":    base64.StdEncoding.EncodeToString(response.RawID),
-		"public_key":       base64.StdEncoding.EncodeToString(response.Response.AttestationObject),
+		"credential_id":    credIDB64,
+		"public_key":       pubKeyB64,
 		"attestation_type": "none",
 		"sign_count":       0,
 		"transports":       response.Transports,
@@ -202,31 +260,39 @@ func (p *DatabasePasskeyProvider) BeginAuthentication(ctx context.Context, usern
 	// If username is provided, get user's credentials
 	var allowCredentials []PasskeyCredentialDescriptor
 	if username != "" {
-		var success bool
-		var errorMsg sql.NullString
-		var userID sql.NullInt64
-		var credentialsJSON sql.NullString
-
-		query := fmt.Sprintf(`SELECT p_success, p_error, p_user_id, p_credentials::text FROM %s($1)`, p.sqlNames.PasskeyGetCredsByUsername)
-		err := p.getDB().QueryRowContext(ctx, query, username).Scan(&success, &errorMsg, &userID, &credentialsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get credentials: %w", err)
-		}
-
-		if !success {
-			if errorMsg.Valid {
-				return nil, fmt.Errorf("%s", errorMsg.String)
-			}
-			return nil, fmt.Errorf("failed to get credentials")
-		}
-
-		// Parse credentials
 		var creds []struct {
 			ID         string   `json:"credential_id"`
 			Transports []string `json:"transports"`
 		}
-		if err := json.Unmarshal([]byte(credentialsJSON.String), &creds); err != nil {
-			return nil, fmt.Errorf("failed to parse credentials: %w", err)
+
+		if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyGetCredsByUsername) {
+			_, directCreds, err := p.getCredsByUsernameDirect(ctx, username)
+			if err != nil {
+				return nil, err
+			}
+			creds = directCreds
+		} else {
+			var success bool
+			var errorMsg sql.NullString
+			var userID sql.NullInt64
+			var credentialsJSON sql.NullString
+
+			query := fmt.Sprintf(`SELECT p_success, p_error, p_user_id, p_credentials::text FROM %s($1)`, p.sqlNames.PasskeyGetCredsByUsername)
+			err := p.getDB().QueryRowContext(ctx, query, username).Scan(&success, &errorMsg, &userID, &credentialsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get credentials: %w", err)
+			}
+
+			if !success {
+				if errorMsg.Valid {
+					return nil, fmt.Errorf("%s", errorMsg.String)
+				}
+				return nil, fmt.Errorf("failed to get credentials")
+			}
+
+			if err := json.Unmarshal([]byte(credentialsJSON.String), &creds); err != nil {
+				return nil, fmt.Errorf("failed to parse credentials: %w", err)
+			}
 		}
 
 		allowCredentials = make([]PasskeyCredentialDescriptor, 0, len(creds))
@@ -261,6 +327,24 @@ func (p *DatabasePasskeyProvider) CompleteAuthentication(ctx context.Context, re
 	// 2. Verify authenticatorData
 	// 3. Verify signature using stored public key
 	// 4. Update sign counter and check for cloning
+
+	credIDB64 := base64.StdEncoding.EncodeToString(response.RawID)
+
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyGetCredential) {
+		userID, signCount, err := p.getCredentialDirect(ctx, credIDB64)
+		if err != nil {
+			return 0, err
+		}
+		newCounter := signCount + 1
+		cloneWarning, err := p.updateCounterDirect(ctx, credIDB64, newCounter)
+		if err != nil {
+			return 0, fmt.Errorf("failed to update counter: %w", err)
+		}
+		if cloneWarning {
+			return 0, fmt.Errorf("credential cloning detected")
+		}
+		return userID, nil
+	}
 
 	// Get credential from database
 	var success bool
@@ -321,6 +405,10 @@ func (p *DatabasePasskeyProvider) CompleteAuthentication(ctx context.Context, re
 
 // GetCredentials returns all passkey credentials for a user
 func (p *DatabasePasskeyProvider) GetCredentials(ctx context.Context, userID int) ([]PasskeyCredential, error) {
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyGetUserCredentials) {
+		return p.getUserCredentialsDirect(ctx, userID)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 	var credentialsJSON sql.NullString
@@ -401,6 +489,10 @@ func (p *DatabasePasskeyProvider) DeleteCredential(ctx context.Context, userID i
 		return fmt.Errorf("invalid credential ID: %w", err)
 	}
 
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyDeleteCredential) {
+		return p.deleteCredentialDirect(ctx, userID, credentialID)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 
@@ -425,6 +517,10 @@ func (p *DatabasePasskeyProvider) UpdateCredentialName(ctx context.Context, user
 	credID, err := base64.StdEncoding.DecodeString(credentialID)
 	if err != nil {
 		return fmt.Errorf("invalid credential ID: %w", err)
+	}
+
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyUpdateName) {
+		return p.updateNameDirect(ctx, userID, credentialID, name)
 	}
 
 	var success bool

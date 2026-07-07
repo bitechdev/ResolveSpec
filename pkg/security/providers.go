@@ -71,12 +71,15 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 // Also supports multiple OAuth2 providers configured with WithOAuth2()
 // Also supports passkey authentication configured with WithPasskey()
 type DatabaseAuthenticator struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	cache     *cache.Cache
-	cacheTTL  time.Duration
-	sqlNames  *SQLNames
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	cache      *cache.Cache
+	cacheTTL   time.Duration
+	sqlNames   *SQLNames
+	tableNames *TableNames
+	queryMode  QueryMode
+	capability *dbCapability
 
 	// Cookie session support (optional, gated by enableCookieSession)
 	enableCookieSession bool
@@ -105,6 +108,10 @@ type DatabaseAuthenticatorOptions struct {
 	// SQLNames provides custom SQL procedure/function names. If nil, uses DefaultSQLNames().
 	// Partial overrides are supported: only set the fields you want to change.
 	SQLNames *SQLNames
+	// TableNames provides custom table names for Direct mode. If nil, uses DefaultTableNames().
+	TableNames *TableNames
+	// QueryMode selects stored-procedure vs Direct-mode SQL. Default (zero value) is ModeAuto.
+	QueryMode QueryMode
 	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
 	// If nil, reconnection is disabled.
 	DBFactory func() (*sql.DB, error)
@@ -139,6 +146,7 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 	}
 
 	sqlNames := MergeSQLNames(DefaultSQLNames(), opts.SQLNames)
+	tableNames := resolveTableNames(opts.TableNames)
 
 	return &DatabaseAuthenticator{
 		db:                   db,
@@ -146,6 +154,9 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 		cache:                cacheInstance,
 		cacheTTL:             opts.CacheTTL,
 		sqlNames:             sqlNames,
+		tableNames:           tableNames,
+		queryMode:            opts.QueryMode,
+		capability:           newDBCapability(),
 		passkeyProvider:      opts.PasskeyProvider,
 		enableCookieSession:  opts.EnableCookieSession,
 		cookieOptions:        opts.CookieOptions,
@@ -170,6 +181,9 @@ func (a *DatabaseAuthenticator) reconnectDB() error {
 	a.dbMu.Lock()
 	a.db = newDB
 	a.dbMu.Unlock()
+	if a.capability != nil {
+		a.capability.reset()
+	}
 	return nil
 }
 
@@ -194,6 +208,9 @@ func (a *DatabaseAuthenticator) SetAuthenticateCallback(fn func(r *http.Request)
 }
 
 func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.Login) {
+		return a.loginDirect(ctx, req)
+	}
 	// Convert LoginRequest to JSON
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -230,6 +247,9 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 
 // Register implements Registrable interface
 func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterRequest) (*LoginResponse, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.Register) {
+		return a.registerDirect(ctx, req)
+	}
 	// Convert RegisterRequest to JSON
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -265,6 +285,9 @@ func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterReques
 }
 
 func (a *DatabaseAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.Logout) {
+		return a.logoutDirect(ctx, req)
+	}
 	// Convert LogoutRequest to JSON
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
@@ -378,6 +401,10 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 		var userCtx UserContext
 		err := a.cache.GetOrSet(r.Context(), cacheKey, &userCtx, a.cacheTTL, func() (any, error) {
 			// This function is called only if cache miss
+			if !a.capability.ShouldUseProcedure(r.Context(), a.queryMode, a.getDB(), a.sqlNames.Session) {
+				return a.sessionDirect(r.Context(), token)
+			}
+
 			var success bool
 			var errorMsg sql.NullString
 			var userJSON sql.NullString
@@ -453,6 +480,11 @@ func (a *DatabaseAuthenticator) ClearUserCache(userID int) error {
 
 // updateSessionActivity updates the last activity timestamp for the session
 func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessionToken string, userCtx *UserContext) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.SessionUpdate) {
+		_ = a.updateSessionActivityDirect(ctx, sessionToken)
+		return
+	}
+
 	// Convert UserContext to JSON
 	userJSON, err := json.Marshal(userCtx)
 	if err != nil {
@@ -471,6 +503,9 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 
 // RefreshToken implements Refreshable interface
 func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken string) (*LoginResponse, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.RefreshToken) {
+		return a.refreshTokenDirect(ctx, refreshToken)
+	}
 	// First, we need to get the current user context for the refresh token
 	var success bool
 	var errorMsg sql.NullString
@@ -528,24 +563,41 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 // NOTE: JWT signing/verification requires github.com/golang-jwt/jwt/v5 to be installed and imported
 type JWTAuthenticator struct {
-	secretKey []byte
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	sqlNames  *SQLNames
+	secretKey  []byte
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	sqlNames   *SQLNames
+	tableNames *TableNames
+	queryMode  QueryMode
+	capability *dbCapability
 }
 
 func NewJWTAuthenticator(secretKey string, db *sql.DB, names ...*SQLNames) *JWTAuthenticator {
 	return &JWTAuthenticator{
-		secretKey: []byte(secretKey),
-		db:        db,
-		sqlNames:  resolveSQLNames(names...),
+		secretKey:  []byte(secretKey),
+		db:         db,
+		sqlNames:   resolveSQLNames(names...),
+		tableNames: DefaultTableNames(),
+		capability: newDBCapability(),
 	}
 }
 
 // WithDBFactory configures a factory used to reopen the database connection if it is closed.
 func (a *JWTAuthenticator) WithDBFactory(factory func() (*sql.DB, error)) *JWTAuthenticator {
 	a.dbFactory = factory
+	return a
+}
+
+// WithTableNames configures Direct-mode table names. If names is nil, defaults are used.
+func (a *JWTAuthenticator) WithTableNames(names *TableNames) *JWTAuthenticator {
+	a.tableNames = resolveTableNames(names)
+	return a
+}
+
+// WithQueryMode selects stored-procedure vs Direct-mode SQL (default ModeAuto).
+func (a *JWTAuthenticator) WithQueryMode(mode QueryMode) *JWTAuthenticator {
+	a.queryMode = mode
 	return a
 }
 
@@ -566,10 +618,17 @@ func (a *JWTAuthenticator) reconnectDB() error {
 	a.dbMu.Lock()
 	a.db = newDB
 	a.dbMu.Unlock()
+	if a.capability != nil {
+		a.capability.reset()
+	}
 	return nil
 }
 
 func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.JWTLogin) {
+		return a.jwtLoginDirect(ctx, req)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 	var userJSON []byte
@@ -632,6 +691,10 @@ func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginR
 }
 
 func (a *JWTAuthenticator) Logout(ctx context.Context, req LogoutRequest) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.JWTLogout) {
+		return a.jwtLogoutDirect(ctx, req)
+	}
+
 	var success bool
 	var errorMsg sql.NullString
 
@@ -681,14 +744,23 @@ func (a *JWTAuthenticator) Authenticate(r *http.Request) (*UserContext, error) {
 // All database operations go through stored procedures
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseColumnSecurityProvider struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	sqlNames  *SQLNames
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	sqlNames   *SQLNames
+	queryMode  QueryMode
+	capability *dbCapability
 }
 
 func NewDatabaseColumnSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseColumnSecurityProvider {
-	return &DatabaseColumnSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
+	return &DatabaseColumnSecurityProvider{db: db, sqlNames: resolveSQLNames(names...), capability: newDBCapability()}
+}
+
+// WithQueryMode selects stored-procedure vs Direct-mode SQL (default ModeAuto).
+// Direct mode is unsupported for column security (see ErrDirectModeUnsupported).
+func (p *DatabaseColumnSecurityProvider) WithQueryMode(mode QueryMode) *DatabaseColumnSecurityProvider {
+	p.queryMode = mode
+	return p
 }
 
 func (p *DatabaseColumnSecurityProvider) WithDBFactory(factory func() (*sql.DB, error)) *DatabaseColumnSecurityProvider {
@@ -713,10 +785,17 @@ func (p *DatabaseColumnSecurityProvider) reconnectDB() error {
 	p.dbMu.Lock()
 	p.db = newDB
 	p.dbMu.Unlock()
+	if p.capability != nil {
+		p.capability.reset()
+	}
 	return nil
 }
 
 func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.ColumnSecurity) {
+		return nil, ErrDirectModeUnsupported
+	}
+
 	var rules []ColumnSecurity
 
 	var success bool
@@ -781,14 +860,23 @@ func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, 
 // All database operations go through stored procedures
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
 type DatabaseRowSecurityProvider struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	sqlNames  *SQLNames
+	db         *sql.DB
+	dbMu       sync.RWMutex
+	dbFactory  func() (*sql.DB, error)
+	sqlNames   *SQLNames
+	queryMode  QueryMode
+	capability *dbCapability
 }
 
 func NewDatabaseRowSecurityProvider(db *sql.DB, names ...*SQLNames) *DatabaseRowSecurityProvider {
-	return &DatabaseRowSecurityProvider{db: db, sqlNames: resolveSQLNames(names...)}
+	return &DatabaseRowSecurityProvider{db: db, sqlNames: resolveSQLNames(names...), capability: newDBCapability()}
+}
+
+// WithQueryMode selects stored-procedure vs Direct-mode SQL (default ModeAuto).
+// Direct mode is unsupported for row security (see ErrDirectModeUnsupported).
+func (p *DatabaseRowSecurityProvider) WithQueryMode(mode QueryMode) *DatabaseRowSecurityProvider {
+	p.queryMode = mode
+	return p
 }
 
 func (p *DatabaseRowSecurityProvider) WithDBFactory(factory func() (*sql.DB, error)) *DatabaseRowSecurityProvider {
@@ -813,10 +901,17 @@ func (p *DatabaseRowSecurityProvider) reconnectDB() error {
 	p.dbMu.Lock()
 	p.db = newDB
 	p.dbMu.Unlock()
+	if p.capability != nil {
+		p.capability.reset()
+	}
 	return nil
 }
 
 func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.RowSecurity) {
+		return RowSecurity{}, ErrDirectModeUnsupported
+	}
+
 	var template string
 	var hasBlock bool
 
@@ -950,6 +1045,9 @@ func generateRandomString(length int) string {
 // RequestPasswordReset implements PasswordResettable. It calls the stored procedure
 // resolvespec_password_reset_request and returns the reset token and expiry.
 func (a *DatabaseAuthenticator) RequestPasswordReset(ctx context.Context, req PasswordResetRequest) (*PasswordResetResponse, error) {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.PasswordResetRequest) {
+		return a.requestPasswordResetDirect(ctx, req)
+	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal password reset request: %w", err)
@@ -987,6 +1085,9 @@ func (a *DatabaseAuthenticator) RequestPasswordReset(ctx context.Context, req Pa
 // CompletePasswordReset implements PasswordResettable. It validates the token and
 // updates the user's password via resolvespec_password_reset.
 func (a *DatabaseAuthenticator) CompletePasswordReset(ctx context.Context, req PasswordResetCompleteRequest) error {
+	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.PasswordResetComplete) {
+		return a.completePasswordResetDirect(ctx, req)
+	}
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("failed to marshal password reset complete request: %w", err)

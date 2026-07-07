@@ -11,7 +11,8 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 - ✅ **No Global State** - Each handler has its own security configuration
 - ✅ **Testable** - Easy to mock and test
 - ✅ **Extensible** - Implement custom providers for your needs
-- ✅ **Stored Procedures** - All database operations use PostgreSQL stored procedures for security and maintainability
+- ✅ **Stored Procedures** - Database operations use PostgreSQL stored procedures where available, for security and maintainability
+- ✅ **Direct Mode** - Portable Go/SQL fallback for SQLite, MySQL, or Postgres without the stored procedures installed — no code changes required
 - ✅ **OAuth2 Authorization Server** - Built-in OAuth 2.1 + PKCE server (RFC 8414, 7591, 7009, 7662) with login form and external provider federation
 - ✅ **Password Reset** - Self-service password reset with secure token generation and session invalidation
 
@@ -50,6 +51,94 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 | `resolvespec_password_reset` | Validate token and set new password | DatabaseAuthenticator |
 
 See `database_schema.sql` for complete stored procedure definitions and examples.
+
+**Not on Postgres, or don't have the procedures installed?** See [Direct Mode](#direct-mode-portable-sql-without-stored-procedures) below — every provider that calls a `resolvespec_*` procedure also has a portable Go/SQL implementation that works on SQLite, MySQL, or plain Postgres.
+
+## Direct Mode (portable SQL without stored procedures)
+
+Every database-backed provider (`DatabaseAuthenticator`, `JWTAuthenticator`, `DatabaseTwoFactorProvider`, `DatabasePasskeyProvider`, the OAuth2 methods/server, `DatabaseKeyStore`) has two code paths:
+
+- **Procedure mode** — calls the configured `resolvespec_*` stored procedure (original behavior, Postgres-only).
+- **Direct mode** — reimplements the same logic in Go using plain parameterized SQL against configurable table names. Works on SQLite, MySQL, or a Postgres database where the procedures were never deployed.
+
+### QueryMode
+
+Selection is controlled per-provider by a `QueryMode`:
+
+```go
+type QueryMode int
+
+const (
+    ModeAuto      QueryMode = iota // default
+    ModeProcedure
+    ModeDirect
+)
+```
+
+- **`ModeAuto`** (default, zero value) — auto-detects per connection:
+  - SQLite/MySQL drivers → Direct mode, no probing.
+  - Postgres drivers (`lib/pq`, `pgx`) → probes `pg_proc` for the configured procedure name and uses it **only if it actually exists**; otherwise falls back to Direct mode. The result is cached per procedure name and reset on reconnect.
+  - Any other/unrecognized driver (including `sqlmock` test doubles) → defaults to Procedure mode, preserving existing behavior for callers that don't expose an identifiable driver type.
+- **`ModeProcedure`** — always calls the stored procedure, regardless of dialect.
+- **`ModeDirect`** — always uses the portable Go/SQL path, never the stored procedure.
+
+Set it via the provider's `Options` struct or `With...` chain method:
+
+```go
+auth := security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
+    QueryMode: security.ModeDirect, // force Direct mode, e.g. for SQLite
+})
+
+tfaProvider := security.NewDatabaseTwoFactorProvider(sqliteDB, nil).
+    WithQueryMode(security.ModeDirect)
+```
+
+On a real SQLite/MySQL connection you can usually leave `QueryMode` unset — `ModeAuto` detects the dialect and uses Direct mode automatically.
+
+### TableNames / KeyStoreTableNames
+
+Direct mode reads/writes plain tables instead of calling procedures, so table names are configurable the same way procedure names are (`SQLNames`):
+
+```go
+type TableNames struct {
+    Users                  string // default: "users"
+    UserSessions           string // default: "user_sessions"
+    TokenBlacklist         string // default: "token_blacklist"
+    UserTOTPBackupCodes    string // default: "user_totp_backup_codes"
+    UserPasskeyCredentials string // default: "user_passkey_credentials"
+    UserPasswordResets     string // default: "user_password_resets"
+    OAuthClients           string // default: "oauth_clients"
+    OAuthCodes             string // default: "oauth_codes"
+}
+
+type KeyStoreTableNames struct {
+    UserKeys string // default: "user_keys" — used by DatabaseKeyStore
+}
+```
+
+`DefaultTableNames()` / `MergeTableNames()` / `ValidateTableNames()` mirror `DefaultSQLNames()` / `MergeSQLNames()` / `ValidateSQLNames()`. Set custom names via the same `Options`/`With...` surface as `QueryMode`:
+
+```go
+auth := security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
+    TableNames: &security.TableNames{Users: "app_users"}, // only override what differs
+})
+```
+
+`oauth2_methods.go` and `oauth_server_db.go` are methods on `*DatabaseAuthenticator` and reuse its `TableNames`/`QueryMode`; there's no separate config for them.
+
+### Schema
+
+`database_schema_sqlite.sql` is the portable companion to `database_schema.sql` — plain `CREATE TABLE` statements only (no functions, no triggers, no `jsonb`/`bytea`/array types), covering every table Direct mode reads or writes. Use it to stand up a SQLite (or adapt for MySQL) database for Direct mode.
+
+### What's NOT covered
+
+`ColumnSecurityProvider`/`RowSecurityProvider` (`resolvespec_column_security` / `resolvespec_row_security`) query an external `core.secaccess`/`core.hub_link` schema this package doesn't own. Direct mode has no portable equivalent to fabricate for these and returns `security.ErrDirectModeUnsupported` — use `ConfigColumnSecurityProvider`/`ConfigRowSecurityProvider` instead when not running against Postgres with those procedures installed.
+
+### Behavioral notes
+
+- Direct mode matches Procedure mode's current behavior exactly, including its TODOs — e.g. passwords are compared as-is (the stored procedures don't verify bcrypt hashes yet either; see the TODO in `resolvespec_login`/`resolvespec_password_reset`).
+- Session tokens generated by Direct mode use the same `sess_<hex>_<unix-timestamp>` shape as the plpgsql procedures.
+- `bytea`/array/`jsonb` Postgres-only columns (passkey credentials, OAuth2 client scopes, keystore `meta`) are stored as base64/JSON-encoded `TEXT` in Direct mode — transparent to callers, since the Go-level API already deals in those same encodings.
 
 ## Quick Start
 

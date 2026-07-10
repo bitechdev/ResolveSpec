@@ -121,8 +121,12 @@ type ColumnSecurityProvider interface {
 
 // RowSecurityProvider handles row-level security (filtering)
 type RowSecurityProvider interface {
-	// GetRowSecurity loads row security rules for a user and entity
-	GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error)
+	// GetRowSecurity loads row security rules for a user and entity.
+	// userRef identifies the user and is opaque to the caller: it may be an int ID,
+	// a string/UUID, or the full *security.UserContext (see SecurityContext.GetUserRef),
+	// so providers backed by non-integer user identifiers (e.g. UUIDs) or that need
+	// access to JWT claims can implement row security without relying on a numeric ID.
+	GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error)
 }
 
 // SecurityProvider is the main interface combining all security concerns

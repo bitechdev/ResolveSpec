@@ -23,8 +23,8 @@ import (
 // than introducing a mismatch between modes.
 
 var (
-	errUsernameExists = errors.New("Username already exists")
-	errEmailExists    = errors.New("Email already exists")
+	errUsernameExists = errors.New("username already exists")
+	errEmailExists    = errors.New("email already exists")
 )
 
 func (a *DatabaseAuthenticator) loginDirect(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
@@ -40,7 +40,7 @@ func (a *DatabaseAuthenticator) loginDirect(ctx context.Context, req LoginReques
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("Invalid credentials")
+			return nil, fmt.Errorf("invalid credentials")
 		}
 		return nil, fmt.Errorf("login query failed: %w", err)
 	}
@@ -88,13 +88,13 @@ func (a *DatabaseAuthenticator) loginDirect(ctx context.Context, req LoginReques
 
 func (a *DatabaseAuthenticator) registerDirect(ctx context.Context, req RegisterRequest) (*LoginResponse, error) {
 	if req.Username == "" {
-		return nil, fmt.Errorf("Username is required")
+		return nil, fmt.Errorf("username is required")
 	}
 	if req.Email == "" {
-		return nil, fmt.Errorf("Email is required")
+		return nil, fmt.Errorf("email is required")
 	}
 	if req.Password == "" {
-		return nil, fmt.Errorf("Password is required")
+		return nil, fmt.Errorf("password is required")
 	}
 
 	rolesStr := strings.Join(req.Roles, ",")
@@ -197,7 +197,7 @@ func (a *DatabaseAuthenticator) logoutDirect(ctx context.Context, req LogoutRequ
 		return fmt.Errorf("logout query failed: %w", err)
 	}
 	if rows == 0 {
-		return fmt.Errorf("Session not found")
+		return fmt.Errorf("session not found")
 	}
 
 	if req.Token != "" {
@@ -222,7 +222,7 @@ func (a *DatabaseAuthenticator) sessionDirect(ctx context.Context, token string)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("Invalid or expired session")
+			return nil, fmt.Errorf("invalid or expired session")
 		}
 		return nil, fmt.Errorf("session query failed: %w", err)
 	}
@@ -262,7 +262,7 @@ func (a *DatabaseAuthenticator) refreshTokenDirect(ctx context.Context, oldToken
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("Invalid or expired refresh token")
+			return nil, fmt.Errorf("invalid or expired refresh token")
 		}
 		return nil, fmt.Errorf("refresh token query failed: %w", err)
 	}

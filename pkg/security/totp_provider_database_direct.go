@@ -22,7 +22,7 @@ func (p *DatabaseTwoFactorProvider) enable2FADirect(ctx context.Context, userID 
 		if rows, err := res.RowsAffected(); err != nil {
 			return err
 		} else if rows == 0 {
-			return fmt.Errorf("User not found")
+			return fmt.Errorf("user not found")
 		}
 
 		delQuery := rewritePlaceholders(db, fmt.Sprintf(`DELETE FROM %s WHERE user_id = ?`, p.tableNames.UserTOTPBackupCodes))
@@ -50,7 +50,7 @@ func (p *DatabaseTwoFactorProvider) disable2FADirect(ctx context.Context, userID
 		if rows, err := res.RowsAffected(); err != nil {
 			return err
 		} else if rows == 0 {
-			return fmt.Errorf("User not found")
+			return fmt.Errorf("user not found")
 		}
 
 		delQuery := rewritePlaceholders(db, fmt.Sprintf(`DELETE FROM %s WHERE user_id = ?`, p.tableNames.UserTOTPBackupCodes))
@@ -67,7 +67,7 @@ func (p *DatabaseTwoFactorProvider) get2FAStatusDirect(ctx context.Context, user
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, fmt.Errorf("User not found")
+			return false, fmt.Errorf("user not found")
 		}
 		return false, fmt.Errorf("get 2FA status query failed: %w", err)
 	}
@@ -83,7 +83,7 @@ func (p *DatabaseTwoFactorProvider) get2FASecretDirect(ctx context.Context, user
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("User not found")
+			return "", fmt.Errorf("user not found")
 		}
 		return "", fmt.Errorf("get 2FA secret query failed: %w", err)
 	}
@@ -101,7 +101,7 @@ func (p *DatabaseTwoFactorProvider) regenerateBackupCodesDirect(ctx context.Cont
 			return err
 		}
 		if count == 0 {
-			return fmt.Errorf("User not found or TOTP not enabled")
+			return fmt.Errorf("user not found or TOTP not enabled")
 		}
 
 		delQuery := rewritePlaceholders(db, fmt.Sprintf(`DELETE FROM %s WHERE user_id = ?`, p.tableNames.UserTOTPBackupCodes))
@@ -134,7 +134,7 @@ func (p *DatabaseTwoFactorProvider) validateBackupCodeDirect(ctx context.Context
 			return err
 		}
 		if used {
-			return fmt.Errorf("Backup code already used")
+			return fmt.Errorf("backup code already used")
 		}
 
 		updQuery := rewritePlaceholders(db, fmt.Sprintf(`UPDATE %s SET used = ?, used_at = ? WHERE id = ?`, p.tableNames.UserTOTPBackupCodes))

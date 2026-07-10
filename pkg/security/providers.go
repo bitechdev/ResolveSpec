@@ -907,7 +907,7 @@ func (p *DatabaseRowSecurityProvider) reconnectDB() error {
 	return nil
 }
 
-func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error) {
 	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.RowSecurity) {
 		return RowSecurity{}, ErrDirectModeUnsupported
 	}
@@ -917,7 +917,7 @@ func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID
 
 	runQuery := func() error {
 		query := fmt.Sprintf(`SELECT p_template, p_block FROM %s($1, $2, $3)`, p.sqlNames.RowSecurity)
-		return p.getDB().QueryRowContext(ctx, query, schema, table, userID).Scan(&template, &hasBlock)
+		return p.getDB().QueryRowContext(ctx, query, schema, table, userRef).Scan(&template, &hasBlock)
 	}
 	err := runQuery()
 	if isDBClosed(err) {
@@ -932,7 +932,7 @@ func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userID
 	return RowSecurity{
 		Schema:    schema,
 		Tablename: table,
-		UserID:    userID,
+		UserID:    userRef,
 		Template:  template,
 		HasBlock:  hasBlock,
 	}, nil
@@ -969,14 +969,14 @@ func NewConfigRowSecurityProvider(templates map[string]string, blocked map[strin
 	}
 }
 
-func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error) {
 	key := fmt.Sprintf("%s.%s", schema, table)
 
 	if p.blocked[key] {
 		return RowSecurity{
 			Schema:    schema,
 			Tablename: table,
-			UserID:    userID,
+			UserID:    userRef,
 			HasBlock:  true,
 		}, nil
 	}
@@ -985,7 +985,7 @@ func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userID i
 	return RowSecurity{
 		Schema:    schema,
 		Tablename: table,
-		UserID:    userID,
+		UserID:    userRef,
 		Template:  template,
 		HasBlock:  false,
 	}, nil

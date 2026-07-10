@@ -34,7 +34,10 @@ type RowSecurity struct {
 	Tablename string `json:"tablename"`
 	Template  string `json:"template"`
 	HasBlock  bool   `json:"has_block"`
-	UserID    int    `json:"user_id"`
+	// UserID is the opaque user reference the security rules were loaded for.
+	// It may be an int, a string/UUID, or a *UserContext, depending on what the
+	// RowSecurityProvider/SecurityContext.GetUserRef implementation returns.
+	UserID any `json:"user_id"`
 }
 
 func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) string {
@@ -42,7 +45,7 @@ func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Typ
 	str = strings.ReplaceAll(str, "{PrimaryKeyName}", pPrimaryKeyName)
 	str = strings.ReplaceAll(str, "{TableName}", m.Tablename)
 	str = strings.ReplaceAll(str, "{SchemaName}", m.Schema)
-	str = strings.ReplaceAll(str, "{UserID}", fmt.Sprintf("%d", m.UserID))
+	str = strings.ReplaceAll(str, "{UserID}", fmt.Sprintf("%v", m.UserID))
 	return str
 }
 
@@ -413,7 +416,7 @@ func (m *SecurityList) ClearSecurity(pUserID int, pSchema, pTablename string) er
 	return nil
 }
 
-func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserID int, pSchema, pTablename string, pOverwrite bool) (RowSecurity, error) {
+func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserRef any, pSchema, pTablename string, pOverwrite bool) (RowSecurity, error) {
 	if m.provider == nil {
 		return RowSecurity{}, fmt.Errorf("security provider not set")
 	}
@@ -424,10 +427,10 @@ func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserID int, pSchema
 	if m.RowSecurity == nil {
 		m.RowSecurity = make(map[string]RowSecurity, 0)
 	}
-	secKey := fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)
+	secKey := fmt.Sprintf("%s.%s@%v", pSchema, pTablename, pUserRef)
 
 	// Call the provider to load security rules
-	record, err := m.provider.GetRowSecurity(ctx, pUserID, pSchema, pTablename)
+	record, err := m.provider.GetRowSecurity(ctx, pUserRef, pSchema, pTablename)
 	if err != nil {
 		return RowSecurity{}, fmt.Errorf("GetRowSecurity failed: %v", err)
 	}
@@ -436,7 +439,7 @@ func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserID int, pSchema
 	return record, nil
 }
 
-func (m *SecurityList) GetRowSecurityTemplate(pUserID int, pSchema, pTablename string) (RowSecurity, error) {
+func (m *SecurityList) GetRowSecurityTemplate(pUserRef any, pSchema, pTablename string) (RowSecurity, error) {
 	defer logger.CatchPanic("GetRowSecurityTemplate")()
 
 	if m.RowSecurity == nil {
@@ -446,7 +449,7 @@ func (m *SecurityList) GetRowSecurityTemplate(pUserID int, pSchema, pTablename s
 	m.RowSecurityMutex.RLock()
 	defer m.RowSecurityMutex.RUnlock()
 
-	rowSec, ok := m.RowSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
+	rowSec, ok := m.RowSecurity[fmt.Sprintf("%s.%s@%v", pSchema, pTablename, pUserRef)]
 	if !ok {
 		return RowSecurity{}, fmt.Errorf("no row security data")
 	}

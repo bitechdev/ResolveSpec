@@ -71,6 +71,17 @@ func (s *securityContext) GetUserID() (int, bool) {
 	return security.GetUserID(s.ctx.Context)
 }
 
+// GetUserRef returns an opaque user identifier for row security lookups.
+// It prefers the full *security.UserContext (so providers can read JWT claims,
+// e.g. a UUID subject) and falls back to the int user ID.
+func (s *securityContext) GetUserRef() (any, bool) {
+	if userCtx, ok := security.GetUserContext(s.ctx.Context); ok {
+		return userCtx, true
+	}
+	userID, ok := security.GetUserID(s.ctx.Context)
+	return userID, ok
+}
+
 func (s *securityContext) GetSchema() string {
 	return s.ctx.Schema
 }

@@ -1494,6 +1494,20 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Fetch the updated record after the transaction commits to capture any trigger changes
 	fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
 	selectQuery := h.db.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+
+	// Execute BeforeScan hooks so row security is re-applied to the post-update
+	// re-fetch, same as it is for the initial read and the update query itself.
+	// Without this, the re-fetch can return a row the caller isn't authorized to see.
+	hookCtx.Query = selectQuery
+	if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+		logger.Error("BeforeScan hook failed: %v", err)
+		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+		return
+	}
+	if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
+		selectQuery = modifiedQuery
+	}
+
 	if err := selectQuery.ScanModel(ctx); err != nil {
 		logger.Error("Failed to fetch updated record: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)

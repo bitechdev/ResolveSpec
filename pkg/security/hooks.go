@@ -14,6 +14,11 @@ import (
 type SecurityContext interface {
 	GetContext() context.Context
 	GetUserID() (int, bool)
+	// GetUserRef returns an opaque user identifier for row security lookups.
+	// Unlike GetUserID, it is not required to be an integer: implementations backed by
+	// non-integer identifiers (e.g. UUIDs) can return a string, or the full
+	// *security.UserContext so a RowSecurityProvider can read JWT claims directly.
+	GetUserRef() (any, bool)
 	GetSchema() string
 	GetEntity() string
 	GetModel() interface{}
@@ -45,8 +50,13 @@ func loadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error
 		// return err
 	}
 
-	// Load row security rules using the provider
-	_, err = securityList.LoadRowSecurity(secCtx.GetContext(), userID, schema, tablename, false)
+	// Load row security rules using the provider. Row security uses the opaque
+	// user ref (not the int-only user ID) so non-integer user identifiers work.
+	userRef, refOK := secCtx.GetUserRef()
+	if !refOK {
+		userRef = userID
+	}
+	_, err = securityList.LoadRowSecurity(secCtx.GetContext(), userRef, schema, tablename, false)
 	if err != nil {
 		logger.Warn("Failed to load row security: %v", err)
 		// Don't fail the request if no security rules exist
@@ -58,25 +68,29 @@ func loadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error
 
 // applyRowSecurity applies row-level security filters to the query (generic version)
 func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error {
-	userID, ok := secCtx.GetUserID()
+	userRef, ok := secCtx.GetUserRef()
 	if !ok {
-		return nil // No user context, skip
+		userID, idOK := secCtx.GetUserID()
+		if !idOK {
+			return nil // No user context, skip
+		}
+		userRef = userID
 	}
 
 	schema := secCtx.GetSchema()
 	tablename := secCtx.GetEntity()
 
 	// Get row security template
-	rowSec, err := securityList.GetRowSecurityTemplate(userID, schema, tablename)
+	rowSec, err := securityList.GetRowSecurityTemplate(userRef, schema, tablename)
 	if err != nil {
 		// No row security defined, allow query to proceed
-		logger.Debug("No row security for %s.%s@%d: %v", schema, tablename, userID, err)
+		logger.Debug("No row security for %s.%s@%v: %v", schema, tablename, userRef, err)
 		return nil
 	}
 
 	// Check if user has a blocking rule
 	if rowSec.HasBlock {
-		logger.Warn("User %d blocked from accessing %s.%s", userID, schema, tablename)
+		logger.Warn("User %v blocked from accessing %s.%s", userRef, schema, tablename)
 		return fmt.Errorf("access denied to %s", tablename)
 	}
 
@@ -112,8 +126,8 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 		// Generate the WHERE clause from template
 		whereClause := rowSec.GetTemplate(pkName, modelType)
 
-		logger.Info("Applying row security filter for user %d on %s.%s: %s",
-			userID, schema, tablename, whereClause)
+		logger.Info("Applying row security filter for user %v on %s.%s: %s",
+			userRef, schema, tablename, whereClause)
 
 		// Apply the WHERE clause to the query
 		query := secCtx.GetQuery()

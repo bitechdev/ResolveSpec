@@ -74,8 +74,8 @@ func (c *CompositeSecurityProvider) GetColumnSecurity(ctx context.Context, userI
 }
 
 // GetRowSecurity delegates to the row security provider
-func (c *CompositeSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
-	return c.rowSec.GetRowSecurity(ctx, userID, schema, table)
+func (c *CompositeSecurityProvider) GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error) {
+	return c.rowSec.GetRowSecurity(ctx, userRef, schema, table)
 }
 
 // Optional interface implementations (if wrapped providers support them)

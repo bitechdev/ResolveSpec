@@ -260,10 +260,7 @@ func (p *DatabasePasskeyProvider) BeginAuthentication(ctx context.Context, usern
 	// If username is provided, get user's credentials
 	var allowCredentials []PasskeyCredentialDescriptor
 	if username != "" {
-		var creds []struct {
-			ID         string   `json:"credential_id"`
-			Transports []string `json:"transports"`
-		}
+		var creds []passkeyCredential
 
 		if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.PasskeyGetCredsByUsername) {
 			_, directCreds, err := p.getCredsByUsernameDirect(ctx, username)

@@ -39,7 +39,7 @@ func (p *DatabasePasskeyProvider) storeCredentialDirect(ctx context.Context, par
 		var exists int
 		checkQuery := rewritePlaceholders(db, fmt.Sprintf(`SELECT 1 FROM %s WHERE credential_id = ?`, p.tableNames.UserPasskeyCredentials))
 		if err := db.QueryRowContext(ctx, checkQuery, params.CredentialID).Scan(&exists); err == nil {
-			return fmt.Errorf("Credential already exists")
+			return fmt.Errorf("credential already exists")
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -48,7 +48,7 @@ func (p *DatabasePasskeyProvider) storeCredentialDirect(ctx context.Context, par
 		userCheckQuery := rewritePlaceholders(db, fmt.Sprintf(`SELECT 1 FROM %s WHERE id = ?`, p.tableNames.Users))
 		if err := db.QueryRowContext(ctx, userCheckQuery, params.UserID).Scan(&userExists); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("User not found")
+				return fmt.Errorf("user not found")
 			}
 			return err
 		}
@@ -78,7 +78,7 @@ func (p *DatabasePasskeyProvider) getCredentialDirect(ctx context.Context, crede
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, 0, fmt.Errorf("Credential not found")
+			return 0, 0, fmt.Errorf("credential not found")
 		}
 		return 0, 0, fmt.Errorf("failed to get credential: %w", err)
 	}
@@ -91,7 +91,7 @@ func (p *DatabasePasskeyProvider) updateCounterDirect(ctx context.Context, crede
 		query := rewritePlaceholders(db, fmt.Sprintf(`SELECT sign_count FROM %s WHERE credential_id = ?`, p.tableNames.UserPasskeyCredentials))
 		if err := db.QueryRowContext(ctx, query, credentialIDB64).Scan(&oldCounter); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("Credential not found")
+				return fmt.Errorf("credential not found")
 			}
 			return err
 		}
@@ -188,7 +188,7 @@ func (p *DatabasePasskeyProvider) deleteCredentialDirect(ctx context.Context, us
 			return err
 		}
 		if rows == 0 {
-			return fmt.Errorf("Credential not found")
+			return fmt.Errorf("credential not found")
 		}
 		return nil
 	})
@@ -206,24 +206,19 @@ func (p *DatabasePasskeyProvider) updateNameDirect(ctx context.Context, userID i
 			return err
 		}
 		if rows == 0 {
-			return fmt.Errorf("Credential not found")
+			return fmt.Errorf("credential not found")
 		}
 		return nil
 	})
 }
 
-func (p *DatabasePasskeyProvider) getCredsByUsernameDirect(ctx context.Context, username string) (int, []struct {
+type passkeyCredential struct {
 	ID         string   `json:"credential_id"`
 	Transports []string `json:"transports"`
-}, error) {
-	type credT = struct {
-		ID         string   `json:"credential_id"`
-		Transports []string `json:"transports"`
-	}
-	var userID int
-	var creds []credT
+}
 
-	err := p.runDBOpWithReconnect(func(db *sql.DB) error {
+func (p *DatabasePasskeyProvider) getCredsByUsernameDirect(ctx context.Context, username string) (userID int, creds []passkeyCredential, err error) {
+	err = p.runDBOpWithReconnect(func(db *sql.DB) error {
 		userQuery := rewritePlaceholders(db, fmt.Sprintf(`SELECT id FROM %s WHERE username = ? AND is_active = ?`, p.tableNames.Users))
 		if err := db.QueryRowContext(ctx, userQuery, username, true).Scan(&userID); err != nil {
 			return err
@@ -236,7 +231,7 @@ func (p *DatabasePasskeyProvider) getCredsByUsernameDirect(ctx context.Context, 
 		}
 		defer rows.Close()
 
-		creds = make([]credT, 0)
+		creds = make([]passkeyCredential, 0)
 		for rows.Next() {
 			var credID string
 			var transportsJSON sql.NullString
@@ -247,13 +242,13 @@ func (p *DatabasePasskeyProvider) getCredsByUsernameDirect(ctx context.Context, 
 			if transportsJSON.Valid && transportsJSON.String != "" {
 				_ = json.Unmarshal([]byte(transportsJSON.String), &transports)
 			}
-			creds = append(creds, credT{ID: credID, Transports: transports})
+			creds = append(creds, passkeyCredential{ID: credID, Transports: transports})
 		}
 		return rows.Err()
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil, fmt.Errorf("User not found")
+			return 0, nil, fmt.Errorf("user not found")
 		}
 		return 0, nil, fmt.Errorf("failed to get credentials: %w", err)
 	}

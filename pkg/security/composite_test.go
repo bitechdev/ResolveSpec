@@ -79,7 +79,7 @@ type mockRowSec struct {
 	supportsCache bool
 }
 
-func (m *mockRowSec) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+func (m *mockRowSec) GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error) {
 	return m.rowSec, m.err
 }
 

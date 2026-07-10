@@ -71,6 +71,16 @@ func (f *funcSpecSecurityContext) GetUserID() (int, bool) {
 	return int(f.ctx.UserContext.UserID), true
 }
 
+// GetUserRef returns an opaque user identifier for row security lookups.
+// It returns the full *security.UserContext so providers can read JWT claims
+// (e.g. a UUID subject) instead of relying on the int user ID.
+func (f *funcSpecSecurityContext) GetUserRef() (any, bool) {
+	if f.ctx.UserContext == nil {
+		return nil, false
+	}
+	return f.ctx.UserContext, true
+}
+
 func (f *funcSpecSecurityContext) GetSchema() string {
 	// funcspec doesn't have a schema concept, extract from SQL query or use default
 	return "public"

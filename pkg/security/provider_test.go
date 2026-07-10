@@ -44,7 +44,7 @@ func (m *mockSecurityProvider) GetColumnSecurity(ctx context.Context, userID int
 	return m.columnSecurity, nil
 }
 
-func (m *mockSecurityProvider) GetRowSecurity(ctx context.Context, userID int, schema, table string) (RowSecurity, error) {
+func (m *mockSecurityProvider) GetRowSecurity(ctx context.Context, userRef any, schema, table string) (RowSecurity, error) {
 	return m.rowSecurity, nil
 }
 

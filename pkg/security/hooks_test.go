@@ -26,6 +26,10 @@ func (m *mockSecurityContext) GetUserID() (int, bool) {
 	return m.userID, m.hasUser
 }
 
+func (m *mockSecurityContext) GetUserRef() (any, bool) {
+	return m.userID, m.hasUser
+}
+
 func (m *mockSecurityContext) GetSchema() string {
 	return m.schema
 }

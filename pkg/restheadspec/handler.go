@@ -1498,6 +1498,9 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Execute BeforeScan hooks so row security is re-applied to the post-update
 	// re-fetch, same as it is for the initial read and the update query itself.
 	// Without this, the re-fetch can return a row the caller isn't authorized to see.
+	// The transaction has already committed by this point, so hooks must use the
+	// pooled connection rather than the now-dead tx.
+	hookCtx.Tx = h.db
 	hookCtx.Query = selectQuery
 	if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
 		logger.Error("BeforeScan hook failed: %v", err)

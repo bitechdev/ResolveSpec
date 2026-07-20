@@ -331,7 +331,10 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 		w.Header().Set("Content-Range", fmt.Sprintf("items %d-%d/%d", respOffset, respOffset+len(dbobjlist), total))
 		logger.Info("Serving: Records %d of %d", len(dbobjlist), total)
 
-		// Execute BeforeResponse hook
+		// Execute BeforeResponse hook. The transaction has already committed by
+		// this point, so hooks must use the pooled connection rather than the
+		// now-dead tx.
+		hookCtx.Tx = h.db
 		hookCtx.Result = dbobjlist
 		hookCtx.Total = total
 		if err := h.hooks.Execute(BeforeResponse, hookCtx); err != nil {
@@ -631,7 +634,10 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			return
 		}
 
-		// Execute BeforeResponse hook
+		// Execute BeforeResponse hook. The transaction has already committed by
+		// this point, so hooks must use the pooled connection rather than the
+		// now-dead tx.
+		hookCtx.Tx = h.db
 		hookCtx.Result = dbobj
 		if err := h.hooks.Execute(BeforeResponse, hookCtx); err != nil {
 			logger.Error("BeforeResponse hook failed: %v", err)

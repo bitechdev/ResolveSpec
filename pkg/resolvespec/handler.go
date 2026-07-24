@@ -1056,6 +1056,12 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		// Get the primary key name
 		pkName := reflection.GetPrimaryKeyName(model)
 
+		if targetID == nil {
+			logger.Error("Update request for %s.%s has no ID (not in URL, request ID, or data)", schema, entity)
+			h.sendError(w, http.StatusBadRequest, "missing_id", "No ID provided for update", nil)
+			return
+		}
+
 		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			// Execute BeforeUpdate hooks inside transaction, before any queries run.
@@ -1088,21 +1094,20 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 			selectQuery := tx.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...)
 
-			// Apply conditions to select
-			if urlID != "" {
-				logger.Debug("Updating by URL ID: %s", urlID)
-				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-			} else if reqID != nil {
-				switch id := reqID.(type) {
-				case string:
-					logger.Debug("Updating by request ID: %s", id)
-					selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-				case []string:
-					if len(id) > 0 {
-						logger.Debug("Updating by multiple IDs: %v", id)
-						selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
-					}
+			// Apply conditions to select, based on the resolved target ID
+			// (URL ID, request ID, or the "id" field embedded in the data payload).
+			switch id := targetID.(type) {
+			case string:
+				logger.Debug("Updating by ID: %s", id)
+				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+			case []string:
+				if len(id) > 0 {
+					logger.Debug("Updating by multiple IDs: %v", id)
+					selectQuery = selectQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
 				}
+			default:
+				logger.Debug("Updating by ID: %v", id)
+				selectQuery = selectQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 			}
 
 			if err := selectQuery.ScanModel(ctx); err != nil {
@@ -1141,16 +1146,16 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			// Build update query with merged data
 			query := tx.NewUpdate().Table(tableName).SetMap(existingMap)
 
-			// Apply conditions
-			if urlID != "" {
-				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-			} else if reqID != nil {
-				switch id := reqID.(type) {
-				case string:
-					query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-				case []string:
+			// Apply conditions, using the same target ID resolved for the select above
+			switch id := targetID.(type) {
+			case string:
+				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+			case []string:
+				if len(id) > 0 {
 					query = query.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
 				}
+			default:
+				query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 			}
 
 			result, err := query.Exec(ctx)

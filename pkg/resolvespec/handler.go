@@ -1058,7 +1058,33 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-			// First, read the existing record from the database
+			// Execute BeforeUpdate hooks inside transaction, before any queries run.
+			// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
+			// they must run before the existence-check select so that select is
+			// also subject to RLS on this connection/transaction.
+			hookCtx := &HookContext{
+				Context: ctx,
+				Handler: h,
+				Schema:  schema,
+				Entity:  entity,
+				Model:   model,
+				Options: options,
+				ID:      urlID,
+				Data:    updates,
+				Writer:  w,
+				Tx:      tx,
+			}
+
+			if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+				return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+			}
+
+			// Use potentially modified data from hook context
+			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+				updates = modifiedData
+			}
+
+			// Now read the existing record from the database
 			existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 			selectQuery := tx.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...)
 
@@ -1094,29 +1120,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			}
 			if err := json.Unmarshal(jsonData, &existingMap); err != nil {
 				return fmt.Errorf("error unmarshaling existing record: %w", err)
-			}
-
-			// Execute BeforeUpdate hooks inside transaction
-			hookCtx := &HookContext{
-				Context: ctx,
-				Handler: h,
-				Schema:  schema,
-				Entity:  entity,
-				Model:   model,
-				Options: options,
-				ID:      urlID,
-				Data:    updates,
-				Writer:  w,
-				Tx:      tx,
-			}
-
-			if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
-				return fmt.Errorf("BeforeUpdate hook failed: %w", err)
-			}
-
-			// Use potentially modified data from hook context
-			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
-				updates = modifiedData
 			}
 
 			// Merge only non-null and non-empty values from the incoming request into the existing record

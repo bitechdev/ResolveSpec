@@ -1405,7 +1405,34 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
-		// First, read the existing record from the database
+		// Execute BeforeUpdate hooks inside transaction, before any queries run.
+		// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
+		// they must run before the existence-check select so that select is
+		// also subject to RLS on this connection/transaction.
+		hookCtx = &HookContext{
+			Context:   ctx,
+			Handler:   h,
+			Schema:    schema,
+			Entity:    entity,
+			TableName: tableName,
+			Tx:        tx,
+			Model:     model,
+			Options:   options,
+			ID:        id,
+			Data:      dataMap,
+			Writer:    w,
+		}
+
+		if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
+		}
+
+		// Use potentially modified data from hook context
+		if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+			dataMap = modifiedData
+		}
+
+		// Now read the existing record from the database
 		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
@@ -1435,30 +1462,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			}
 			dataMap = cleanedData
 			nestedRelations = relations
-		}
-
-		// Execute BeforeUpdate hooks inside transaction
-		hookCtx = &HookContext{
-			Context:   ctx,
-			Handler:   h,
-			Schema:    schema,
-			Entity:    entity,
-			TableName: tableName,
-			Tx:        tx,
-			Model:     model,
-			Options:   options,
-			ID:        id,
-			Data:      dataMap,
-			Writer:    w,
-		}
-
-		if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
-			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
-		}
-
-		// Use potentially modified data from hook context
-		if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
-			dataMap = modifiedData
 		}
 
 		// Merge only non-null and non-empty values from the incoming request into the existing record

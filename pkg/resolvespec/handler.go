@@ -259,278 +259,315 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	sliceType := reflect.SliceOf(reflect.PointerTo(modelType))
 	modelPtr := reflect.New(sliceType).Interface()
 
-	// Start with Model() using the slice pointer to avoid "Model(nil)" errors in Count()
-	// Bun's Model() accepts both single pointers and slice pointers
-	query := h.db.NewSelect().Model(modelPtr)
+	// Everything below runs inside a single transaction so that the BeforeRead
+	// hook (which sets session-scoped RLS GUCs via SET LOCAL) executes on the
+	// same physical connection as the queries it is meant to protect. Under
+	// connection pooling, firing the hook against h.db and then querying
+	// against h.db again may hand out two different connections, silently
+	// bypassing RLS.
+	var (
+		result     interface{}
+		total      int
+		rowNumber  *int64
+		limit      int
+		offset     int
+		statusCode int
+		errCode    string
+		errMsg     string
+	)
 
-	// Only set Table() if the model doesn't provide a table name via the underlying type
-	// Create a temporary instance to check for TableNameProvider
-	tempInstance := reflect.New(modelType).Interface()
-	if provider, ok := tempInstance.(common.TableNameProvider); !ok || provider.TableName() == "" {
-		query = query.Table(tableName)
-	}
-
-	if len(options.Columns) == 0 && (len(options.ComputedColumns) > 0) {
-		logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
-		options.Columns = reflection.GetSQLModelColumns(model)
-	}
-
-	// Apply column selection
-	if len(options.Columns) > 0 {
-		logger.Debug("Selecting columns: %v", options.Columns)
-		for _, col := range options.Columns {
-			query = query.Column(reflection.ExtractSourceColumn(col))
+	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		hookCtx := &HookContext{
+			Context: ctx,
+			Handler: h,
+			Schema:  schema,
+			Entity:  entity,
+			Model:   model,
+			Options: options,
+			ID:      id,
+			Writer:  w,
+			Tx:      tx,
 		}
-	}
-
-	if len(options.ComputedColumns) > 0 {
-		for _, cu := range options.ComputedColumns {
-			logger.Debug("Applying computed column: %s", cu.Name)
-			query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
+		if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "hook_error", "BeforeRead hook failed"
+			return err
 		}
-	}
+		options = hookCtx.Options
 
-	// Apply preloading
-	if len(options.Preload) > 0 {
-		var err error
-		query, err = h.applyPreloads(model, query, options.Preload)
-		if err != nil {
-			logger.Error("Failed to apply preloads: %v", err)
-			h.sendError(w, http.StatusBadRequest, "invalid_preload", "Failed to apply preloads", err)
-			return
-		}
-	}
+		// Start with Model() using the slice pointer to avoid "Model(nil)" errors in Count()
+		// Bun's Model() accepts both single pointers and slice pointers
+		query := tx.NewSelect().Model(modelPtr)
 
-	// Apply filters with proper grouping for OR logic
-	query = h.applyFilters(query, options.Filters)
-
-	// Apply custom operators
-	for _, customOp := range options.CustomOperators {
-		logger.Debug("Applying custom operator: %s - %s", customOp.Name, customOp.SQL)
-		query = query.Where(customOp.SQL)
-	}
-
-	// Apply sorting
-	for _, sort := range options.Sort {
-		direction := "ASC"
-		if strings.EqualFold(sort.Direction, "desc") {
-			direction = "DESC"
-		}
-		logger.Debug("Applying sort: %s %s", sort.Column, direction)
-		query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
-	}
-
-	// Apply cursor-based pagination
-	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
-		logger.Debug("Applying cursor pagination")
-
-		// Get primary key name
-		pkName := reflection.GetPrimaryKeyName(model)
-
-		// Extract model columns for validation
-		modelColumns := reflection.GetModelColumns(model)
-
-		// Default sort to primary key when none provided
-		if len(options.Sort) == 0 {
-			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+		// Only set Table() if the model doesn't provide a table name via the underlying type
+		// Create a temporary instance to check for TableNameProvider
+		tempInstance := reflect.New(modelType).Interface()
+		if provider, ok := tempInstance.(common.TableNameProvider); !ok || provider.TableName() == "" {
+			query = query.Table(tableName)
 		}
 
-		// Get cursor filter SQL (expandJoins is empty for resolvespec — no custom SQL join support yet)
-		cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
-		if err != nil {
-			logger.Error("Error building cursor filter: %v", err)
-			h.sendError(w, http.StatusBadRequest, "cursor_error", "Invalid cursor pagination", err)
-			return
+		if len(options.Columns) == 0 && (len(options.ComputedColumns) > 0) {
+			logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
+			options.Columns = reflection.GetSQLModelColumns(model)
 		}
 
-		// Apply cursor filter to query
-		if cursorFilter != "" {
-			logger.Debug("Applying cursor filter: %s", cursorFilter)
-			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options)
-			// Ensure outer parentheses to prevent OR logic from escaping
-			sanitizedCursor = common.EnsureOuterParentheses(sanitizedCursor)
-			if sanitizedCursor != "" {
-				query = query.Where(sanitizedCursor)
+		// Apply column selection
+		if len(options.Columns) > 0 {
+			logger.Debug("Selecting columns: %v", options.Columns)
+			for _, col := range options.Columns {
+				query = query.Column(reflection.ExtractSourceColumn(col))
 			}
 		}
-	}
 
-	// Get total count before pagination
-	var total int
-
-	// Try to get from cache first
-	// Use extended cache key if cursors are present
-	var cacheKeyHash string
-	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
-		cacheKeyHash = buildExtendedQueryCacheKey(
-			tableName,
-			options.Filters,
-			options.Sort,
-			"", // No custom SQL WHERE in resolvespec
-			"", // No custom SQL OR in resolvespec
-			options.CursorForward,
-			options.CursorBackward,
-		)
-	} else {
-		cacheKeyHash = buildQueryCacheKey(
-			tableName,
-			options.Filters,
-			options.Sort,
-			"", // No custom SQL WHERE in resolvespec
-			"", // No custom SQL OR in resolvespec
-		)
-	}
-	cacheKey := getQueryTotalCacheKey(cacheKeyHash)
-
-	// Try to retrieve from cache
-	var cachedTotal cachedTotal
-	err := cache.GetDefaultCache().Get(ctx, cacheKey, &cachedTotal)
-	if err == nil {
-		total = cachedTotal.Total
-		logger.Debug("Total records (from cache): %d", total)
-	} else {
-		// Cache miss - execute count query
-		logger.Debug("Cache miss for query total")
-		count, err := query.Count(ctx)
-		if err != nil {
-			logger.Error("Error counting records: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
-			return
-		}
-		total = count
-		logger.Debug("Total records (from query): %d", total)
-
-		// Store in cache with schema and table tags
-		cacheTTL := time.Minute * 2 // Default 2 minutes TTL
-		if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
-			logger.Warn("Failed to cache query total: %v", err)
-			// Don't fail the request if caching fails
-		} else {
-			logger.Debug("Cached query total with key: %s", cacheKey)
-		}
-	}
-
-	// Handle FetchRowNumber if requested
-	var rowNumber *int64
-	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
-		logger.Debug("Fetching row number for ID: %s", *options.FetchRowNumber)
-		pkName := reflection.GetPrimaryKeyName(model)
-
-		// Build ROW_NUMBER window function SQL
-		rowNumberSQL := "ROW_NUMBER() OVER ("
-		if len(options.Sort) > 0 {
-			rowNumberSQL += "ORDER BY "
-			for i, sort := range options.Sort {
-				if i > 0 {
-					rowNumberSQL += ", "
-				}
-				direction := "ASC"
-				if strings.EqualFold(sort.Direction, "desc") {
-					direction = "DESC"
-				}
-				rowNumberSQL += fmt.Sprintf("%s %s", sort.Column, direction)
+		if len(options.ComputedColumns) > 0 {
+			for _, cu := range options.ComputedColumns {
+				logger.Debug("Applying computed column: %s", cu.Name)
+				query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
 			}
 		}
-		rowNumberSQL += ")"
 
-		// Create a query to fetch the row number using a subquery approach
-		// We'll select the PK and row_number, then filter by the target ID
-		type RowNumResult struct {
-			RowNum int64 `bun:"row_num"`
+		// Apply preloading
+		if len(options.Preload) > 0 {
+			var err error
+			query, err = h.applyPreloads(model, query, options.Preload)
+			if err != nil {
+				logger.Error("Failed to apply preloads: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "invalid_preload", "Failed to apply preloads"
+				return err
+			}
 		}
 
-		rowNumQuery := h.db.NewSelect().Table(tableName).
-			ColumnExpr(fmt.Sprintf("%s AS row_num", rowNumberSQL)).
-			Column(pkName)
-
-		// Apply the same filters as the main query
-		for _, filter := range options.Filters {
-			rowNumQuery = h.applyFilter(rowNumQuery, filter)
-		}
+		// Apply filters with proper grouping for OR logic
+		query = h.applyFilters(query, options.Filters)
 
 		// Apply custom operators
 		for _, customOp := range options.CustomOperators {
-			rowNumQuery = rowNumQuery.Where(customOp.SQL)
+			logger.Debug("Applying custom operator: %s - %s", customOp.Name, customOp.SQL)
+			query = query.Where(customOp.SQL)
 		}
 
-		// Filter for the specific ID we want the row number for
-		rowNumQuery = rowNumQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), *options.FetchRowNumber)
-
-		// Execute query to get row number
-		var result RowNumResult
-		if err := rowNumQuery.Scan(ctx, &result); err != nil {
-			if err == sql.ErrNoRows {
-				// Build filter description for error message
-				filterInfo := fmt.Sprintf("filters: %d", len(options.Filters))
-				if len(options.CustomOperators) > 0 {
-					customOps := make([]string, 0, len(options.CustomOperators))
-					for _, op := range options.CustomOperators {
-						customOps = append(customOps, op.SQL)
-					}
-					filterInfo += fmt.Sprintf(", custom operators: [%s]", strings.Join(customOps, "; "))
-				}
-				logger.Warn("No row found for primary key %s=%s with %s", pkName, *options.FetchRowNumber, filterInfo)
-			} else {
-				logger.Warn("Error fetching row number: %v", err)
+		// Apply sorting
+		for _, sort := range options.Sort {
+			direction := "ASC"
+			if strings.EqualFold(sort.Direction, "desc") {
+				direction = "DESC"
 			}
+			logger.Debug("Applying sort: %s %s", sort.Column, direction)
+			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
+		}
+
+		// Apply cursor-based pagination
+		if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
+			logger.Debug("Applying cursor pagination")
+
+			// Get primary key name
+			pkName := reflection.GetPrimaryKeyName(model)
+
+			// Extract model columns for validation
+			modelColumns := reflection.GetModelColumns(model)
+
+			// Default sort to primary key when none provided
+			if len(options.Sort) == 0 {
+				options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+			}
+
+			// Get cursor filter SQL (expandJoins is empty for resolvespec — no custom SQL join support yet)
+			cursorFilter, err := GetCursorFilter(tableName, pkName, modelColumns, options, nil)
+			if err != nil {
+				logger.Error("Error building cursor filter: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "cursor_error", "Invalid cursor pagination"
+				return err
+			}
+
+			// Apply cursor filter to query
+			if cursorFilter != "" {
+				logger.Debug("Applying cursor filter: %s", cursorFilter)
+				sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options)
+				// Ensure outer parentheses to prevent OR logic from escaping
+				sanitizedCursor = common.EnsureOuterParentheses(sanitizedCursor)
+				if sanitizedCursor != "" {
+					query = query.Where(sanitizedCursor)
+				}
+			}
+		}
+
+		// Try to get from cache first
+		// Use extended cache key if cursors are present
+		var cacheKeyHash string
+		if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
+			cacheKeyHash = buildExtendedQueryCacheKey(
+				tableName,
+				options.Filters,
+				options.Sort,
+				"", // No custom SQL WHERE in resolvespec
+				"", // No custom SQL OR in resolvespec
+				options.CursorForward,
+				options.CursorBackward,
+			)
 		} else {
-			rowNumber = &result.RowNum
-			logger.Debug("Found row number: %d", *rowNumber)
+			cacheKeyHash = buildQueryCacheKey(
+				tableName,
+				options.Filters,
+				options.Sort,
+				"", // No custom SQL WHERE in resolvespec
+				"", // No custom SQL OR in resolvespec
+			)
 		}
-	}
+		cacheKey := getQueryTotalCacheKey(cacheKeyHash)
 
-	// Apply pagination (skip if FetchRowNumber is set - we want only that record)
-	if options.FetchRowNumber == nil || *options.FetchRowNumber == "" {
-		if options.Limit != nil && *options.Limit > 0 {
-			logger.Debug("Applying limit: %d", *options.Limit)
-			query = query.Limit(*options.Limit)
-		}
-		if options.Offset != nil && *options.Offset > 0 {
-			logger.Debug("Applying offset: %d", *options.Offset)
-			query = query.Offset(*options.Offset)
-		}
-	}
-
-	// Execute query
-	var result interface{}
-	if id != "" || (options.FetchRowNumber != nil && *options.FetchRowNumber != "") {
-		// Single record query - either by URL ID or FetchRowNumber
-		var targetID string
-		if id != "" {
-			targetID = id
-			logger.Debug("Querying single record with URL ID: %s", id)
+		// Try to retrieve from cache
+		var cachedTotal cachedTotal
+		if err := cache.GetDefaultCache().Get(ctx, cacheKey, &cachedTotal); err == nil {
+			total = cachedTotal.Total
+			logger.Debug("Total records (from cache): %d", total)
 		} else {
-			targetID = *options.FetchRowNumber
-			logger.Debug("Querying single record with FetchRowNumber ID: %s", targetID)
+			// Cache miss - execute count query
+			logger.Debug("Cache miss for query total")
+			count, err := query.Count(ctx)
+			if err != nil {
+				logger.Error("Error counting records: %v", err)
+				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error counting records"
+				return err
+			}
+			total = count
+			logger.Debug("Total records (from query): %d", total)
+
+			// Store in cache with schema and table tags
+			cacheTTL := time.Minute * 2 // Default 2 minutes TTL
+			if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
+				logger.Warn("Failed to cache query total: %v", err)
+				// Don't fail the request if caching fails
+			} else {
+				logger.Debug("Cached query total with key: %s", cacheKey)
+			}
 		}
 
-		// For single record, create a new pointer to the struct type
-		singleResult := reflect.New(modelType).Interface()
-		pkName := reflection.GetPrimaryKeyName(singleResult)
+		// Handle FetchRowNumber if requested
+		if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
+			logger.Debug("Fetching row number for ID: %s", *options.FetchRowNumber)
+			pkName := reflection.GetPrimaryKeyName(model)
 
-		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
-		if err := query.Scan(ctx, singleResult); err != nil {
-			logger.Error("Error querying record: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "query_error", "Error executing query", err)
-			return
+			// Build ROW_NUMBER window function SQL
+			rowNumberSQL := "ROW_NUMBER() OVER ("
+			if len(options.Sort) > 0 {
+				rowNumberSQL += "ORDER BY "
+				for i, sort := range options.Sort {
+					if i > 0 {
+						rowNumberSQL += ", "
+					}
+					direction := "ASC"
+					if strings.EqualFold(sort.Direction, "desc") {
+						direction = "DESC"
+					}
+					rowNumberSQL += fmt.Sprintf("%s %s", sort.Column, direction)
+				}
+			}
+			rowNumberSQL += ")"
+
+			// Create a query to fetch the row number using a subquery approach
+			// We'll select the PK and row_number, then filter by the target ID
+			type RowNumResult struct {
+				RowNum int64 `bun:"row_num"`
+			}
+
+			rowNumQuery := tx.NewSelect().Table(tableName).
+				ColumnExpr(fmt.Sprintf("%s AS row_num", rowNumberSQL)).
+				Column(pkName)
+
+			// Apply the same filters as the main query
+			for _, filter := range options.Filters {
+				rowNumQuery = h.applyFilter(rowNumQuery, filter)
+			}
+
+			// Apply custom operators
+			for _, customOp := range options.CustomOperators {
+				rowNumQuery = rowNumQuery.Where(customOp.SQL)
+			}
+
+			// Filter for the specific ID we want the row number for
+			rowNumQuery = rowNumQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), *options.FetchRowNumber)
+
+			// Execute query to get row number
+			var rnResult RowNumResult
+			if err := rowNumQuery.Scan(ctx, &rnResult); err != nil {
+				if err == sql.ErrNoRows {
+					// Build filter description for error message
+					filterInfo := fmt.Sprintf("filters: %d", len(options.Filters))
+					if len(options.CustomOperators) > 0 {
+						customOps := make([]string, 0, len(options.CustomOperators))
+						for _, op := range options.CustomOperators {
+							customOps = append(customOps, op.SQL)
+						}
+						filterInfo += fmt.Sprintf(", custom operators: [%s]", strings.Join(customOps, "; "))
+					}
+					logger.Warn("No row found for primary key %s=%s with %s", pkName, *options.FetchRowNumber, filterInfo)
+				} else {
+					logger.Warn("Error fetching row number: %v", err)
+				}
+			} else {
+				rowNumber = &rnResult.RowNum
+				logger.Debug("Found row number: %d", *rowNumber)
+			}
 		}
-		result = singleResult
-	} else {
-		logger.Debug("Querying multiple records")
-		// Use the modelPtr already created and set on the query
-		if err := query.Scan(ctx, modelPtr); err != nil {
-			logger.Error("Error querying records: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "query_error", "Error executing query", err)
-			return
+
+		// Apply pagination (skip if FetchRowNumber is set - we want only that record)
+		if options.FetchRowNumber == nil || *options.FetchRowNumber == "" {
+			if options.Limit != nil && *options.Limit > 0 {
+				logger.Debug("Applying limit: %d", *options.Limit)
+				query = query.Limit(*options.Limit)
+			}
+			if options.Offset != nil && *options.Offset > 0 {
+				logger.Debug("Applying offset: %d", *options.Offset)
+				query = query.Offset(*options.Offset)
+			}
 		}
-		result = reflect.ValueOf(modelPtr).Elem().Interface()
+
+		// Execute query
+		if id != "" || (options.FetchRowNumber != nil && *options.FetchRowNumber != "") {
+			// Single record query - either by URL ID or FetchRowNumber
+			var targetID string
+			if id != "" {
+				targetID = id
+				logger.Debug("Querying single record with URL ID: %s", id)
+			} else {
+				targetID = *options.FetchRowNumber
+				logger.Debug("Querying single record with FetchRowNumber ID: %s", targetID)
+			}
+
+			// For single record, create a new pointer to the struct type
+			singleResult := reflect.New(modelType).Interface()
+			pkName := reflection.GetPrimaryKeyName(singleResult)
+
+			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+			if err := query.Scan(ctx, singleResult); err != nil {
+				logger.Error("Error querying record: %v", err)
+				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
+				return err
+			}
+			result = singleResult
+		} else {
+			logger.Debug("Querying multiple records")
+			// Use the modelPtr already created and set on the query
+			if err := query.Scan(ctx, modelPtr); err != nil {
+				logger.Error("Error querying records: %v", err)
+				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
+				return err
+			}
+			result = reflect.ValueOf(modelPtr).Elem().Interface()
+		}
+
+		logger.Info("Successfully retrieved records")
+		return nil
+	})
+
+	if txErr != nil {
+		if statusCode == 0 {
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
+		}
+		h.sendError(w, statusCode, errCode, errMsg, txErr)
+		return
 	}
-
-	logger.Info("Successfully retrieved records")
 
 	// Build metadata
-	limit := 0
-	offset := 0
 	count := int64(total)
 
 	// When FetchRowNumber is used, we only return 1 record
@@ -585,54 +622,107 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Check if we should use nested processing
 		if h.shouldUseNestedProcessor(v, model) {
 			logger.Info("Using nested CUD processor for create operation")
-			result, err := h.nestedProcessor.ProcessNestedCUD(ctx, "insert", v, model, make(map[string]interface{}), tableName)
+			var nestedResult *common.ProcessResult
+			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+				hookCtx := &HookContext{
+					Context: ctx,
+					Handler: h,
+					Schema:  schema,
+					Entity:  entity,
+					Model:   model,
+					Options: options,
+					Data:    v,
+					Writer:  w,
+					Tx:      tx,
+				}
+				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+					return fmt.Errorf("BeforeCreate hook failed: %w", err)
+				}
+				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+					v = modifiedData
+				}
+
+				originalProcessor := h.nestedProcessor
+				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
+				defer func() {
+					h.nestedProcessor = originalProcessor
+				}()
+
+				var procErr error
+				nestedResult, procErr = h.nestedProcessor.ProcessNestedCUD(ctx, "insert", v, model, make(map[string]interface{}), tableName)
+				return procErr
+			})
 			if err != nil {
 				logger.Error("Error in nested create: %v", err)
 				h.sendError(w, http.StatusInternalServerError, "create_error", "Error creating record with nested data", err)
 				return
 			}
-			logger.Info("Successfully created record with nested data, ID: %v", result.ID)
+			logger.Info("Successfully created record with nested data, ID: %v", nestedResult.ID)
 			// Invalidate cache for this table
 			cacheTags := buildCacheTags(schema, tableName)
 			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
 				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
 			}
-			h.sendResponse(w, result.Data, nil)
+			h.sendResponse(w, nestedResult.Data, nil)
 			return
 		}
 
 		// Standard processing without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
-		query := h.db.NewInsert().Table(tableName)
-		for key, value := range v {
-			query = query.Value(key, common.ConvertSliceForBun(value))
-		}
 		var responseData interface{} = v
-		if pkName == "" {
-			// No PK on model — insert and return input as-is.
-			result, err := query.Exec(ctx)
-			if err != nil {
-				logger.Error("Error creating record: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "create_error", "Error creating record", err)
-				return
+		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			hookCtx := &HookContext{
+				Context: ctx,
+				Handler: h,
+				Schema:  schema,
+				Entity:  entity,
+				Model:   model,
+				Options: options,
+				Data:    v,
+				Writer:  w,
+				Tx:      tx,
 			}
-			logger.Info("Successfully created record, rows affected: %d", result.RowsAffected())
-		} else {
+			if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+				return fmt.Errorf("BeforeCreate hook failed: %w", err)
+			}
+			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+				v = modifiedData
+			}
+			responseData = v
+
+			query := tx.NewInsert().Table(tableName)
+			for key, value := range v {
+				query = query.Value(key, common.ConvertSliceForBun(value))
+			}
+			if pkName == "" {
+				// No PK on model — insert and return input as-is.
+				result, err := query.Exec(ctx)
+				if err != nil {
+					return err
+				}
+				logger.Info("Successfully created record, rows affected: %d", result.RowsAffected())
+				return nil
+			}
+
 			var insertedID interface{}
 			if err := query.Returning(pkName).Scan(ctx, &insertedID); err != nil {
-				logger.Error("Error creating record: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "create_error", "Error creating record", err)
-				return
+				return err
 			}
 			logger.Info("Successfully created record with %s: %v", pkName, insertedID)
 			fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-			if fetchErr := h.db.NewSelect().Model(fetchedRecord).
+			if fetchErr := tx.NewSelect().Model(fetchedRecord).
 				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), insertedID).
 				ScanModel(ctx); fetchErr == nil {
 				responseData = mergeWithInput(fetchedRecord, v)
 			} else {
 				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, insertedID, fetchErr)
 			}
+			return nil
+		})
+		if err != nil {
+			logger.Error("Error creating record: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "create_error", "Error creating record", err)
+			return
 		}
 		// Invalidate cache for this table
 		cacheTags := buildCacheTags(schema, tableName)
@@ -663,6 +753,24 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				}()
 
 				for _, item := range v {
+					hookCtx := &HookContext{
+						Context: ctx,
+						Handler: h,
+						Schema:  schema,
+						Entity:  entity,
+						Model:   model,
+						Options: options,
+						Data:    item,
+						Writer:  w,
+						Tx:      tx,
+					}
+					if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+						return fmt.Errorf("BeforeCreate hook failed: %w", err)
+					}
+					if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+						item = modifiedData
+					}
+
 					result, err := h.nestedProcessor.ProcessNestedCUD(ctx, "insert", item, model, make(map[string]interface{}), tableName)
 					if err != nil {
 						return fmt.Errorf("failed to process item: %w", err)
@@ -689,10 +797,27 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Standard batch insert without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
-		originals := make([]map[string]interface{}, 0, len(v))
-		insertedIDs := make([]interface{}, 0, len(v))
+		responseItems := make([]interface{}, 0, len(v))
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range v {
+				hookCtx := &HookContext{
+					Context: ctx,
+					Handler: h,
+					Schema:  schema,
+					Entity:  entity,
+					Model:   model,
+					Options: options,
+					Data:    item,
+					Writer:  w,
+					Tx:      tx,
+				}
+				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+					return fmt.Errorf("BeforeCreate hook failed: %w", err)
+				}
+				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+					item = modifiedData
+				}
+
 				txQuery := tx.NewInsert().Table(tableName)
 				for key, value := range item {
 					txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
@@ -701,16 +826,22 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					originals = append(originals, item)
-					insertedIDs = append(insertedIDs, nil)
+					responseItems = append(responseItems, item)
 					continue
 				}
 				var returnedID interface{}
 				if err := txQuery.Returning(pkName).Scan(ctx, &returnedID); err != nil {
 					return err
 				}
-				originals = append(originals, item)
-				insertedIDs = append(insertedIDs, returnedID)
+				fetchedRecord := reflect.New(modelElemType).Interface()
+				if fetchErr := tx.NewSelect().Model(fetchedRecord).
+					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
+					ScanModel(ctx); fetchErr == nil {
+					responseItems = append(responseItems, mergeWithInput(fetchedRecord, item))
+				} else {
+					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
+					responseItems = append(responseItems, item)
+				}
 			}
 			return nil
 		})
@@ -724,23 +855,6 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		cacheTags := buildCacheTags(schema, tableName)
 		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
 			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-		}
-		// Re-fetch each record after transaction commits; fall back to input on failure.
-		responseItems := make([]interface{}, 0, len(insertedIDs))
-		for i, pkVal := range insertedIDs {
-			if pkVal == nil {
-				responseItems = append(responseItems, originals[i])
-				continue
-			}
-			fetchedRecord := reflect.New(modelElemType).Interface()
-			if fetchErr := h.db.NewSelect().Model(fetchedRecord).
-				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), pkVal).
-				ScanModel(ctx); fetchErr == nil {
-				responseItems = append(responseItems, mergeWithInput(fetchedRecord, originals[i]))
-			} else {
-				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, pkVal, fetchErr)
-				responseItems = append(responseItems, originals[i])
-			}
 		}
 		h.sendResponse(w, responseItems, nil)
 
@@ -770,6 +884,24 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 				for _, item := range v {
 					if itemMap, ok := item.(map[string]interface{}); ok {
+						hookCtx := &HookContext{
+							Context: ctx,
+							Handler: h,
+							Schema:  schema,
+							Entity:  entity,
+							Model:   model,
+							Options: options,
+							Data:    itemMap,
+							Writer:  w,
+							Tx:      tx,
+						}
+						if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+							return fmt.Errorf("BeforeCreate hook failed: %w", err)
+						}
+						if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+							itemMap = modifiedData
+						}
+
 						result, err := h.nestedProcessor.ProcessNestedCUD(ctx, "insert", itemMap, model, make(map[string]interface{}), tableName)
 						if err != nil {
 							return fmt.Errorf("failed to process item: %w", err)
@@ -797,14 +929,32 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Standard batch insert without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
-		originals := make([]map[string]interface{}, 0, len(v))
-		insertedIDs := make([]interface{}, 0, len(v))
+		responseItems := make([]interface{}, 0, len(v))
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range v {
 				itemMap, ok := item.(map[string]interface{})
 				if !ok {
 					continue
 				}
+
+				hookCtx := &HookContext{
+					Context: ctx,
+					Handler: h,
+					Schema:  schema,
+					Entity:  entity,
+					Model:   model,
+					Options: options,
+					Data:    itemMap,
+					Writer:  w,
+					Tx:      tx,
+				}
+				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+					return fmt.Errorf("BeforeCreate hook failed: %w", err)
+				}
+				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
+					itemMap = modifiedData
+				}
+
 				txQuery := tx.NewInsert().Table(tableName)
 				for key, value := range itemMap {
 					txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
@@ -813,16 +963,22 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					originals = append(originals, itemMap)
-					insertedIDs = append(insertedIDs, nil)
+					responseItems = append(responseItems, itemMap)
 					continue
 				}
 				var returnedID interface{}
 				if err := txQuery.Returning(pkName).Scan(ctx, &returnedID); err != nil {
 					return err
 				}
-				originals = append(originals, itemMap)
-				insertedIDs = append(insertedIDs, returnedID)
+				fetchedRecord := reflect.New(modelElemType).Interface()
+				if fetchErr := tx.NewSelect().Model(fetchedRecord).
+					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
+					ScanModel(ctx); fetchErr == nil {
+					responseItems = append(responseItems, mergeWithInput(fetchedRecord, itemMap))
+				} else {
+					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
+					responseItems = append(responseItems, itemMap)
+				}
 			}
 			return nil
 		})
@@ -836,23 +992,6 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		cacheTags := buildCacheTags(schema, tableName)
 		if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
 			logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-		}
-		// Re-fetch each record after transaction commits; fall back to input on failure.
-		responseItems := make([]interface{}, 0, len(insertedIDs))
-		for i, pkVal := range insertedIDs {
-			if pkVal == nil {
-				responseItems = append(responseItems, originals[i])
-				continue
-			}
-			fetchedRecord := reflect.New(modelElemType).Interface()
-			if fetchErr := h.db.NewSelect().Model(fetchedRecord).
-				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), pkVal).
-				ScanModel(ctx); fetchErr == nil {
-				responseItems = append(responseItems, mergeWithInput(fetchedRecord, originals[i]))
-			} else {
-				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, pkVal, fetchErr)
-				responseItems = append(responseItems, originals[i])
-			}
 		}
 		h.sendResponse(w, responseItems, nil)
 

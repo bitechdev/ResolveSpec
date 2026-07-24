@@ -327,26 +327,6 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		options.SingleRecordAsObject = false
 	}
 
-	// Execute BeforeRead hooks
-	hookCtx := &HookContext{
-		Context:   ctx,
-		Handler:   h,
-		Schema:    schema,
-		Entity:    entity,
-		TableName: tableName,
-		Model:     model,
-		Options:   options,
-		ID:        id,
-		Writer:    w,
-		Tx:        h.db,
-	}
-
-	if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
-		logger.Error("BeforeRead hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
-	}
-
 	// Validate and unwrap model type to get base struct
 	modelType := reflect.TypeOf(model)
 	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
@@ -364,437 +344,480 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	logger.Info("Reading records from %s.%s", schema, entity)
 
-	// Start with Model() using the slice pointer to avoid "Model(nil)" errors in Count()
-	// Bun's Model() accepts both single pointers and slice pointers
-	query := h.db.NewSelect().Model(modelPtr)
-
-	// Only set Table() if the model doesn't provide a table name via the underlying type
-	// Create a temporary instance to check for TableNameProvider
-	tempInstance := reflect.New(modelType).Interface()
-	if provider, ok := tempInstance.(common.TableNameProvider); !ok || provider.TableName() == "" {
-		query = query.Table(tableName)
+	hookCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		TableName: tableName,
+		Model:     model,
+		Options:   options,
+		ID:        id,
+		Writer:    w,
 	}
 
-	// If we have computed columns/expressions but options.Columns is empty,
-	// populate it with all model columns first since computed columns are additions
-	if len(options.Columns) == 0 && (len(options.ComputedQL) > 0 || len(options.ComputedColumns) > 0) {
-		logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
-		options.Columns = reflection.GetSQLModelColumns(model)
-	}
+	// Everything below runs inside a single transaction so that the BeforeRead/BeforeScan
+	// hooks (which may set session-scoped RLS GUCs via SET LOCAL) execute on the same
+	// physical connection as the queries they are meant to protect. Under connection
+	// pooling, firing a hook against h.db and then querying against h.db again may hand
+	// out two different connections, silently bypassing RLS.
+	var (
+		total            int
+		fetchedRowNumber *int64
+		statusCode       int
+		errCode          string
+		errMsg           string
+	)
 
-	// Apply ComputedQL fields if any
-	if len(options.ComputedQL) > 0 {
-		for colName, colExpr := range options.ComputedQL {
-			logger.Debug("Applying computed column: %s", colName)
-			if strings.Contains(colName, "cql") {
-				query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", colExpr, colName))
-			} else {
-				query = query.ColumnExpr(fmt.Sprintf("(%s)AS %s", colExpr, colName))
-			}
+	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		hookCtx.Tx = tx
 
-			for colIndex := range options.Columns {
-				if options.Columns[colIndex] == colName {
-					// Remove the computed column from the selected columns to avoid duplication
-					options.Columns = append(options.Columns[:colIndex], options.Columns[colIndex+1:]...)
-					break
-				}
-			}
+		if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
+			return err
 		}
-	}
+		options = hookCtx.Options
 
-	if len(options.ComputedColumns) > 0 {
-		for _, cu := range options.ComputedColumns {
-			logger.Debug("Applying computed column: %s", cu.Name)
-			if strings.Contains(cu.Name, "cql") {
-				query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", cu.Expression, cu.Name))
-			} else {
-				query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
-			}
+		// Start with Model() using the slice pointer to avoid "Model(nil)" errors in Count()
+		// Bun's Model() accepts both single pointers and slice pointers
+		query := tx.NewSelect().Model(modelPtr)
 
-			for colIndex := range options.Columns {
-				if options.Columns[colIndex] == cu.Name {
-					// Remove the computed column from the selected columns to avoid duplication
-					options.Columns = append(options.Columns[:colIndex], options.Columns[colIndex+1:]...)
-					break
-				}
-			}
-		}
-	}
-
-	// Apply column selection
-	if len(options.Columns) > 0 {
-		logger.Debug("Selecting columns: %v", options.Columns)
-		for _, col := range options.Columns {
-			query = query.Column(reflection.ExtractSourceColumn(col))
+		// Only set Table() if the model doesn't provide a table name via the underlying type
+		// Create a temporary instance to check for TableNameProvider
+		tempInstance := reflect.New(modelType).Interface()
+		if provider, ok := tempInstance.(common.TableNameProvider); !ok || provider.TableName() == "" {
+			query = query.Table(tableName)
 		}
 
-	}
-
-	// Apply expand (Just expand to Preload for now)
-	for _, expand := range options.Expand {
-		logger.Debug("Applying expand: %s", expand.Relation)
-		sorts := make([]common.SortOption, 0)
-		for _, s := range strings.Split(expand.Sort, ",") {
-			if s == "" {
-				continue
-			}
-			dir := "ASC"
-			if strings.HasPrefix(s, "-") || strings.HasSuffix(strings.ToUpper(s), " DESC") {
-				dir = "DESC"
-				s = strings.TrimPrefix(s, "-")
-				s = strings.TrimSuffix(strings.ToLower(s), " desc")
-			}
-			sorts = append(sorts, common.SortOption{
-				Column: s, Direction: dir,
-			})
-		}
-		// Note: Expand would require JOIN implementation
-		// For now, we'll use Preload as a fallback
-		// query = query.Preload(expand.Relation)
-		if options.Preload == nil {
-			options.Preload = make([]common.PreloadOption, 0)
-		}
-		skip := false
-		for idx := range options.Preload {
-			if options.Preload[idx].Relation == expand.Relation {
-				skip = true
-				continue
-			}
-		}
-		if !skip {
-			options.Preload = append(options.Preload, common.PreloadOption{
-				Relation: expand.Relation,
-				Columns:  expand.Columns,
-				Sort:     sorts,
-				Where:    expand.Where,
-			})
-		}
-	}
-
-	// Apply preloading
-	logger.Debug("Total preloads to apply: %d", len(options.Preload))
-	for idx := range options.Preload {
-		preload := options.Preload[idx]
-		logger.Debug("Applying preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, Where=%s",
-			idx, preload.Relation, preload.Recursive, preload.RelatedKey, preload.Where)
-
-		// Validate and fix WHERE clause to ensure it contains the relation prefix
-		if len(preload.Where) > 0 {
-			fixedWhere, err := common.ValidateAndFixPreloadWhere(preload.Where, preload.Relation)
-			if err != nil {
-				logger.Error("Invalid preload WHERE clause for relation '%s': %v", preload.Relation, err)
-				h.sendError(w, http.StatusBadRequest, "invalid_preload_where",
-					fmt.Sprintf("Invalid preload WHERE clause for relation '%s'", preload.Relation), err)
-				return
-			}
-			preload.Where = fixedWhere
+		// If we have computed columns/expressions but options.Columns is empty,
+		// populate it with all model columns first since computed columns are additions
+		if len(options.Columns) == 0 && (len(options.ComputedQL) > 0 || len(options.ComputedColumns) > 0) {
+			logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
+			options.Columns = reflection.GetSQLModelColumns(model)
 		}
 
-		// Apply the preload with recursive support
-		query = h.applyPreloadWithRecursion(query, preload, options.Preload, model, 0)
-	}
-
-	// Apply DISTINCT if requested
-	if options.Distinct {
-		logger.Debug("Applying DISTINCT")
-		// Note: DISTINCT implementation depends on ORM support
-		// This may need to be handled differently per database adapter
-	}
-
-	// Apply filters - validate and adjust for column types first
-	// Group consecutive OR filters together to prevent OR logic from escaping
-	for i := 0; i < len(options.Filters); {
-		filter := &options.Filters[i]
-
-		// Validate and adjust filter based on column type
-		castInfo := h.ValidateAndAdjustFilterForColumnType(filter, model)
-
-		// Default to AND if LogicOperator is not set
-		logicOp := filter.LogicOperator
-		if logicOp == "" {
-			logicOp = "AND"
-		}
-
-		// Check if this is the start of an OR group
-		if logicOp == "OR" {
-			// Collect all consecutive OR filters
-			orFilters := []*common.FilterOption{filter}
-			orCastInfo := []ColumnCastInfo{castInfo}
-
-			j := i + 1
-			for j < len(options.Filters) {
-				nextFilter := &options.Filters[j]
-				nextLogicOp := nextFilter.LogicOperator
-				if nextLogicOp == "" {
-					nextLogicOp = "AND"
-				}
-				if nextLogicOp == "OR" {
-					nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
-					orFilters = append(orFilters, nextFilter)
-					orCastInfo = append(orCastInfo, nextCastInfo)
-					j++
+		// Apply ComputedQL fields if any
+		if len(options.ComputedQL) > 0 {
+			for colName, colExpr := range options.ComputedQL {
+				logger.Debug("Applying computed column: %s", colName)
+				if strings.Contains(colName, "cql") {
+					query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", colExpr, colName))
 				} else {
-					break
+					query = query.ColumnExpr(fmt.Sprintf("(%s)AS %s", colExpr, colName))
+				}
+
+				for colIndex := range options.Columns {
+					if options.Columns[colIndex] == colName {
+						// Remove the computed column from the selected columns to avoid duplication
+						options.Columns = append(options.Columns[:colIndex], options.Columns[colIndex+1:]...)
+						break
+					}
 				}
 			}
-
-			// Apply the OR group as a single grouped condition
-			logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
-			query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName)
-			i = j
-		} else {
-			// Single AND filter - apply normally
-			logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
-			query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
-			i++
 		}
-	}
 
-	// Apply custom SQL WHERE clause (AND condition)
-	if options.CustomSQLWhere != "" {
-		logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
-		// First add table prefixes to unqualified columns (but skip columns inside function calls)
-		prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
-		// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
-		// Ensure outer parentheses to prevent OR logic from escaping
-		sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
-		if sanitizedWhere != "" {
-			query = query.Where(sanitizedWhere)
-		}
-	}
+		if len(options.ComputedColumns) > 0 {
+			for _, cu := range options.ComputedColumns {
+				logger.Debug("Applying computed column: %s", cu.Name)
+				if strings.Contains(cu.Name, "cql") {
+					query = query.ColumnExpr(fmt.Sprintf("(%s)::text AS %s", cu.Expression, cu.Name))
+				} else {
+					query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
+				}
 
-	// Apply custom SQL WHERE clause (OR condition)
-	if options.CustomSQLOr != "" {
-		logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
-		customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
-		// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-		sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
-		// Ensure outer parentheses to prevent OR logic from escaping
-		sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
-		if sanitizedOr != "" {
-			query = query.WhereOr(sanitizedOr)
-		}
-	}
-
-	// Apply custom SQL JOIN clauses, skipping any whose alias is already provided by a
-	// preload LEFT JOIN (to prevent "table name specified more than once" errors).
-	if len(options.CustomSQLJoin) > 0 {
-		preloadAliasSet := make(map[string]bool, len(options.Preload))
-		for i := range options.Preload {
-			if alias := common.RelationPathToBunAlias(options.Preload[i].Relation); alias != "" {
-				preloadAliasSet[alias] = true
+				for colIndex := range options.Columns {
+					if options.Columns[colIndex] == cu.Name {
+						// Remove the computed column from the selected columns to avoid duplication
+						options.Columns = append(options.Columns[:colIndex], options.Columns[colIndex+1:]...)
+						break
+					}
+				}
 			}
 		}
 
-		for i, joinClause := range options.CustomSQLJoin {
-			if i < len(options.JoinAliases) && options.JoinAliases[i] != "" {
-				alias := strings.ToLower(options.JoinAliases[i])
-				if preloadAliasSet[alias] {
-					logger.Debug("Skipping custom SQL JOIN (alias '%s' already joined by preload): %s", alias, joinClause)
+		// Apply column selection
+		if len(options.Columns) > 0 {
+			logger.Debug("Selecting columns: %v", options.Columns)
+			for _, col := range options.Columns {
+				query = query.Column(reflection.ExtractSourceColumn(col))
+			}
+
+		}
+
+		// Apply expand (Just expand to Preload for now)
+		for _, expand := range options.Expand {
+			logger.Debug("Applying expand: %s", expand.Relation)
+			sorts := make([]common.SortOption, 0)
+			for _, s := range strings.Split(expand.Sort, ",") {
+				if s == "" {
+					continue
+				}
+				dir := "ASC"
+				if strings.HasPrefix(s, "-") || strings.HasSuffix(strings.ToUpper(s), " DESC") {
+					dir = "DESC"
+					s = strings.TrimPrefix(s, "-")
+					s = strings.TrimSuffix(strings.ToLower(s), " desc")
+				}
+				sorts = append(sorts, common.SortOption{
+					Column: s, Direction: dir,
+				})
+			}
+			// Note: Expand would require JOIN implementation
+			// For now, we'll use Preload as a fallback
+			// query = query.Preload(expand.Relation)
+			if options.Preload == nil {
+				options.Preload = make([]common.PreloadOption, 0)
+			}
+			skip := false
+			for idx := range options.Preload {
+				if options.Preload[idx].Relation == expand.Relation {
+					skip = true
 					continue
 				}
 			}
-			logger.Debug("Applying custom SQL JOIN: %s", joinClause)
-			query = query.Join(joinClause)
-		}
-	}
-
-	// Handle FetchRowNumber before applying ID filter
-	// This must happen before the query to get the row position, then filter by PK
-	var fetchedRowNumber *int64
-	var fetchRowNumberPKValue string
-	if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
-		pkName := reflection.GetPrimaryKeyName(model)
-		fetchRowNumberPKValue = *options.FetchRowNumber
-
-		logger.Debug("FetchRowNumber: Fetching row number for PK %s = %s", pkName, fetchRowNumberPKValue)
-
-		rowNum, err := h.FetchRowNumber(ctx, tableName, pkName, fetchRowNumberPKValue, options, model)
-		if err != nil {
-			logger.Error("Failed to fetch row number: %v", err)
-			h.sendError(w, http.StatusBadRequest, "fetch_rownumber_error", "Failed to fetch row number", err)
-			return
+			if !skip {
+				options.Preload = append(options.Preload, common.PreloadOption{
+					Relation: expand.Relation,
+					Columns:  expand.Columns,
+					Sort:     sorts,
+					Where:    expand.Where,
+				})
+			}
 		}
 
-		fetchedRowNumber = &rowNum
-		logger.Debug("FetchRowNumber: Row number %d for PK %s = %s", rowNum, pkName, fetchRowNumberPKValue)
+		// Apply preloading
+		logger.Debug("Total preloads to apply: %d", len(options.Preload))
+		for idx := range options.Preload {
+			preload := options.Preload[idx]
+			logger.Debug("Applying preload [%d]: Relation=%s, Recursive=%v, RelatedKey=%s, Where=%s",
+				idx, preload.Relation, preload.Recursive, preload.RelatedKey, preload.Where)
 
-		// Now filter the main query to this specific primary key
-		tableAlias := reflection.ExtractTableNameOnly(tableName)
-		query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), fetchRowNumberPKValue)
-	} else if id != "" {
-		// If ID is provided (and not FetchRowNumber), filter by ID
-		pkName := reflection.GetPrimaryKeyName(model)
-		logger.Debug("Filtering by ID=%s: %s", pkName, id)
-
-		tableAlias := reflection.ExtractTableNameOnly(tableName)
-		query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), id)
-	}
-
-	// Apply sorting
-	tableAlias := reflection.ExtractTableNameOnly(tableName)
-	for _, sort := range options.Sort {
-		direction := "ASC"
-		if strings.EqualFold(sort.Direction, "desc") {
-			direction = "DESC"
-		}
-		logger.Debug("Applying sort: %s %s", sort.Column, direction)
-
-		// Check if it's an expression (enclosed in brackets) - use directly without quoting
-		if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
-			// For expressions, pass as raw SQL to prevent auto-quoting
-			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
-		} else if strings.Contains(sort.Column, ".") {
-			// Already qualified (e.g. alias.column) - pass as raw expression to preserve the dot
-			query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
-		} else {
-			// Unqualified column - prefix with main table alias to avoid ambiguity on JOINs
-			query = query.OrderExpr(fmt.Sprintf("%s.%s %s", common.QuoteIdent(tableAlias), common.QuoteIdent(sort.Column), direction))
-		}
-	}
-
-	// Get total count before pagination (unless skip count is requested)
-	var total int
-	if !options.SkipCount {
-		// Try to get from cache first (unless SkipCache is true)
-		var cachedTotalData *cachedTotal
-		var cacheKey string
-
-		if !options.SkipCache {
-			// Build cache key from query parameters
-			// Convert expand options to interface slice for the cache key builder
-			expandOpts := make([]interface{}, len(options.Expand))
-			for i, exp := range options.Expand {
-				expandOpts[i] = map[string]interface{}{
-					"relation": exp.Relation,
-					"where":    exp.Where,
+			// Validate and fix WHERE clause to ensure it contains the relation prefix
+			if len(preload.Where) > 0 {
+				fixedWhere, err := common.ValidateAndFixPreloadWhere(preload.Where, preload.Relation)
+				if err != nil {
+					logger.Error("Invalid preload WHERE clause for relation '%s': %v", preload.Relation, err)
+					statusCode, errCode, errMsg = http.StatusBadRequest, "invalid_preload_where",
+						fmt.Sprintf("Invalid preload WHERE clause for relation '%s'", preload.Relation)
+					return err
 				}
+				preload.Where = fixedWhere
 			}
 
-			cacheKeyHash := buildExtendedQueryCacheKey(
-				tableName,
-				options.Filters,
-				options.Sort,
-				options.CustomSQLWhere,
-				options.CustomSQLOr,
-				options.CustomSQLJoin,
-				expandOpts,
-				options.Distinct,
-				options.CursorForward,
-				options.CursorBackward,
-			)
-			cacheKey = getQueryTotalCacheKey(cacheKeyHash)
+			// Apply the preload with recursive support
+			query = h.applyPreloadWithRecursion(query, preload, options.Preload, model, 0)
+		}
 
-			// Try to retrieve from cache
-			cachedTotalData = &cachedTotal{}
-			err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotalData)
-			if err == nil {
-				total = cachedTotalData.Total
-				logger.Debug("Total records (from cache): %d", total)
+		// Apply DISTINCT if requested
+		if options.Distinct {
+			logger.Debug("Applying DISTINCT")
+			// Note: DISTINCT implementation depends on ORM support
+			// This may need to be handled differently per database adapter
+		}
+
+		// Apply filters - validate and adjust for column types first
+		// Group consecutive OR filters together to prevent OR logic from escaping
+		for i := 0; i < len(options.Filters); {
+			filter := &options.Filters[i]
+
+			// Validate and adjust filter based on column type
+			castInfo := h.ValidateAndAdjustFilterForColumnType(filter, model)
+
+			// Default to AND if LogicOperator is not set
+			logicOp := filter.LogicOperator
+			if logicOp == "" {
+				logicOp = "AND"
+			}
+
+			// Check if this is the start of an OR group
+			if logicOp == "OR" {
+				// Collect all consecutive OR filters
+				orFilters := []*common.FilterOption{filter}
+				orCastInfo := []ColumnCastInfo{castInfo}
+
+				j := i + 1
+				for j < len(options.Filters) {
+					nextFilter := &options.Filters[j]
+					nextLogicOp := nextFilter.LogicOperator
+					if nextLogicOp == "" {
+						nextLogicOp = "AND"
+					}
+					if nextLogicOp == "OR" {
+						nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
+						orFilters = append(orFilters, nextFilter)
+						orCastInfo = append(orCastInfo, nextCastInfo)
+						j++
+					} else {
+						break
+					}
+				}
+
+				// Apply the OR group as a single grouped condition
+				logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
+				query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName)
+				i = j
 			} else {
-				logger.Debug("Cache miss for query total")
-				cachedTotalData = nil
+				// Single AND filter - apply normally
+				logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
+				query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+				i++
 			}
 		}
 
-		// If not in cache or cache skip, execute count query
-		if cachedTotalData == nil {
-			count, err := query.Count(ctx)
-			if err != nil {
-				logger.Error("Error counting records: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "query_error", "Error counting records", err)
-				return
+		// Apply custom SQL WHERE clause (AND condition)
+		if options.CustomSQLWhere != "" {
+			logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
+			// First add table prefixes to unqualified columns (but skip columns inside function calls)
+			prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
+			// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+			sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+			// Ensure outer parentheses to prevent OR logic from escaping
+			sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
+			if sanitizedWhere != "" {
+				query = query.Where(sanitizedWhere)
 			}
-			total = count
-			logger.Debug("Total records (from query): %d", total)
+		}
 
-			// Store in cache with schema and table tags (if caching is enabled)
-			if !options.SkipCache && cacheKey != "" {
-				cacheTTL := time.Minute * 2 // Default 2 minutes TTL
-				if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
-					logger.Warn("Failed to cache query total: %v", err)
-					// Don't fail the request if caching fails
+		// Apply custom SQL WHERE clause (OR condition)
+		if options.CustomSQLOr != "" {
+			logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
+			customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
+			// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+			sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+			// Ensure outer parentheses to prevent OR logic from escaping
+			sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
+			if sanitizedOr != "" {
+				query = query.WhereOr(sanitizedOr)
+			}
+		}
+
+		// Apply custom SQL JOIN clauses, skipping any whose alias is already provided by a
+		// preload LEFT JOIN (to prevent "table name specified more than once" errors).
+		if len(options.CustomSQLJoin) > 0 {
+			preloadAliasSet := make(map[string]bool, len(options.Preload))
+			for i := range options.Preload {
+				if alias := common.RelationPathToBunAlias(options.Preload[i].Relation); alias != "" {
+					preloadAliasSet[alias] = true
+				}
+			}
+
+			for i, joinClause := range options.CustomSQLJoin {
+				if i < len(options.JoinAliases) && options.JoinAliases[i] != "" {
+					alias := strings.ToLower(options.JoinAliases[i])
+					if preloadAliasSet[alias] {
+						logger.Debug("Skipping custom SQL JOIN (alias '%s' already joined by preload): %s", alias, joinClause)
+						continue
+					}
+				}
+				logger.Debug("Applying custom SQL JOIN: %s", joinClause)
+				query = query.Join(joinClause)
+			}
+		}
+
+		// Handle FetchRowNumber before applying ID filter
+		// This must happen before the query to get the row position, then filter by PK
+		var fetchRowNumberPKValue string
+		if options.FetchRowNumber != nil && *options.FetchRowNumber != "" {
+			pkName := reflection.GetPrimaryKeyName(model)
+			fetchRowNumberPKValue = *options.FetchRowNumber
+
+			logger.Debug("FetchRowNumber: Fetching row number for PK %s = %s", pkName, fetchRowNumberPKValue)
+
+			rowNum, err := h.FetchRowNumber(ctx, tx, tableName, pkName, fetchRowNumberPKValue, options, model)
+			if err != nil {
+				logger.Error("Failed to fetch row number: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "fetch_rownumber_error", "Failed to fetch row number"
+				return err
+			}
+
+			fetchedRowNumber = &rowNum
+			logger.Debug("FetchRowNumber: Row number %d for PK %s = %s", rowNum, pkName, fetchRowNumberPKValue)
+
+			// Now filter the main query to this specific primary key
+			tableAlias := reflection.ExtractTableNameOnly(tableName)
+			query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), fetchRowNumberPKValue)
+		} else if id != "" {
+			// If ID is provided (and not FetchRowNumber), filter by ID
+			pkName := reflection.GetPrimaryKeyName(model)
+			logger.Debug("Filtering by ID=%s: %s", pkName, id)
+
+			tableAlias := reflection.ExtractTableNameOnly(tableName)
+			query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), id)
+		}
+
+		// Apply sorting
+		tableAlias := reflection.ExtractTableNameOnly(tableName)
+		for _, sort := range options.Sort {
+			direction := "ASC"
+			if strings.EqualFold(sort.Direction, "desc") {
+				direction = "DESC"
+			}
+			logger.Debug("Applying sort: %s %s", sort.Column, direction)
+
+			// Check if it's an expression (enclosed in brackets) - use directly without quoting
+			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+				// For expressions, pass as raw SQL to prevent auto-quoting
+				query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
+			} else if strings.Contains(sort.Column, ".") {
+				// Already qualified (e.g. alias.column) - pass as raw expression to preserve the dot
+				query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
+			} else {
+				// Unqualified column - prefix with main table alias to avoid ambiguity on JOINs
+				query = query.OrderExpr(fmt.Sprintf("%s.%s %s", common.QuoteIdent(tableAlias), common.QuoteIdent(sort.Column), direction))
+			}
+		}
+
+		// Get total count before pagination (unless skip count is requested)
+		if !options.SkipCount {
+			// Try to get from cache first (unless SkipCache is true)
+			var cachedTotalData *cachedTotal
+			var cacheKey string
+
+			if !options.SkipCache {
+				// Build cache key from query parameters
+				// Convert expand options to interface slice for the cache key builder
+				expandOpts := make([]interface{}, len(options.Expand))
+				for i, exp := range options.Expand {
+					expandOpts[i] = map[string]interface{}{
+						"relation": exp.Relation,
+						"where":    exp.Where,
+					}
+				}
+
+				cacheKeyHash := buildExtendedQueryCacheKey(
+					tableName,
+					options.Filters,
+					options.Sort,
+					options.CustomSQLWhere,
+					options.CustomSQLOr,
+					options.CustomSQLJoin,
+					expandOpts,
+					options.Distinct,
+					options.CursorForward,
+					options.CursorBackward,
+				)
+				cacheKey = getQueryTotalCacheKey(cacheKeyHash)
+
+				// Try to retrieve from cache
+				cachedTotalData = &cachedTotal{}
+				err := cache.GetDefaultCache().Get(ctx, cacheKey, cachedTotalData)
+				if err == nil {
+					total = cachedTotalData.Total
+					logger.Debug("Total records (from cache): %d", total)
 				} else {
-					logger.Debug("Cached query total with key: %s", cacheKey)
+					logger.Debug("Cache miss for query total")
+					cachedTotalData = nil
+				}
+			}
+
+			// If not in cache or cache skip, execute count query
+			if cachedTotalData == nil {
+				count, err := query.Count(ctx)
+				if err != nil {
+					logger.Error("Error counting records: %v", err)
+					statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error counting records"
+					return err
+				}
+				total = count
+				logger.Debug("Total records (from query): %d", total)
+
+				// Store in cache with schema and table tags (if caching is enabled)
+				if !options.SkipCache && cacheKey != "" {
+					cacheTTL := time.Minute * 2 // Default 2 minutes TTL
+					if err := setQueryTotalCache(ctx, cacheKey, total, schema, tableName, cacheTTL); err != nil {
+						logger.Warn("Failed to cache query total: %v", err)
+						// Don't fail the request if caching fails
+					} else {
+						logger.Debug("Cached query total with key: %s", cacheKey)
+					}
+				}
+			}
+		} else {
+			logger.Debug("Skipping count as requested")
+			total = -1 // Indicate count was skipped
+		}
+
+		// Apply pagination
+		if options.Limit != nil && *options.Limit > 0 {
+			logger.Debug("Applying limit: %d", *options.Limit)
+			query = query.Limit(*options.Limit)
+		}
+		if options.Offset != nil && *options.Offset > 0 {
+			logger.Debug("Applying offset: %d", *options.Offset)
+			query = query.Offset(*options.Offset)
+		}
+
+		// Apply cursor-based pagination
+		if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
+			logger.Debug("Applying cursor pagination")
+
+			// Get primary key name
+			pkName := reflection.GetPrimaryKeyName(model)
+
+			// Extract model columns for validation using the generic database function
+			modelColumns := reflection.GetModelColumns(model)
+
+			// Build expand joins map: custom SQL joins are available in cursor subquery
+			expandJoins := make(map[string]string)
+			for _, joinClause := range options.CustomSQLJoin {
+				alias := extractJoinAlias(joinClause)
+				if alias != "" {
+					expandJoins[alias] = joinClause
+				}
+			}
+			// TODO: also add Expand relation JOINs when those are built as SQL rather than Preload
+
+			// Default sort to primary key when none provided
+			if len(options.Sort) == 0 {
+				options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+			}
+
+			// Get cursor filter SQL
+			cursorFilter, err := options.GetCursorFilter(tableName, pkName, modelColumns, expandJoins)
+			if err != nil {
+				logger.Error("Error building cursor filter: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "cursor_error", "Invalid cursor pagination"
+				return err
+			}
+
+			// Apply cursor filter to query
+			if cursorFilter != "" {
+				logger.Debug("Applying cursor filter: %s", cursorFilter)
+				sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+				if sanitizedCursor != "" {
+					query = query.Where(sanitizedCursor)
 				}
 			}
 		}
-	} else {
-		logger.Debug("Skipping count as requested")
-		total = -1 // Indicate count was skipped
-	}
 
-	// Apply pagination
-	if options.Limit != nil && *options.Limit > 0 {
-		logger.Debug("Applying limit: %d", *options.Limit)
-		query = query.Limit(*options.Limit)
-	}
-	if options.Offset != nil && *options.Offset > 0 {
-		logger.Debug("Applying offset: %d", *options.Offset)
-		query = query.Offset(*options.Offset)
-	}
-
-	// Apply cursor-based pagination
-	if len(options.CursorForward) > 0 || len(options.CursorBackward) > 0 {
-		logger.Debug("Applying cursor pagination")
-
-		// Get primary key name
-		pkName := reflection.GetPrimaryKeyName(model)
-
-		// Extract model columns for validation using the generic database function
-		modelColumns := reflection.GetModelColumns(model)
-
-		// Build expand joins map: custom SQL joins are available in cursor subquery
-		expandJoins := make(map[string]string)
-		for _, joinClause := range options.CustomSQLJoin {
-			alias := extractJoinAlias(joinClause)
-			if alias != "" {
-				expandJoins[alias] = joinClause
-			}
-		}
-		// TODO: also add Expand relation JOINs when those are built as SQL rather than Preload
-
-		// Default sort to primary key when none provided
-		if len(options.Sort) == 0 {
-			options.Sort = []common.SortOption{{Column: pkName, Direction: "ASC"}}
+		// Execute BeforeScan hooks - pass query chain so hooks can modify it
+		hookCtx.Query = query
+		if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+			logger.Error("BeforeScan hook failed: %v", err)
+			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
+			return err
 		}
 
-		// Get cursor filter SQL
-		cursorFilter, err := options.GetCursorFilter(tableName, pkName, modelColumns, expandJoins)
-		if err != nil {
-			logger.Error("Error building cursor filter: %v", err)
-			h.sendError(w, http.StatusBadRequest, "cursor_error", "Invalid cursor pagination", err)
-			return
+		// Use potentially modified query from hook context
+		if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
+			query = modifiedQuery
 		}
 
-		// Apply cursor filter to query
-		if cursorFilter != "" {
-			logger.Debug("Applying cursor filter: %s", cursorFilter)
-			sanitizedCursor := common.SanitizeWhereClause(cursorFilter, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
-			if sanitizedCursor != "" {
-				query = query.Where(sanitizedCursor)
-			}
+		// Execute query - modelPtr was already created earlier
+		if err := query.ScanModel(ctx); err != nil {
+			logger.Error("Error executing query: %v", err)
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
+			return err
 		}
-	}
 
-	// Execute BeforeScan hooks - pass query chain so hooks can modify it
-	hookCtx.Query = query
-	if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
-		logger.Error("BeforeScan hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
-	}
+		return nil
+	})
 
-	// Use potentially modified query from hook context
-	if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
-		query = modifiedQuery
-	}
-
-	// Execute query - modelPtr was already created earlier
-	if err := query.ScanModel(ctx); err != nil {
-		logger.Error("Error executing query: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "query_error", "Error executing query", err)
+	if txErr != nil {
+		if statusCode == 0 {
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
+		}
+		h.sendError(w, statusCode, errCode, errMsg, txErr)
 		return
 	}
 
@@ -839,7 +862,8 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		logger.Debug("FetchRowNumber: Row number %d set in metadata", *fetchedRowNumber)
 	}
 
-	// Execute AfterRead hooks
+	// Execute AfterRead hooks (runs after the transaction commits, against the pooled db)
+	hookCtx.Tx = h.db
 	hookCtx.Result = modelPtr
 	hookCtx.Error = nil
 
@@ -1133,7 +1157,6 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 	logger.Info("Creating record in %s.%s", schema, entity)
 
-	// Execute BeforeCreate hooks
 	hookCtx := &HookContext{
 		Context:   ctx,
 		Handler:   h,
@@ -1144,28 +1167,38 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		Options:   options,
 		Data:      data,
 		Writer:    w,
-		Tx:        h.db,
 	}
 
-	if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
-		logger.Error("BeforeCreate hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
-	}
-
-	// Use potentially modified data from hook context
-	data = hookCtx.Data
-
-	// Normalize data to slice for unified processing
-	dataSlice := h.normalizeToSlice(data)
-	logger.Debug("Processing %d item(s) for creation", len(dataSlice))
-
-	// Store original data maps for merging later
-	originalDataMaps := make([]map[string]interface{}, 0, len(dataSlice))
+	// Everything below (including the BeforeCreate hook) runs inside a single
+	// transaction so that session-scoped RLS GUCs set by the hook execute on the
+	// same physical connection as the inserts they are meant to protect.
+	var (
+		dataSlice        []interface{}
+		originalDataMaps []map[string]interface{}
+		statusCode       int
+		errCode          string
+		errMsg           string
+	)
 
 	// Process all items in a transaction
-	results := make([]interface{}, 0, len(dataSlice))
-	err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	results := make([]interface{}, 0)
+	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		hookCtx.Tx = tx
+		if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
+			return err
+		}
+
+		// Use potentially modified data from hook context
+		data = hookCtx.Data
+
+		// Normalize data to slice for unified processing
+		dataSlice = h.normalizeToSlice(data)
+		logger.Debug("Processing %d item(s) for creation", len(dataSlice))
+
+		// Store original data maps for merging later
+		originalDataMaps = make([]map[string]interface{}, 0, len(dataSlice))
+
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
@@ -1266,9 +1299,12 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		return nil
 	})
 
-	if err != nil {
-		logger.Error("Error creating records: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "create_error", "Error creating records", err)
+	if txErr != nil {
+		if statusCode == 0 {
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "create_error", "Error creating records"
+		}
+		logger.Error("Error creating records: %v", txErr)
+		h.sendError(w, statusCode, errCode, errMsg, txErr)
 		return
 	}
 
@@ -1284,7 +1320,10 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		}
 	}
 
-	// Execute AfterCreate hooks
+	// Execute AfterCreate hooks (runs after the transaction commits, against the
+	// pooled db — hookCtx.Tx was pointed at the now-closed transaction inside the
+	// RunInTransaction closure above and must not be reused here).
+	hookCtx.Tx = h.db
 	var responseData interface{}
 	if len(mergedResults) == 1 {
 		responseData = mergedResults[0]
@@ -2828,7 +2867,7 @@ func (h *Handler) sendError(w common.ResponseWriter, statusCode int, code, messa
 
 // FetchRowNumber calculates the row number of a specific record based on sorting and filtering
 // Returns the 1-based row number of the record with the given primary key value
-func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName string, pkValue string, options ExtendedRequestOptions, model any) (int64, error) {
+func (h *Handler) FetchRowNumber(ctx context.Context, db common.Database, tableName string, pkName string, pkValue string, options ExtendedRequestOptions, model any) (int64, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("Panic during FetchRowNumber: %v", r)
@@ -2912,7 +2951,7 @@ func (h *Handler) FetchRowNumber(ctx context.Context, tableName string, pkName s
 		RN int64 `bun:"rn"`
 	}
 	logger.Debug("[FetchRowNumber] BEFORE Query call - about to execute raw query")
-	err := h.db.Query(ctx, &result, queryStr, pkValue)
+	err := db.Query(ctx, &result, queryStr, pkValue)
 	logger.Debug("[FetchRowNumber] AFTER Query call - query completed with %d results, err: %v", len(result), err)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch row number: %w", err)

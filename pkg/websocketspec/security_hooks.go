@@ -27,25 +27,31 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return security.LoadSecurityRules(secCtx, securityList)
 	})
 
-	// Hook 2: AfterRead - Apply column-level security (masking)
+	// Hook 2: BeforeScan - Apply row-level security filters
+	handler.Hooks().Register(BeforeScan, func(hookCtx *HookContext) error {
+		secCtx := newSecurityContext(hookCtx)
+		return security.ApplyRowSecurity(secCtx, securityList)
+	})
+
+	// Hook 3: AfterRead - Apply column-level security (masking)
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.ApplyColumnSecurity(secCtx, securityList)
 	})
 
-	// Hook 3 (Optional): Audit logging
+	// Hook 4 (Optional): Audit logging
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.LogDataAccess(secCtx)
 	})
 
-	// Hook 4: BeforeUpdate - enforce CanUpdate rule from context/registry
+	// Hook 5: BeforeUpdate - enforce CanUpdate rule from context/registry
 	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.CheckModelUpdateAllowed(secCtx)
 	})
 
-	// Hook 5: BeforeDelete - enforce CanDelete rule from context/registry
+	// Hook 6: BeforeDelete - enforce CanDelete rule from context/registry
 	handler.Hooks().Register(BeforeDelete, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
 		return security.CheckModelDeleteAllowed(secCtx)

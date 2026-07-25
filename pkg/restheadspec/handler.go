@@ -372,7 +372,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		hookCtx.Tx = tx
 
-		if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
 			return err
 		}
@@ -792,7 +792,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it
 		hookCtx.Query = query
-		if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 			logger.Error("BeforeScan hook failed: %v", err)
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
 			return err
@@ -1184,7 +1184,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 	results := make([]interface{}, 0)
 	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		hookCtx.Tx = tx
-		if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
 			return err
 		}
@@ -1269,7 +1269,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				Query:     query,
 				Tx:        tx,
 			}
-			if err := h.hooks.Execute(BeforeScan, itemHookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeScan, itemHookCtx); err != nil {
 				return fmt.Errorf("BeforeScan hook failed for item %d: %w", i, err)
 			}
 
@@ -1423,7 +1423,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			Writer:    w,
 		}
 
-		if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
 		}
 
@@ -1500,7 +1500,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it
 		hookCtx.Query = query
 		hookCtx.Tx = tx
-		if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 			return fmt.Errorf("BeforeScan hook failed: %w", err)
 		}
 
@@ -1544,7 +1544,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// pooled connection rather than the now-dead tx.
 	hookCtx.Tx = h.db
 	hookCtx.Query = selectQuery
-	if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 		logger.Error("BeforeScan hook failed: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
 		return
@@ -1619,7 +1619,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 						Tx:        tx,
 					}
 
-					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+					if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 						logger.Error("BeforeDelete hook failed for ID %s: %v", itemID, err)
 						return fmt.Errorf("delete not allowed for ID %s: %w", itemID, err)
 					}
@@ -1693,7 +1693,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 						Tx:        tx,
 					}
 
-					if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+					if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 						logger.Error("BeforeDelete hook failed for ID %v: %v", itemID, err)
 						return fmt.Errorf("delete not allowed for ID %v: %w", itemID, err)
 					}
@@ -1751,7 +1751,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 							Tx:        tx,
 						}
 
-						if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+						if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 							logger.Error("BeforeDelete hook failed for ID %v: %v", itemID, err)
 							return fmt.Errorf("delete not allowed for ID %v: %w", itemID, err)
 						}
@@ -1836,7 +1836,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Data:      recordToDelete,
 	}
 
-	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)
 		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 		return
@@ -1847,7 +1847,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	// Execute BeforeScan hooks - pass query chain so hooks can modify it
 	hookCtx.Query = query
-	if err := h.hooks.Execute(BeforeScan, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 		logger.Error("BeforeScan hook failed: %v", err)
 		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 		return

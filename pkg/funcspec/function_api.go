@@ -197,7 +197,7 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 			hookCtx.Tx = tx
 
 			// Execute BeforeQueryList hook (inside transaction)
-			if err := h.hooks.Execute(BeforeQueryList, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeQueryList, hookCtx); err != nil {
 				logger.Error("BeforeQueryList hook failed: %v", err)
 				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 				return err
@@ -261,7 +261,7 @@ func (h *Handler) SqlQueryList(sqlquery string, options SqlQueryOptions) HTTPFun
 
 			// Execute BeforeSQLExec hook
 			hookCtx.SQLQuery = sqlquery
-			if err := h.hooks.Execute(BeforeSQLExec, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeSQLExec, hookCtx); err != nil {
 				logger.Error("BeforeSQLExec hook failed: %v", err)
 				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 				return err
@@ -563,7 +563,7 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			hookCtx.Tx = tx
 
 			// Execute BeforeQuery hook (inside transaction)
-			if err := h.hooks.Execute(BeforeQuery, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeQuery, hookCtx); err != nil {
 				logger.Error("BeforeQuery hook failed: %v", err)
 				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 				return err
@@ -582,7 +582,7 @@ func (h *Handler) SqlQuery(sqlquery string, options SqlQueryOptions) HTTPFuncTyp
 			sqlquery = hookCtx.SQLQuery
 
 			// Execute BeforeSQLExec hook
-			if err := h.hooks.Execute(BeforeSQLExec, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeSQLExec, hookCtx); err != nil {
 				logger.Error("BeforeSQLExec hook failed: %v", err)
 				sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
 				return err

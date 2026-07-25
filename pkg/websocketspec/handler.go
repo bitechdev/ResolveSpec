@@ -221,7 +221,7 @@ func (h *Handler) handleRequest(conn *Connection, msg *Message) {
 // handleRead processes a read operation
 func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeRead hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
 		_ = conn.SendJSON(errResp)
@@ -273,7 +273,7 @@ func (h *Handler) handleRead(conn *Connection, msg *Message, hookCtx *HookContex
 // handleCreate processes a create operation
 func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeCreate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
 		_ = conn.SendJSON(errResp)
@@ -311,7 +311,7 @@ func (h *Handler) handleCreate(conn *Connection, msg *Message, hookCtx *HookCont
 // handleUpdate processes an update operation
 func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeUpdate hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
 		_ = conn.SendJSON(errResp)
@@ -349,7 +349,7 @@ func (h *Handler) handleUpdate(conn *Connection, msg *Message, hookCtx *HookCont
 // handleDelete processes a delete operation
 func (h *Handler) handleDelete(conn *Connection, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeDelete hook failed: %v", err)
 		errResp := NewErrorResponse(msg.ID, "hook_error", err.Error())
 		_ = conn.SendJSON(errResp)
@@ -574,6 +574,18 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 		}
 	}
 
+	// Execute BeforeScan hooks - pass query so hooks (e.g. row-level security) can modify it
+	if hookCtx.Metadata == nil {
+		hookCtx.Metadata = make(map[string]interface{})
+	}
+	hookCtx.Metadata["query"] = query
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+		return nil, fmt.Errorf("BeforeScan hook failed: %w", err)
+	}
+	if modifiedQuery, ok := hookCtx.Metadata["query"].(common.SelectQuery); ok {
+		query = modifiedQuery
+	}
+
 	// Execute query
 	if err := query.ScanModel(hookCtx.Context); err != nil {
 		return nil, fmt.Errorf("failed to read record: %w", err)
@@ -622,6 +634,18 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 		if len(hookCtx.Options.Columns) > 0 {
 			query = query.Column(hookCtx.Options.Columns...)
 		}
+	}
+
+	// Execute BeforeScan hooks - pass query so hooks (e.g. row-level security) can modify it
+	if hookCtx.Metadata == nil {
+		hookCtx.Metadata = make(map[string]interface{})
+	}
+	hookCtx.Metadata["query"] = query
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+		return nil, nil, fmt.Errorf("BeforeScan hook failed: %w", err)
+	}
+	if modifiedQuery, ok := hookCtx.Metadata["query"].(common.SelectQuery); ok {
+		query = modifiedQuery
 	}
 
 	// Execute query

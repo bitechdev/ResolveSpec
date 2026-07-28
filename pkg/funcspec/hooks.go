@@ -28,6 +28,10 @@ const (
 
 	// Response hooks (before response is sent)
 	BeforeResponse HookType = "before_response"
+
+	// BeforeOp fires immediately before every SQL operation (query, query list, SQL exec).
+	// It fires at each individual SQL-operation hook point, so it runs once per statement executed.
+	BeforeOp HookType = "before_op"
 )
 
 // HookContext contains all the data available to a hook
@@ -128,6 +132,16 @@ func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 	}
 
 	return nil
+}
+
+// ExecuteBeforeOp executes the BeforeOp hook followed by the given SQL-operation hook
+// (BeforeQuery, BeforeQueryList, or BeforeSQLExec). BeforeOp always runs first so it can
+// observe/veto every SQL operation regardless of type.
+func (r *HookRegistry) ExecuteBeforeOp(hookType HookType, ctx *HookContext) error {
+	if err := r.Execute(BeforeOp, ctx); err != nil {
+		return err
+	}
+	return r.Execute(hookType, ctx)
 }
 
 // Clear removes all hooks for the specified type

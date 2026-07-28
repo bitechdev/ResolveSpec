@@ -288,7 +288,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			Writer:  w,
 			Tx:      tx,
 		}
-		if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusInternalServerError, "hook_error", "BeforeRead hook failed"
 			return err
 		}
@@ -538,6 +538,16 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			pkName := reflection.GetPrimaryKeyName(singleResult)
 
 			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+
+			// Execute BeforeScan hooks - pass query chain so hooks (e.g. row-level security) can modify it
+			hookCtx.Query = query
+			if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+				logger.Error("BeforeScan hook failed: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
+				return err
+			}
+			query = hookCtx.Query
+
 			if err := query.Scan(ctx, singleResult); err != nil {
 				logger.Error("Error querying record: %v", err)
 				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
@@ -546,6 +556,16 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			result = singleResult
 		} else {
 			logger.Debug("Querying multiple records")
+
+			// Execute BeforeScan hooks - pass query chain so hooks (e.g. row-level security) can modify it
+			hookCtx.Query = query
+			if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+				logger.Error("BeforeScan hook failed: %v", err)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
+				return err
+			}
+			query = hookCtx.Query
+
 			// Use the modelPtr already created and set on the query
 			if err := query.Scan(ctx, modelPtr); err != nil {
 				logger.Error("Error querying records: %v", err)
@@ -635,7 +655,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					Writer:  w,
 					Tx:      tx,
 				}
-				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
 				}
 				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -682,7 +702,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				Writer:  w,
 				Tx:      tx,
 			}
-			if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 				return fmt.Errorf("BeforeCreate hook failed: %w", err)
 			}
 			if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -764,7 +784,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 						Writer:  w,
 						Tx:      tx,
 					}
-					if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+					if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 						return fmt.Errorf("BeforeCreate hook failed: %w", err)
 					}
 					if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -811,7 +831,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					Writer:  w,
 					Tx:      tx,
 				}
-				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
 				}
 				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -895,7 +915,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 							Writer:  w,
 							Tx:      tx,
 						}
-						if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+						if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 							return fmt.Errorf("BeforeCreate hook failed: %w", err)
 						}
 						if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -948,7 +968,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					Writer:  w,
 					Tx:      tx,
 				}
-				if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
 				}
 				if modifiedData, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -1081,7 +1101,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				Tx:      tx,
 			}
 
-			if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+			if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 				return fmt.Errorf("BeforeUpdate hook failed: %w", err)
 			}
 
@@ -1302,7 +1322,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 						Tx:      tx,
 					}
 
-					if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+					if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 						return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
 					}
 
@@ -1458,7 +1478,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 							Tx:      tx,
 						}
 
-						if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+						if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 							return fmt.Errorf("BeforeUpdate hook failed for ID %v: %w", itemID, err)
 						}
 
@@ -1561,7 +1581,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Writer:  w,
 		Tx:      h.db,
 	}
-	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)
 		h.sendError(w, http.StatusForbidden, "delete_forbidden", "Delete operation not allowed", err)
 		return

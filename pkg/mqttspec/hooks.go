@@ -34,6 +34,7 @@ const (
 	AfterUpdate  = websocketspec.AfterUpdate
 	BeforeDelete = websocketspec.BeforeDelete
 	AfterDelete  = websocketspec.AfterDelete
+	BeforeScan   = websocketspec.BeforeScan
 
 	// Subscription hooks
 	BeforeSubscribe   = websocketspec.BeforeSubscribe
@@ -46,6 +47,9 @@ const (
 	AfterConnect     = websocketspec.AfterConnect
 	BeforeDisconnect = websocketspec.BeforeDisconnect
 	AfterDisconnect  = websocketspec.AfterDisconnect
+
+	// BeforeOp fires immediately before every SQL operation (read, create, update, delete)
+	BeforeOp = websocketspec.BeforeOp
 )
 
 // NewHookRegistry creates a new hook registry

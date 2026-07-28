@@ -313,7 +313,7 @@ func (h *Handler) handleRequest(client *Client, msg *Message) {
 // handleRead processes a read operation
 func (h *Handler) handleRead(client *Client, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeRead, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 		logger.Error("[MQTTSpec] BeforeRead hook failed: %v", err)
 		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
 		return
@@ -356,7 +356,7 @@ func (h *Handler) handleRead(client *Client, msg *Message, hookCtx *HookContext)
 // handleCreate processes a create operation
 func (h *Handler) handleCreate(client *Client, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeCreate, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 		logger.Error("[MQTTSpec] BeforeCreate hook failed: %v", err)
 		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
 		return
@@ -390,7 +390,7 @@ func (h *Handler) handleCreate(client *Client, msg *Message, hookCtx *HookContex
 // handleUpdate processes an update operation
 func (h *Handler) handleUpdate(client *Client, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeUpdate, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 		logger.Error("[MQTTSpec] BeforeUpdate hook failed: %v", err)
 		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
 		return
@@ -424,7 +424,7 @@ func (h *Handler) handleUpdate(client *Client, msg *Message, hookCtx *HookContex
 // handleDelete processes a delete operation
 func (h *Handler) handleDelete(client *Client, msg *Message, hookCtx *HookContext) {
 	// Execute before hook
-	if err := h.hooks.Execute(BeforeDelete, hookCtx); err != nil {
+	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("[MQTTSpec] BeforeDelete hook failed: %v", err)
 		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
 		return
@@ -686,6 +686,18 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 		}
 	}
 
+	// Execute BeforeScan hooks - pass query so hooks (e.g. row-level security) can modify it
+	if hookCtx.Metadata == nil {
+		hookCtx.Metadata = make(map[string]interface{})
+	}
+	hookCtx.Metadata["query"] = query
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+		return nil, fmt.Errorf("BeforeScan hook failed: %w", err)
+	}
+	if modifiedQuery, ok := hookCtx.Metadata["query"].(common.SelectQuery); ok {
+		query = modifiedQuery
+	}
+
 	// Execute query
 	if err := query.ScanModel(hookCtx.Context); err != nil {
 		return nil, fmt.Errorf("failed to read record: %w", err)
@@ -736,6 +748,18 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 		if len(hookCtx.Options.Columns) > 0 {
 			query = query.Column(hookCtx.Options.Columns...)
 		}
+	}
+
+	// Execute BeforeScan hooks - pass query so hooks (e.g. row-level security) can modify it
+	if hookCtx.Metadata == nil {
+		hookCtx.Metadata = make(map[string]interface{})
+	}
+	hookCtx.Metadata["query"] = query
+	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+		return nil, nil, fmt.Errorf("BeforeScan hook failed: %w", err)
+	}
+	if modifiedQuery, ok := hookCtx.Metadata["query"].(common.SelectQuery); ok {
+		query = modifiedQuery
 	}
 
 	// Execute query

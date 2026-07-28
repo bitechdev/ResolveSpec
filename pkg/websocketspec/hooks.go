@@ -35,6 +35,11 @@ const (
 	// AfterDelete is called after a delete operation
 	AfterDelete HookType = "after_delete"
 
+	// BeforeScan is called right before a read query is executed against the database,
+	// after all filters/sort/pagination have been applied. Use this for row-level
+	// security that needs to modify the query (stored in HookContext.Metadata["query"]).
+	BeforeScan HookType = "before_scan"
+
 	// BeforeSubscribe is called before creating a subscription
 	BeforeSubscribe HookType = "before_subscribe"
 	// AfterSubscribe is called after creating a subscription
@@ -54,6 +59,11 @@ const (
 	BeforeDisconnect HookType = "before_disconnect"
 	// AfterDisconnect is called after a connection is closed
 	AfterDisconnect HookType = "after_disconnect"
+
+	// BeforeOp fires immediately before every SQL operation (read, create, update, delete).
+	// Unlike BeforeHandle, which fires once before operation dispatch, BeforeOp fires at each
+	// individual SQL-operation hook point, so it runs once per statement executed.
+	BeforeOp HookType = "before_op"
 )
 
 // HookContext contains context information for hook execution
@@ -195,6 +205,16 @@ func (hr *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 	}
 
 	return nil
+}
+
+// ExecuteBeforeOp executes the BeforeOp hook followed by the given SQL-operation hook
+// (BeforeRead, BeforeCreate, BeforeUpdate, or BeforeDelete). BeforeOp always runs first
+// so it can observe/veto every SQL operation regardless of type.
+func (hr *HookRegistry) ExecuteBeforeOp(hookType HookType, ctx *HookContext) error {
+	if err := hr.Execute(BeforeOp, ctx); err != nil {
+		return err
+	}
+	return hr.Execute(hookType, ctx)
 }
 
 // HasHooks checks if any hooks are registered for a hook type

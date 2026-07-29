@@ -26,6 +26,18 @@ func TestResolveSortColumns(t *testing.T) {
 	}
 }
 
+func TestResolveSortColumnsDesc(t *testing.T) {
+	sort := []SortOption{
+		{Column: PrimaryKeySortColumn, Direction: "desc"},
+	}
+
+	got := ResolveSortColumns(sort, "id")
+	want := []SortOption{{Column: "id", Direction: "desc"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ResolveSortColumns() = %v, want %v", got, want)
+	}
+}
+
 func TestResolveSortColumnsEmptyPK(t *testing.T) {
 	sort := []SortOption{
 		{Column: PrimaryKeySortColumn, Direction: "asc"},

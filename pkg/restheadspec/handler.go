@@ -82,7 +82,7 @@ func (h *Handler) getDefaultSort(schema, name string) []common.SortOption {
 	if h.defaultSort == nil {
 		return nil
 	}
-	if sort, ok := h.defaultSort[defaultSortKey(schema, name)]; ok {
+	if sort := h.defaultSort[defaultSortKey(schema, name)]; len(sort) > 0 {
 		return sort
 	}
 	return h.defaultSort[defaultSortKey("", "")]

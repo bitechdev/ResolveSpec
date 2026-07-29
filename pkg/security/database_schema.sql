@@ -1597,6 +1597,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_name VARCHAR(255),
     grant_types TEXT[] DEFAULT ARRAY['authorization_code'],
     allowed_scopes TEXT[] DEFAULT ARRAY['openid','profile','email'],
+    client_secret_hash TEXT,       -- sha256 hex of the confidential-client secret; NULL for public clients
+    token_endpoint_auth_method VARCHAR(30) DEFAULT 'none',
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1634,13 +1636,15 @@ DECLARE
 BEGIN
     v_client_id := p_data->>'client_id';
 
-    INSERT INTO oauth_clients (client_id, redirect_uris, client_name, grant_types, allowed_scopes)
+    INSERT INTO oauth_clients (client_id, redirect_uris, client_name, grant_types, allowed_scopes, client_secret_hash, token_endpoint_auth_method)
     VALUES (
         v_client_id,
         ARRAY(SELECT jsonb_array_elements_text(p_data->'redirect_uris')),
         p_data->>'client_name',
         COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_data->'grant_types')), ARRAY['authorization_code']),
-        COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_data->'allowed_scopes')), ARRAY['openid','profile','email'])
+        COALESCE(ARRAY(SELECT jsonb_array_elements_text(p_data->'allowed_scopes')), ARRAY['openid','profile','email']),
+        NULLIF(p_data->>'client_secret_hash', ''),
+        COALESCE(NULLIF(p_data->>'token_endpoint_auth_method', ''), 'none')
     )
     RETURNING to_jsonb(oauth_clients.*) INTO v_row;
 

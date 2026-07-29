@@ -9,11 +9,13 @@ import (
 
 // OAuthServerClient is a persisted RFC 7591 registered OAuth2 client.
 type OAuthServerClient struct {
-	ClientID      string   `json:"client_id"`
-	RedirectURIs  []string `json:"redirect_uris"`
-	ClientName    string   `json:"client_name,omitempty"`
-	GrantTypes    []string `json:"grant_types"`
-	AllowedScopes []string `json:"allowed_scopes,omitempty"`
+	ClientID                string   `json:"client_id"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name,omitempty"`
+	GrantTypes              []string `json:"grant_types"`
+	AllowedScopes           []string `json:"allowed_scopes,omitempty"`
+	ClientSecretHash        string   `json:"client_secret_hash,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
 }
 
 // OAuthCode is a short-lived authorization code.

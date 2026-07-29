@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_name VARCHAR(255),
     grant_types TEXT,              -- JSON-encoded []string
     allowed_scopes TEXT,           -- JSON-encoded []string
+    client_secret_hash TEXT,       -- sha256 hex of the confidential-client secret; NULL for public clients
+    token_endpoint_auth_method VARCHAR(30) DEFAULT 'none',
     is_active BOOLEAN DEFAULT 1,
     created_at TIMESTAMP
 );

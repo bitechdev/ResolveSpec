@@ -3,8 +3,11 @@ package security
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/oauth2"
 )
 
 // OAuthServerConfig configures the MCP-standard OAuth2 authorization server.
@@ -44,15 +50,32 @@ type OAuthServerConfig struct {
 
 	// AuthCodeTTL is the auth code lifetime. Defaults to 2 minutes.
 	AuthCodeTTL time.Duration
+
+	// ResourceIdentifier is this server's protected-resource identifier, advertised in
+	// RFC 9728 metadata. Defaults to Issuer.
+	ResourceIdentifier string
+
+	// SigningKey signs id_tokens (RS256) and is exposed via the JWKS endpoint. If nil, an
+	// RSA-2048 key is generated in memory when the server starts. Supply a persistent key
+	// for multi-instance deployments so id_tokens remain verifiable across restarts/instances.
+	SigningKey *rsa.PrivateKey
 }
 
 // oauthClient is a dynamically registered OAuth2 client (RFC 7591).
 type oauthClient struct {
-	ClientID      string   `json:"client_id"`
-	RedirectURIs  []string `json:"redirect_uris"`
-	ClientName    string   `json:"client_name,omitempty"`
-	GrantTypes    []string `json:"grant_types"`
-	AllowedScopes []string `json:"allowed_scopes,omitempty"`
+	ClientID                string   `json:"client_id"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	ClientName              string   `json:"client_name,omitempty"`
+	GrantTypes              []string `json:"grant_types"`
+	AllowedScopes           []string `json:"allowed_scopes,omitempty"`
+	ClientSecretHash        string   `json:"client_secret_hash,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+}
+
+// isConfidential reports whether the client has a registered secret and must
+// authenticate itself at the token endpoint.
+func (c *oauthClient) isConfidential() bool {
+	return c.ClientSecretHash != ""
 }
 
 // pendingAuth tracks an in-progress authorization code exchange.
@@ -85,13 +108,25 @@ type externalProvider struct {
 // The server exposes these RFC-compliant endpoints:
 //
 //	GET  /.well-known/oauth-authorization-server   RFC 8414 — server metadata discovery
+//	GET  /.well-known/openid-configuration         OIDC discovery (superset of the above)
+//	GET  /.well-known/oauth-protected-resource     RFC 9728 — protected resource metadata
 //	POST /oauth/register                            RFC 7591 — dynamic client registration
 //	GET  /oauth/authorize                           OAuth 2.1 + PKCE — start authorization
 //	POST /oauth/authorize                           Direct login form submission
-//	POST /oauth/token                               Token exchange and refresh
+//	POST /oauth/token                               Token exchange: authorization_code,
+//	                                                 refresh_token, client_credentials (RFC 6749 §4.4)
 //	POST /oauth/revoke                              RFC 7009 — token revocation
 //	POST /oauth/introspect                          RFC 7662 — token introspection
+//	GET  /oauth/userinfo                            OIDC UserInfo endpoint
+//	GET  /oauth/jwks.json                           JWKS — id_token verification keys
 //	GET  {ProviderCallbackPath}                     Internal — external provider callback
+//
+// Confidential clients (registered with token_endpoint_auth_method other than "none", or
+// any grant_types including client_credentials) authenticate at /oauth/token via
+// client_secret_basic or client_secret_post. Public clients keep relying on PKCE alone.
+//
+// When the granted scope includes "openid", authorization_code and refresh_token responses
+// include an RS256-signed id_token (see OAuthServerConfig.SigningKey).
 type OAuthServer struct {
 	cfg       OAuthServerConfig
 	auth      *DatabaseAuthenticator // nil = only external providers
@@ -101,6 +136,9 @@ type OAuthServer struct {
 	clients map[string]*oauthClient
 	pending map[string]*pendingAuth // provider_state → pending (external flow)
 	codes   map[string]*pendingAuth // auth_code     → pending (post-auth)
+
+	signingKey   *rsa.PrivateKey
+	signingKeyID string
 
 	done chan struct{} // closed by Close() to stop background goroutines
 }
@@ -130,13 +168,32 @@ func NewOAuthServer(cfg OAuthServerConfig, auth *DatabaseAuthenticator) *OAuthSe
 	}
 	// Normalize issuer: remove trailing slash to ensure consistent endpoint URL construction.
 	cfg.Issuer = strings.TrimSuffix(cfg.Issuer, "/")
+	if cfg.ResourceIdentifier == "" {
+		cfg.ResourceIdentifier = cfg.Issuer
+	}
+
+	signingKey := cfg.SigningKey
+	if signingKey == nil {
+		var err error
+		signingKey, err = rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			// Signing keys are only required for id_token issuance (OIDC "openid" scope);
+			// leaving signingKey nil degrades gracefully by omitting id_token/JWKS support.
+			signingKey = nil
+		}
+	}
+
 	s := &OAuthServer{
-		cfg:     cfg,
-		auth:    auth,
-		clients: make(map[string]*oauthClient),
-		pending: make(map[string]*pendingAuth),
-		codes:   make(map[string]*pendingAuth),
-		done:    make(chan struct{}),
+		cfg:        cfg,
+		auth:       auth,
+		clients:    make(map[string]*oauthClient),
+		pending:    make(map[string]*pendingAuth),
+		codes:      make(map[string]*pendingAuth),
+		signingKey: signingKey,
+		done:       make(chan struct{}),
+	}
+	if signingKey != nil {
+		s.signingKeyID = rsaKeyID(&signingKey.PublicKey)
 	}
 	go s.cleanupExpired()
 	return s
@@ -178,11 +235,15 @@ func (s *OAuthServer) ProviderCallbackPath() string {
 func (s *OAuthServer) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/oauth-authorization-server", s.metadataHandler)
+	mux.HandleFunc("/.well-known/openid-configuration", s.openIDConfigurationHandler)
+	mux.HandleFunc("/.well-known/oauth-protected-resource", s.protectedResourceHandler)
 	mux.HandleFunc("/oauth/register", s.registerHandler)
 	mux.HandleFunc("/oauth/authorize", s.authorizeHandler)
 	mux.HandleFunc("/oauth/token", s.tokenHandler)
 	mux.HandleFunc("/oauth/revoke", s.revokeHandler)
 	mux.HandleFunc("/oauth/introspect", s.introspectHandler)
+	mux.HandleFunc("/oauth/userinfo", s.userinfoHandler)
+	mux.HandleFunc("/oauth/jwks.json", s.jwksHandler)
 	mux.HandleFunc(s.cfg.ProviderCallbackPath, s.providerCallbackHandler)
 	return mux
 }
@@ -217,23 +278,125 @@ func (s *OAuthServer) cleanupExpired() {
 // RFC 8414 — Server metadata
 // --------------------------------------------------------------------------
 
-func (s *OAuthServer) metadataHandler(w http.ResponseWriter, r *http.Request) {
+// serverMetadata builds the fields shared by RFC 8414 authorization-server
+// metadata and OIDC discovery metadata.
+func (s *OAuthServer) serverMetadata() map[string]interface{} {
 	issuer := s.cfg.Issuer
-	meta := map[string]interface{}{
+	grantTypes := []string{"authorization_code", "refresh_token"}
+	if s.auth != nil {
+		grantTypes = append(grantTypes, "client_credentials")
+	}
+	return map[string]interface{}{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/oauth/authorize",
 		"token_endpoint":                        issuer + "/oauth/token",
 		"registration_endpoint":                 issuer + "/oauth/register",
 		"revocation_endpoint":                   issuer + "/oauth/revoke",
 		"introspection_endpoint":                issuer + "/oauth/introspect",
+		"userinfo_endpoint":                     issuer + "/oauth/userinfo",
+		"jwks_uri":                              issuer + "/oauth/jwks.json",
 		"scopes_supported":                      s.cfg.DefaultScopes,
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"grant_types_supported":                 grantTypes,
 		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_basic", "client_secret_post"},
+	}
+}
+
+func (s *OAuthServer) metadataHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.serverMetadata()) //nolint:errcheck
+}
+
+// --------------------------------------------------------------------------
+// OIDC discovery — GET /.well-known/openid-configuration
+// --------------------------------------------------------------------------
+
+func (s *OAuthServer) openIDConfigurationHandler(w http.ResponseWriter, r *http.Request) {
+	meta := s.serverMetadata()
+	meta["subject_types_supported"] = []string{"public"}
+	meta["id_token_signing_alg_values_supported"] = []string{"RS256"}
+	meta["claims_supported"] = []string{"sub", "iss", "aud", "exp", "iat", "email", "preferred_username"}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(meta) //nolint:errcheck
+}
+
+// --------------------------------------------------------------------------
+// RFC 9728 — Protected Resource Metadata
+// --------------------------------------------------------------------------
+
+func (s *OAuthServer) protectedResourceHandler(w http.ResponseWriter, r *http.Request) {
+	meta := map[string]interface{}{
+		"resource":                 s.cfg.ResourceIdentifier,
+		"authorization_servers":    []string{s.cfg.Issuer},
+		"scopes_supported":         s.cfg.DefaultScopes,
+		"bearer_methods_supported": []string{"header"},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(meta) //nolint:errcheck
+}
+
+// --------------------------------------------------------------------------
+// JWKS — GET /oauth/jwks.json
+// --------------------------------------------------------------------------
+
+func (s *OAuthServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.signingKey == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}}) //nolint:errcheck
+		return
+	}
+	pub := s.signingKey.PublicKey
+	jwk := map[string]interface{}{
+		"kty": "RSA",
+		"use": "sig",
+		"alg": "RS256",
+		"kid": s.signingKeyID,
+		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString(bigEndianBytes(pub.E)),
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{jwk}}) //nolint:errcheck
+}
+
+// --------------------------------------------------------------------------
+// Userinfo — GET/POST /oauth/userinfo
+// --------------------------------------------------------------------------
+
+func (s *OAuthServer) userinfoHandler(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(auth, "Bearer ")
+	if token == "" || token == auth {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		writeOAuthError(w, "invalid_token", "missing bearer token", http.StatusUnauthorized)
+		return
+	}
+
+	authToUse := s.auth
+	if authToUse == nil {
+		s.mu.RLock()
+		if len(s.providers) > 0 {
+			authToUse = s.providers[0].auth
+		}
+		s.mu.RUnlock()
+	}
+	if authToUse == nil {
+		writeOAuthError(w, "invalid_token", "no authenticator configured", http.StatusUnauthorized)
+		return
+	}
+
+	info, err := authToUse.OAuthIntrospectToken(r.Context(), token)
+	if err != nil || !info.Active {
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		writeOAuthError(w, "invalid_token", "token is inactive or invalid", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		"sub":                info.Sub,
+		"preferred_username": info.Username,
+		"email":              info.Email,
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -246,10 +409,11 @@ func (s *OAuthServer) registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		RedirectURIs  []string `json:"redirect_uris"`
-		ClientName    string   `json:"client_name"`
-		GrantTypes    []string `json:"grant_types"`
-		AllowedScopes []string `json:"allowed_scopes"`
+		RedirectURIs            []string `json:"redirect_uris"`
+		ClientName              string   `json:"client_name"`
+		GrantTypes              []string `json:"grant_types"`
+		AllowedScopes           []string `json:"allowed_scopes"`
+		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeOAuthError(w, "invalid_request", "malformed JSON", http.StatusBadRequest)
@@ -272,21 +436,48 @@ func (s *OAuthServer) registerHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
+
+	// client_credentials is a machine-to-machine grant and requires a confidential
+	// client (RFC 6749 §4.4), so it always forces secret issuance regardless of the
+	// requested auth method.
+	authMethod := req.TokenEndpointAuthMethod
+	if authMethod == "" {
+		authMethod = "none"
+	}
+	if oauthSliceContains(grantTypes, "client_credentials") && authMethod == "none" {
+		authMethod = "client_secret_basic"
+	}
+
+	var plaintextSecret string
+	var secretHash string
+	if authMethod != "none" {
+		plaintextSecret, err = randomOAuthToken()
+		if err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		secretHash = hashClientSecret(plaintextSecret)
+	}
+
 	client := &oauthClient{
-		ClientID:      clientID,
-		RedirectURIs:  req.RedirectURIs,
-		ClientName:    req.ClientName,
-		GrantTypes:    grantTypes,
-		AllowedScopes: allowedScopes,
+		ClientID:                clientID,
+		RedirectURIs:            req.RedirectURIs,
+		ClientName:              req.ClientName,
+		GrantTypes:              grantTypes,
+		AllowedScopes:           allowedScopes,
+		ClientSecretHash:        secretHash,
+		TokenEndpointAuthMethod: authMethod,
 	}
 
 	if s.cfg.PersistClients && s.auth != nil {
 		dbClient := &OAuthServerClient{
-			ClientID:      client.ClientID,
-			RedirectURIs:  client.RedirectURIs,
-			ClientName:    client.ClientName,
-			GrantTypes:    client.GrantTypes,
-			AllowedScopes: client.AllowedScopes,
+			ClientID:                client.ClientID,
+			RedirectURIs:            client.RedirectURIs,
+			ClientName:              client.ClientName,
+			GrantTypes:              client.GrantTypes,
+			AllowedScopes:           client.AllowedScopes,
+			ClientSecretHash:        client.ClientSecretHash,
+			TokenEndpointAuthMethod: client.TokenEndpointAuthMethod,
 		}
 		if _, err := s.auth.OAuthRegisterClient(r.Context(), dbClient); err != nil {
 			http.Error(w, "server error", http.StatusInternalServerError)
@@ -298,9 +489,25 @@ func (s *OAuthServer) registerHandler(w http.ResponseWriter, r *http.Request) {
 	s.clients[clientID] = client
 	s.mu.Unlock()
 
+	// RFC 7591 registration response: the plaintext secret is returned exactly once here
+	// and never persisted or served again — only its hash (client.ClientSecretHash) is
+	// stored, and that hash is deliberately excluded from this response.
+	resp := map[string]interface{}{
+		"client_id":                  client.ClientID,
+		"redirect_uris":              client.RedirectURIs,
+		"client_name":                client.ClientName,
+		"grant_types":                client.GrantTypes,
+		"allowed_scopes":             client.AllowedScopes,
+		"token_endpoint_auth_method": client.TokenEndpointAuthMethod,
+	}
+	if plaintextSecret != "" {
+		resp["client_secret"] = plaintextSecret
+		resp["client_secret_expires_at"] = 0
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(client) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 // --------------------------------------------------------------------------
@@ -577,6 +784,8 @@ func (s *OAuthServer) tokenHandler(w http.ResponseWriter, r *http.Request) {
 		s.handleAuthCodeGrant(w, r)
 	case "refresh_token":
 		s.handleRefreshGrant(w, r)
+	case "client_credentials":
+		s.handleClientCredentialsGrant(w, r)
 	default:
 		writeOAuthError(w, "unsupported_grant_type", "", http.StatusBadRequest)
 	}
@@ -591,6 +800,15 @@ func (s *OAuthServer) handleAuthCodeGrant(w http.ResponseWriter, r *http.Request
 	if code == "" || codeVerifier == "" {
 		writeOAuthError(w, "invalid_request", "code and code_verifier required", http.StatusBadRequest)
 		return
+	}
+
+	// Confidential clients (those registered with a client_secret) must authenticate;
+	// public clients keep relying on PKCE alone, unchanged from prior behavior.
+	if client, ok := s.lookupOrFetchClient(r.Context(), clientID); ok && client.isConfidential() {
+		if _, err := s.authenticateClient(r); err != nil {
+			writeOAuthError(w, "invalid_client", err.Error(), http.StatusUnauthorized)
+			return
+		}
 	}
 
 	var sessionToken string
@@ -647,12 +865,13 @@ func (s *OAuthServer) handleAuthCodeGrant(w http.ResponseWriter, r *http.Request
 		scopes = pending.Scopes
 	}
 
-	s.writeOAuthToken(w, sessionToken, refreshToken, scopes)
+	s.writeOAuthToken(w, r, sessionToken, refreshToken, clientID, scopes, true)
 }
 
 func (s *OAuthServer) handleRefreshGrant(w http.ResponseWriter, r *http.Request) {
 	refreshToken := r.FormValue("refresh_token")
 	providerName := r.FormValue("provider")
+	clientID := r.FormValue("client_id")
 	if refreshToken == "" {
 		writeOAuthError(w, "invalid_request", "refresh_token required", http.StatusBadRequest)
 		return
@@ -666,7 +885,7 @@ func (s *OAuthServer) handleRefreshGrant(w http.ResponseWriter, r *http.Request)
 			writeOAuthError(w, "invalid_grant", err.Error(), http.StatusBadRequest)
 			return
 		}
-		s.writeOAuthToken(w, loginResp.Token, loginResp.RefreshToken, nil)
+		s.writeOAuthToken(w, r, loginResp.Token, loginResp.RefreshToken, clientID, nil, false)
 		return
 	}
 
@@ -676,11 +895,84 @@ func (s *OAuthServer) handleRefreshGrant(w http.ResponseWriter, r *http.Request)
 			writeOAuthError(w, "invalid_grant", err.Error(), http.StatusBadRequest)
 			return
 		}
-		s.writeOAuthToken(w, loginResp.Token, loginResp.RefreshToken, nil)
+		s.writeOAuthToken(w, r, loginResp.Token, loginResp.RefreshToken, clientID, nil, false)
 		return
 	}
 
 	writeOAuthError(w, "invalid_grant", "no provider available for refresh", http.StatusBadRequest)
+}
+
+// --------------------------------------------------------------------------
+// RFC 6749 §4.4 — Client credentials grant
+// --------------------------------------------------------------------------
+
+func (s *OAuthServer) handleClientCredentialsGrant(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		writeOAuthError(w, "unsupported_grant_type", "client_credentials requires a local user store", http.StatusBadRequest)
+		return
+	}
+
+	client, err := s.authenticateClient(r)
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Basic realm="oauth"`)
+		writeOAuthError(w, "invalid_client", err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !oauthSliceContains(client.GrantTypes, "client_credentials") {
+		writeOAuthError(w, "unauthorized_client", "client is not authorized for client_credentials", http.StatusBadRequest)
+		return
+	}
+
+	requested := strings.Fields(r.FormValue("scope"))
+	effectiveScopes := client.AllowedScopes
+	if len(requested) > 0 {
+		effectiveScopes = nil
+		for _, sc := range requested {
+			if oauthSliceContains(client.AllowedScopes, sc) {
+				effectiveScopes = append(effectiveScopes, sc)
+			}
+		}
+		if len(effectiveScopes) == 0 {
+			writeOAuthError(w, "invalid_scope", "no requested scope is allowed for this client", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// client_credentials tokens have no end user, but the rest of the stack (RLS-scoping
+	// hooks, introspection) expects every access token to resolve to a user_sessions row
+	// with a user_id. Represent the client as a deterministic synthetic "service account"
+	// user so the existing get-or-create/create-session/introspection pipeline handles it
+	// unchanged — no new tables or code paths required.
+	userCtx := &UserContext{
+		UserName: "client:" + client.ClientID,
+		Email:    "oauth-client-" + client.ClientID + "@service.internal",
+		RemoteID: client.ClientID,
+		Roles:    effectiveScopes,
+	}
+	userID, err := s.auth.oauth2GetOrCreateUser(r.Context(), userCtx, "oauth2_client")
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	sessionToken, err := randomOAuthToken()
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	expiresAt := time.Now().Add(s.cfg.AccessTokenTTL)
+	err = s.auth.oauth2CreateSession(r.Context(), sessionToken, userID, &oauth2.Token{
+		AccessToken: sessionToken,
+		TokenType:   "Bearer",
+	}, expiresAt, "oauth2_client")
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	// No refresh token per RFC 6749 §4.4.3, and no id_token — client_credentials has no
+	// end-user subject to represent in OIDC terms.
+	s.writeOAuthToken(w, r, sessionToken, "", client.ClientID, effectiveScopes, false)
 }
 
 // --------------------------------------------------------------------------
@@ -879,7 +1171,10 @@ func oauthSliceContains(slice []string, s string) bool {
 	return false
 }
 
-func (s *OAuthServer) writeOAuthToken(w http.ResponseWriter, accessToken, refreshToken string, scopes []string) {
+// writeOAuthToken writes the token response. When issueIDToken is true and the granted
+// scopes include "openid", an RS256-signed id_token is included (OIDC); client_credentials
+// responses always pass issueIDToken=false since that grant has no end-user subject.
+func (s *OAuthServer) writeOAuthToken(w http.ResponseWriter, r *http.Request, accessToken, refreshToken, clientID string, scopes []string, issueIDToken bool) {
 	expiresIn := int64(s.cfg.AccessTokenTTL.Seconds())
 	resp := map[string]interface{}{
 		"access_token": accessToken,
@@ -892,10 +1187,104 @@ func (s *OAuthServer) writeOAuthToken(w http.ResponseWriter, accessToken, refres
 	if len(scopes) > 0 {
 		resp["scope"] = strings.Join(scopes, " ")
 	}
+	if issueIDToken && oauthSliceContains(scopes, "openid") {
+		if idToken, err := s.buildIDToken(r.Context(), accessToken, clientID, scopes); err == nil {
+			resp["id_token"] = idToken
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// buildIDToken issues an OIDC id_token for the just-issued access token by reusing the
+// existing introspection pipeline to resolve the subject's claims.
+func (s *OAuthServer) buildIDToken(ctx context.Context, accessToken, clientID string, scopes []string) (string, error) {
+	if s.signingKey == nil {
+		return "", fmt.Errorf("no signing key configured")
+	}
+	authToUse := s.auth
+	if authToUse == nil {
+		s.mu.RLock()
+		if len(s.providers) > 0 {
+			authToUse = s.providers[0].auth
+		}
+		s.mu.RUnlock()
+	}
+	if authToUse == nil {
+		return "", fmt.Errorf("no authenticator configured")
+	}
+	info, err := authToUse.OAuthIntrospectToken(ctx, accessToken)
+	if err != nil || !info.Active {
+		return "", fmt.Errorf("token not active")
+	}
+
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss": s.cfg.Issuer,
+		"sub": info.Sub,
+		"aud": clientID,
+		"exp": now.Add(s.cfg.AccessTokenTTL).Unix(),
+		"iat": now.Unix(),
+	}
+	if oauthSliceContains(scopes, "profile") && info.Username != "" {
+		claims["preferred_username"] = info.Username
+	}
+	if oauthSliceContains(scopes, "email") && info.Email != "" {
+		claims["email"] = info.Email
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = s.signingKeyID
+	return token.SignedString(s.signingKey)
+}
+
+// authenticateClient validates client_secret_basic (Authorization: Basic) or
+// client_secret_post (client_id/client_secret form fields) credentials against a
+// registered confidential client's stored secret hash.
+func (s *OAuthServer) authenticateClient(r *http.Request) (*oauthClient, error) {
+	clientID, clientSecret, ok := r.BasicAuth()
+	if !ok {
+		clientID = r.FormValue("client_id")
+		clientSecret = r.FormValue("client_secret")
+	}
+	if clientID == "" || clientSecret == "" {
+		return nil, fmt.Errorf("client authentication required")
+	}
+	client, ok := s.lookupOrFetchClient(r.Context(), clientID)
+	if !ok || !client.isConfidential() {
+		return nil, fmt.Errorf("invalid client credentials")
+	}
+	if subtle.ConstantTimeCompare([]byte(hashClientSecret(clientSecret)), []byte(client.ClientSecretHash)) != 1 {
+		return nil, fmt.Errorf("invalid client credentials")
+	}
+	return client, nil
+}
+
+func hashClientSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+// rsaKeyID derives a stable JWKS "kid" from an RSA public key's modulus.
+func rsaKeyID(pub *rsa.PublicKey) string {
+	sum := sha256.Sum256(pub.N.Bytes())
+	return base64.RawURLEncoding.EncodeToString(sum[:8])
+}
+
+// bigEndianBytes encodes a small positive int (e.g. an RSA public exponent) as
+// minimal big-endian bytes for JWK "e" encoding.
+func bigEndianBytes(n int) []byte {
+	if n == 0 {
+		return []byte{0}
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte(n & 0xff)}, b...)
+		n >>= 8
+	}
+	return b
 }
 
 func writeOAuthError(w http.ResponseWriter, errCode, description string, status int) {

@@ -15,6 +15,15 @@ import (
 // Array columns (redirect_uris, grant_types, allowed_scopes, scopes) are
 // JSON-encoded TEXT instead of native Postgres arrays.
 
+// nullIfEmpty converts an empty string to a SQL NULL so optional TEXT columns
+// (e.g. client_secret_hash for public clients) stay unset rather than "".
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func (a *DatabaseAuthenticator) oauthRegisterClientDirect(ctx context.Context, client *OAuthServerClient) (*OAuthServerClient, error) {
 	grantTypes := client.GrantTypes
 	if len(grantTypes) == 0 {
@@ -38,11 +47,16 @@ func (a *DatabaseAuthenticator) oauthRegisterClientDirect(ctx context.Context, c
 		return nil, fmt.Errorf("failed to marshal allowed_scopes: %w", err)
 	}
 
+	authMethod := client.TokenEndpointAuthMethod
+	if authMethod == "" {
+		authMethod = "none"
+	}
+
 	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := rewritePlaceholders(db, fmt.Sprintf(
-			`INSERT INTO %s (client_id, redirect_uris, client_name, grant_types, allowed_scopes, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO %s (client_id, redirect_uris, client_name, grant_types, allowed_scopes, client_secret_hash, token_endpoint_auth_method, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.tableNames.OAuthClients))
-		_, err := db.ExecContext(ctx, query, client.ClientID, string(redirectURIsJSON), client.ClientName, string(grantTypesJSON), string(allowedScopesJSON), true, time.Now())
+		_, err := db.ExecContext(ctx, query, client.ClientID, string(redirectURIsJSON), client.ClientName, string(grantTypesJSON), string(allowedScopesJSON), nullIfEmpty(client.ClientSecretHash), authMethod, true, time.Now())
 		return err
 	})
 	if err != nil {
@@ -50,23 +64,25 @@ func (a *DatabaseAuthenticator) oauthRegisterClientDirect(ctx context.Context, c
 	}
 
 	return &OAuthServerClient{
-		ClientID:      client.ClientID,
-		RedirectURIs:  client.RedirectURIs,
-		ClientName:    client.ClientName,
-		GrantTypes:    grantTypes,
-		AllowedScopes: allowedScopes,
+		ClientID:                client.ClientID,
+		RedirectURIs:            client.RedirectURIs,
+		ClientName:              client.ClientName,
+		GrantTypes:              grantTypes,
+		AllowedScopes:           allowedScopes,
+		ClientSecretHash:        client.ClientSecretHash,
+		TokenEndpointAuthMethod: authMethod,
 	}, nil
 }
 
 func (a *DatabaseAuthenticator) oauthGetClientDirect(ctx context.Context, clientID string) (*OAuthServerClient, error) {
 	var redirectURIsJSON, grantTypesJSON, allowedScopesJSON sql.NullString
-	var clientName sql.NullString
+	var clientName, clientSecretHash, authMethod sql.NullString
 
 	err := a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := rewritePlaceholders(db, fmt.Sprintf(
-			`SELECT redirect_uris, client_name, grant_types, allowed_scopes FROM %s WHERE client_id = ? AND is_active = ?`,
+			`SELECT redirect_uris, client_name, grant_types, allowed_scopes, client_secret_hash, token_endpoint_auth_method FROM %s WHERE client_id = ? AND is_active = ?`,
 			a.tableNames.OAuthClients))
-		return db.QueryRowContext(ctx, query, clientID, true).Scan(&redirectURIsJSON, &clientName, &grantTypesJSON, &allowedScopesJSON)
+		return db.QueryRowContext(ctx, query, clientID, true).Scan(&redirectURIsJSON, &clientName, &grantTypesJSON, &allowedScopesJSON, &clientSecretHash, &authMethod)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -75,7 +91,12 @@ func (a *DatabaseAuthenticator) oauthGetClientDirect(ctx context.Context, client
 		return nil, fmt.Errorf("failed to get client: %w", err)
 	}
 
-	result := &OAuthServerClient{ClientID: clientID, ClientName: clientName.String}
+	result := &OAuthServerClient{
+		ClientID:                clientID,
+		ClientName:              clientName.String,
+		ClientSecretHash:        clientSecretHash.String,
+		TokenEndpointAuthMethod: authMethod.String,
+	}
 	if redirectURIsJSON.Valid {
 		_ = json.Unmarshal([]byte(redirectURIsJSON.String), &result.RedirectURIs)
 	}

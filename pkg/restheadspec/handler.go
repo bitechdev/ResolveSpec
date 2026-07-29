@@ -32,6 +32,7 @@ type Handler struct {
 	nestedProcessor  *common.NestedCUDProcessor
 	fallbackHandler  FallbackHandler
 	openAPIGenerator func() (string, error)
+	defaultSort      map[string][]common.SortOption
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -62,6 +63,33 @@ func (h *Handler) Hooks() *HookRegistry {
 // If not set, the handler will simply return (pass through to next route)
 func (h *Handler) SetFallbackHandler(fallback FallbackHandler) {
 	h.fallbackHandler = fallback
+}
+
+// SetDefaultSort sets the sort order applied to list ("read") results when a
+// request does not specify its own sort (no x-sort header / sort query param).
+// Pass an empty schema and name to set a global default used by any model
+// without a more specific default.
+func (h *Handler) SetDefaultSort(schema, name string, sort ...common.SortOption) {
+	if h.defaultSort == nil {
+		h.defaultSort = make(map[string][]common.SortOption)
+	}
+	h.defaultSort[defaultSortKey(schema, name)] = sort
+}
+
+// getDefaultSort returns the configured default sort for a model, falling
+// back to the global default (registered with an empty schema and name).
+func (h *Handler) getDefaultSort(schema, name string) []common.SortOption {
+	if h.defaultSort == nil {
+		return nil
+	}
+	if sort, ok := h.defaultSort[defaultSortKey(schema, name)]; ok {
+		return sort
+	}
+	return h.defaultSort[defaultSortKey("", "")]
+}
+
+func defaultSortKey(schema, name string) string {
+	return fmt.Sprintf("%s.%s", schema, name)
 }
 
 // handlePanic is a helper function to handle panics with stack traces
@@ -643,6 +671,11 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 			tableAlias := reflection.ExtractTableNameOnly(tableName)
 			query = query.Where(fmt.Sprintf("%s.%s = ?", common.QuoteIdent(tableAlias), common.QuoteIdent(pkName)), id)
+		}
+
+		// Fall back to the configured default sort when the request didn't specify one
+		if len(options.Sort) == 0 {
+			options.Sort = common.ResolveSortColumns(h.getDefaultSort(schema, entity), reflection.GetPrimaryKeyName(model))
 		}
 
 		// Apply sorting

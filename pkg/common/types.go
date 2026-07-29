@@ -90,6 +90,30 @@ type SortOption struct {
 	Direction string `json:"direction"`
 }
 
+// PrimaryKeySortColumn is a sentinel SortOption.Column value that gets
+// resolved to a model's actual primary key column name at query time.
+// This lets a single global default sort (e.g. set once via
+// Handler.SetDefaultSort) work across models with different primary keys,
+// e.g. common.SortOption{Column: common.PrimaryKeySortColumn, Direction: "asc"}.
+const PrimaryKeySortColumn = "$pk"
+
+// ResolveSortColumns returns a copy of sort with any PrimaryKeySortColumn
+// entries replaced by pkName. If pkName is empty, matching entries are
+// dropped since there is no column to sort by.
+func ResolveSortColumns(sort []SortOption, pkName string) []SortOption {
+	resolved := make([]SortOption, 0, len(sort))
+	for _, s := range sort {
+		if s.Column == PrimaryKeySortColumn {
+			if pkName == "" {
+				continue
+			}
+			s.Column = pkName
+		}
+		resolved = append(resolved, s)
+	}
+	return resolved
+}
+
 type CustomOperator struct {
 	Name string `json:"name"`
 	SQL  string `json:"sql"`

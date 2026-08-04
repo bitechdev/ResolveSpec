@@ -55,6 +55,7 @@ package restheadspec
 
 import (
 	"net/http"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -308,6 +309,11 @@ func wrapBunRouterHandler(handler bunrouter.HandlerFunc, authMiddleware Middlewa
 // Accepts bunrouter.Router or bunrouter.Group
 // authMiddleware is optional - if provided, routes will be protected with the middleware
 func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler, authMiddleware MiddlewareFunc) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Error("panic in restheadspec.SetupBunRouterRoutes: %v\n%s", rec, debug.Stack())
+		}
+	}()
 
 	// CORS config
 	corsConfig := common.DefaultCORSConfig()
@@ -333,171 +339,181 @@ func SetupBunRouterRoutes(r BunRouterHandler, handler *Handler, authMiddleware M
 
 	// Loop through each registered model and create explicit routes
 	for fullName := range allModels {
-		// Parse the full name (e.g., "public.users" or just "users")
-		schema, entity := parseModelName(fullName)
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					logger.Error("panic registering restheadspec routes for model %s: %v\n%s", fullName, rec, debug.Stack())
+				}
+			}()
 
-		// Build the route paths
-		entityPath := buildRoutePath(schema, entity)
-		entityWithIDPath := entityPath + "/:id"
-		metadataPath := entityPath + "/metadata"
+			// Parse the full name (e.g., "public.users" or just "users")
+			schema, entity := parseModelName(fullName)
 
-		// Create closure variables to capture current schema and entity
-		currentSchema := schema
-		currentEntity := entity
+			// Build the route paths
+			entityPath := buildRoutePath(schema, entity)
+			entityWithIDPath := entityPath + "/:id"
+			metadataPath := entityPath + "/metadata"
 
-		// GET and POST for /{schema}/{entity}
-		getEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
+			// Create closure variables to capture current schema and entity
+			currentSchema := schema
+			currentEntity := entity
+
+			// GET and POST for /{schema}/{entity}
+			getEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+				}
+
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("GET", entityPath, wrapBunRouterHandler(getEntityHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("GET", entityPath, wrapBunRouterHandler(getEntityHandler, authMiddleware))
+			postEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+				}
 
-		postEntityHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("POST", entityPath, wrapBunRouterHandler(postEntityHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("POST", entityPath, wrapBunRouterHandler(postEntityHandler, authMiddleware))
+			// GET, POST, PUT, PATCH, DELETE for /{schema}/{entity}/:id
+			getEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+					"id":     req.Param("id"),
+				}
 
-		// GET, POST, PUT, PATCH, DELETE for /{schema}/{entity}/:id
-		getEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-				"id":     req.Param("id"),
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("GET", entityWithIDPath, wrapBunRouterHandler(getEntityWithIDHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("GET", entityWithIDPath, wrapBunRouterHandler(getEntityWithIDHandler, authMiddleware))
+			postEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+					"id":     req.Param("id"),
+				}
 
-		postEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-				"id":     req.Param("id"),
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("POST", entityWithIDPath, wrapBunRouterHandler(postEntityWithIDHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("POST", entityWithIDPath, wrapBunRouterHandler(postEntityWithIDHandler, authMiddleware))
+			putEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+					"id":     req.Param("id"),
+				}
 
-		putEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-				"id":     req.Param("id"),
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("PUT", entityWithIDPath, wrapBunRouterHandler(putEntityWithIDHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("PUT", entityWithIDPath, wrapBunRouterHandler(putEntityWithIDHandler, authMiddleware))
+			patchEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+					"id":     req.Param("id"),
+				}
 
-		patchEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-				"id":     req.Param("id"),
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("PATCH", entityWithIDPath, wrapBunRouterHandler(patchEntityWithIDHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("PATCH", entityWithIDPath, wrapBunRouterHandler(patchEntityWithIDHandler, authMiddleware))
+			deleteEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+					"id":     req.Param("id"),
+				}
 
-		deleteEntityWithIDHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-				"id":     req.Param("id"),
+				handler.Handle(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("DELETE", entityWithIDPath, wrapBunRouterHandler(deleteEntityWithIDHandler, authMiddleware))
 
-			handler.Handle(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("DELETE", entityWithIDPath, wrapBunRouterHandler(deleteEntityWithIDHandler, authMiddleware))
+			// Metadata endpoint
+			metadataHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+				}
 
-		// Metadata endpoint
-		metadataHandler := func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			common.SetCORSHeaders(respAdapter, reqAdapter, corsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
+				handler.HandleGet(respAdapter, reqAdapter, params)
+				return nil
 			}
+			r.Handle("GET", metadataPath, wrapBunRouterHandler(metadataHandler, authMiddleware))
 
-			handler.HandleGet(respAdapter, reqAdapter, params)
-			return nil
-		}
-		r.Handle("GET", metadataPath, wrapBunRouterHandler(metadataHandler, authMiddleware))
+			// OPTIONS route without ID (returns metadata)
+			// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
+			r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				optionsCorsConfig := corsConfig
+				optionsCorsConfig.AllowedMethods = []string{"GET", "POST", "OPTIONS"}
+				common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+				}
 
-		// OPTIONS route without ID (returns metadata)
-		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
-		r.Handle("OPTIONS", entityPath, func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			optionsCorsConfig := corsConfig
-			optionsCorsConfig.AllowedMethods = []string{"GET", "POST", "OPTIONS"}
-			common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-			}
+				handler.HandleGet(respAdapter, reqAdapter, params)
+				return nil
+			})
 
-			handler.HandleGet(respAdapter, reqAdapter, params)
-			return nil
-		})
+			// OPTIONS route with ID (returns metadata)
+			// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
+			r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
+				respAdapter := router.NewHTTPResponseWriter(w)
+				reqAdapter := router.NewBunRouterRequest(req)
+				optionsCorsConfig := corsConfig
+				optionsCorsConfig.AllowedMethods = []string{"GET", "PUT", "PATCH", "DELETE", "POST", "OPTIONS"}
+				common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
+				params := map[string]string{
+					"schema": currentSchema,
+					"entity": currentEntity,
+				}
 
-		// OPTIONS route with ID (returns metadata)
-		// Don't apply auth middleware to OPTIONS - CORS preflight must not require auth
-		r.Handle("OPTIONS", entityWithIDPath, func(w http.ResponseWriter, req bunrouter.Request) error {
-			respAdapter := router.NewHTTPResponseWriter(w)
-			reqAdapter := router.NewBunRouterRequest(req)
-			optionsCorsConfig := corsConfig
-			optionsCorsConfig.AllowedMethods = []string{"GET", "PUT", "PATCH", "DELETE", "POST", "OPTIONS"}
-			common.SetCORSHeaders(respAdapter, reqAdapter, optionsCorsConfig)
-			params := map[string]string{
-				"schema": currentSchema,
-				"entity": currentEntity,
-			}
+				handler.HandleGet(respAdapter, reqAdapter, params)
+				return nil
+			})
 
-			handler.HandleGet(respAdapter, reqAdapter, params)
-			return nil
-		})
+			logger.Info("Registered restheadspec bunrouter routes for model %s at %s", fullName, entityPath)
+		}()
 	}
 }
 

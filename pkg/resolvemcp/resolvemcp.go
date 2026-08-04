@@ -17,6 +17,7 @@ package resolvemcp
 
 import (
 	"net/http"
+	"runtime/debug"
 
 	"github.com/gorilla/mux"
 	"github.com/uptrace/bun"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
 
@@ -82,11 +84,20 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
 //   - GET  {basePath}/sse     — SSE connection endpoint
 //   - POST {basePath}/message — JSON-RPC message endpoint
 func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Error("panic in resolvemcp.SetupBunRouterRoutes: %v\n%s", rec, debug.Stack())
+		}
+	}()
+
 	basePath := handler.config.BasePath
 	h := handler.SSEServer()
 
 	router.GET(basePath+"/sse", bunrouter.HTTPHandler(h))
+	logger.Info("Registered resolvemcp bunrouter route GET %s/sse", basePath)
+
 	router.POST(basePath+"/message", bunrouter.HTTPHandler(h))
+	logger.Info("Registered resolvemcp bunrouter route POST %s/message", basePath)
 }
 
 // NewSSEServer returns an http.Handler that serves MCP over SSE.

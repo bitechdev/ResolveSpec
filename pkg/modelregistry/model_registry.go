@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // ModelRules defines the permissions and security settings for a model
@@ -59,12 +60,44 @@ func NewModelRegistry() *DefaultModelRegistry {
 	}
 }
 
+// lockRetryAttempts/lockRetryDelay bound how long the try-lock helpers below
+// will spin before giving up, so a contended registriesMutex can never hang
+// a caller of GetDefaultRegistry/SetDefaultRegistry.
+const (
+	lockRetryAttempts = 20
+	lockRetryDelay    = 1 * time.Millisecond
+)
+
+// GetDefaultRegistry returns the current default registry. It uses a
+// bounded TryRLock instead of a blocking RLock so it can never hang;
+// if the lock can't be acquired in time it falls back to the last known
+// value without synchronization.
 func GetDefaultRegistry() *DefaultModelRegistry {
+	for i := 0; i < lockRetryAttempts; i++ {
+		if registriesMutex.TryRLock() {
+			defer registriesMutex.RUnlock()
+			return defaultRegistry
+		}
+		time.Sleep(lockRetryDelay)
+	}
 	return defaultRegistry
 }
 
+// SetDefaultRegistry replaces the default registry. It uses a bounded
+// TryLock instead of a blocking Lock so it can never hang; if the lock
+// can't be acquired in time the call is a no-op.
 func SetDefaultRegistry(registry *DefaultModelRegistry) {
-	registriesMutex.Lock()
+	acquired := false
+	for i := 0; i < lockRetryAttempts; i++ {
+		if registriesMutex.TryLock() {
+			acquired = true
+			break
+		}
+		time.Sleep(lockRetryDelay)
+	}
+	if !acquired {
+		return
+	}
 	defer registriesMutex.Unlock()
 
 	foundAt := -1
@@ -90,8 +123,34 @@ func AddRegistry(registry *DefaultModelRegistry) {
 	registries = append(registries, registry)
 }
 
+// tryLock attempts to acquire the registry's write lock, retrying briefly.
+// Returns false if it could not be acquired within the bound.
+func (r *DefaultModelRegistry) tryLock() bool {
+	for i := 0; i < lockRetryAttempts; i++ {
+		if r.mutex.TryLock() {
+			return true
+		}
+		time.Sleep(lockRetryDelay)
+	}
+	return false
+}
+
+// tryRLock attempts to acquire the registry's read lock, retrying briefly.
+// Returns false if it could not be acquired within the bound.
+func (r *DefaultModelRegistry) tryRLock() bool {
+	for i := 0; i < lockRetryAttempts; i++ {
+		if r.mutex.TryRLock() {
+			return true
+		}
+		time.Sleep(lockRetryDelay)
+	}
+	return false
+}
+
 func (r *DefaultModelRegistry) RegisterModel(name string, model interface{}) error {
-	r.mutex.Lock()
+	if !r.tryLock() {
+		return fmt.Errorf("failed to register model %s: registry locked", name)
+	}
 	defer r.mutex.Unlock()
 
 	if _, exists := r.models[name]; exists {
@@ -137,7 +196,9 @@ func (r *DefaultModelRegistry) RegisterModel(name string, model interface{}) err
 }
 
 func (r *DefaultModelRegistry) GetModel(name string) (interface{}, error) {
-	r.mutex.RLock()
+	if !r.tryRLock() {
+		return nil, fmt.Errorf("failed to get model %s: registry locked", name)
+	}
 	defer r.mutex.RUnlock()
 
 	model, exists := r.models[name]
@@ -149,7 +210,9 @@ func (r *DefaultModelRegistry) GetModel(name string) (interface{}, error) {
 }
 
 func (r *DefaultModelRegistry) GetAllModels() map[string]interface{} {
-	r.mutex.RLock()
+	if !r.tryRLock() {
+		return make(map[string]interface{})
+	}
 	defer r.mutex.RUnlock()
 
 	result := make(map[string]interface{})
@@ -253,14 +316,26 @@ func IterateModels(fn func(name string, model interface{})) {
 // GetModels returns a list of all models from all registries
 // Models are collected in registry order, with duplicates included
 func GetModels() []interface{} {
-	registriesMutex.RLock()
+	acquired := false
+	for i := 0; i < lockRetryAttempts; i++ {
+		if registriesMutex.TryRLock() {
+			acquired = true
+			break
+		}
+		time.Sleep(lockRetryDelay)
+	}
+	if !acquired {
+		return nil
+	}
 	defer registriesMutex.RUnlock()
 
 	var models []interface{}
 	seen := make(map[string]bool)
 
 	for _, registry := range registries {
-		registry.mutex.RLock()
+		if !registry.tryRLock() {
+			continue
+		}
 		for name, model := range registry.models {
 			// Only add the first occurrence of each model name
 			if !seen[name] {

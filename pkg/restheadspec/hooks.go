@@ -3,6 +3,8 @@ package restheadspec
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -89,6 +91,7 @@ type HookFunc func(*HookContext) error
 // HookRegistry manages all registered hooks
 type HookRegistry struct {
 	hooks map[HookType][]HookFunc
+	mutex sync.RWMutex
 }
 
 // NewHookRegistry creates a new hook registry
@@ -98,8 +101,46 @@ func NewHookRegistry() *HookRegistry {
 	}
 }
 
+// hookLockRetryAttempts/hookLockRetryDelay bound how long the try-lock
+// helpers below will spin before giving up, so a contended mutex can
+// never hang a caller.
+const (
+	hookLockRetryAttempts = 20
+	hookLockRetryDelay    = 1 * time.Millisecond
+)
+
+// tryLock attempts to acquire the write lock, retrying briefly. Returns
+// false if it could not be acquired within the bound.
+func (r *HookRegistry) tryLock() bool {
+	for i := 0; i < hookLockRetryAttempts; i++ {
+		if r.mutex.TryLock() {
+			return true
+		}
+		time.Sleep(hookLockRetryDelay)
+	}
+	return false
+}
+
+// tryRLock attempts to acquire the read lock, retrying briefly. Returns
+// false if it could not be acquired within the bound.
+func (r *HookRegistry) tryRLock() bool {
+	for i := 0; i < hookLockRetryAttempts; i++ {
+		if r.mutex.TryRLock() {
+			return true
+		}
+		time.Sleep(hookLockRetryDelay)
+	}
+	return false
+}
+
 // Register adds a new hook for the specified hook type
 func (r *HookRegistry) Register(hookType HookType, hook HookFunc) {
+	if !r.tryLock() {
+		logger.Error("Failed to register hook for %s: registry locked", hookType)
+		return
+	}
+	defer r.mutex.Unlock()
+
 	if r.hooks == nil {
 		r.hooks = make(map[HookType][]HookFunc)
 	}
@@ -117,8 +158,13 @@ func (r *HookRegistry) RegisterMultiple(hookTypes []HookType, hook HookFunc) {
 // Execute runs all hooks for the specified type in order
 // If any hook returns an error, execution stops and the error is returned
 func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
-	hooks, exists := r.hooks[hookType]
-	if !exists || len(hooks) == 0 {
+	if !r.tryRLock() {
+		return fmt.Errorf("hook execution failed: registry locked")
+	}
+	hooks := append([]HookFunc(nil), r.hooks[hookType]...)
+	r.mutex.RUnlock()
+
+	if len(hooks) == 0 {
 		// logger.Debug("No hooks registered for %s", hookType)
 		return nil
 	}
@@ -154,18 +200,35 @@ func (r *HookRegistry) ExecuteBeforeOp(hookType HookType, ctx *HookContext) erro
 
 // Clear removes all hooks for the specified type
 func (r *HookRegistry) Clear(hookType HookType) {
+	if !r.tryLock() {
+		logger.Error("Failed to clear hooks for %s: registry locked", hookType)
+		return
+	}
+	defer r.mutex.Unlock()
+
 	delete(r.hooks, hookType)
 	logger.Info("Cleared all hooks for %s", hookType)
 }
 
 // ClearAll removes all registered hooks
 func (r *HookRegistry) ClearAll() {
+	if !r.tryLock() {
+		logger.Error("Failed to clear all hooks: registry locked")
+		return
+	}
+	defer r.mutex.Unlock()
+
 	r.hooks = make(map[HookType][]HookFunc)
 	logger.Info("Cleared all hooks")
 }
 
 // Count returns the number of hooks registered for a specific type
 func (r *HookRegistry) Count(hookType HookType) int {
+	if !r.tryRLock() {
+		return 0
+	}
+	defer r.mutex.RUnlock()
+
 	if hooks, exists := r.hooks[hookType]; exists {
 		return len(hooks)
 	}
@@ -179,6 +242,11 @@ func (r *HookRegistry) HasHooks(hookType HookType) bool {
 
 // GetAllHookTypes returns all hook types that have registered hooks
 func (r *HookRegistry) GetAllHookTypes() []HookType {
+	if !r.tryRLock() {
+		return nil
+	}
+	defer r.mutex.RUnlock()
+
 	types := make([]HookType, 0, len(r.hooks))
 	for hookType := range r.hooks {
 		types = append(types, hookType)

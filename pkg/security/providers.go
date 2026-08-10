@@ -912,6 +912,18 @@ func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userRe
 		return RowSecurity{}, ErrDirectModeUnsupported
 	}
 
+	// resolvespec_row_security's p_user_id is a scalar integer. GetUserRef() may
+	// hand back the full *UserContext so non-DB providers can inspect claims;
+	// unwrap it here before it reaches the SQL args.
+	switch v := userRef.(type) {
+	case *UserContext:
+		if v != nil {
+			userRef = v.UserID
+		}
+	case UserContext:
+		userRef = v.UserID
+	}
+
 	var template string
 	var hasBlock bool
 

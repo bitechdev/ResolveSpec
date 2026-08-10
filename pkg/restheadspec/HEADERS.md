@@ -88,7 +88,7 @@ This will match any records where the column contains the search term (case-inse
 Search with specific operators (AND logic).
 
 **Supported Operators:**
-- `contains` - Contains substring (case-insensitive)
+- `contains` - Contains substring (case-insensitive). Implemented as `CAST(col AS TEXT) ILIKE '%value%'` for every column type, including arrays (stringifies the array, then substring-matches). **Not** array containment — no GIN index use, and can false-positive on partial matches within array elements. resolvespec (a different spec package in this repo) defines `contains` differently: real PostgreSQL array-overlap (`&&`). Don't assume the two behave the same.
 - `beginswith` / `startswith` - Starts with (case-insensitive)
 - `endswith` - Ends with (case-insensitive)
 - `equals` / `eq` - Exact match

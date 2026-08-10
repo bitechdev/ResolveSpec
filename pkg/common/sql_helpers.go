@@ -1040,3 +1040,21 @@ func BuildInCondition(column string, v interface{}) (query string, args []interf
 	}
 	return fmt.Sprintf("%s IN (%s)", column, strings.Join(placeholders, ",")), values
 }
+
+// BuildArrayOverlapCondition builds a parameterized condition testing whether an
+// array column has at least one element in common with the given value(s), using
+// PostgreSQL's array overlap operator (&&). Unlike a text-cast ILIKE, this performs
+// real element-wise containment (no substring false positives) and can use a GIN
+// index on the column. A single value is treated as a one-element array.
+// Returns ("", nil) if the value is empty.
+func BuildArrayOverlapCondition(column string, v interface{}) (query string, args []interface{}) {
+	values := FilterValueToSlice(v)
+	if len(values) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(values))
+	for i := range values {
+		placeholders[i] = "?"
+	}
+	return fmt.Sprintf("%s && ARRAY[%s]", column, strings.Join(placeholders, ",")), values
+}

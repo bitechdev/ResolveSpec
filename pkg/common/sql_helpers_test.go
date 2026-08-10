@@ -542,8 +542,8 @@ func TestSplitByAND(t *testing.T) {
 			expected: []string{"col1 between 1 and 5", "col2 between 10 and 20"},
 		},
 		{
-			name:  "complex OR block with multiple BETWEENs (real-world case)",
-			input: "tbl.applicationdate between '2025-08-31' and '1970-01-01'\n  or tbl.capturedate between '2025-08-31' and '1970-01-01'\n  or tbl.startdate between '2025-08-31' AND '1970-01-01'",
+			name:     "complex OR block with multiple BETWEENs (real-world case)",
+			input:    "tbl.applicationdate between '2025-08-31' and '1970-01-01'\n  or tbl.capturedate between '2025-08-31' and '1970-01-01'\n  or tbl.startdate between '2025-08-31' AND '1970-01-01'",
 			expected: []string{"tbl.applicationdate between '2025-08-31' and '1970-01-01'\n  or tbl.capturedate between '2025-08-31' and '1970-01-01'\n  or tbl.startdate between '2025-08-31' AND '1970-01-01'"},
 		},
 		// Quote-aware cases: AND inside a string literal must not split.
@@ -889,93 +889,151 @@ func TestSanitizeWhereClause_PreservesParenthesesWithOR(t *testing.T) {
 }
 
 func TestAddTablePrefixToColumns_ComplexConditions(t *testing.T) {
-tests := []struct {
-name      string
-where     string
-tableName string
-expected  string
-}{
-{
-name:      "Parentheses with true AND condition - should not prefix true",
-where:     "(true AND status = 'active')",
-tableName: "mastertask",
-expected:  "(true AND mastertask.status = 'active')",
-},
-{
-name:      "Parentheses with multiple conditions including true",
-where:     "(true AND status = 'active' AND id > 5)",
-tableName: "mastertask",
-expected:  "(true AND mastertask.status = 'active' AND mastertask.id > 5)",
-},
-{
-name:      "Nested parentheses with true",
-where:     "((true AND status = 'active'))",
-tableName: "mastertask",
-expected:  "((true AND mastertask.status = 'active'))",
-},
-{
-name:      "Mixed: false AND valid conditions",
-where:     "(false AND name = 'test')",
-tableName: "mastertask",
-expected:  "(false AND mastertask.name = 'test')",
-},
-{
-name:      "Mixed: null AND valid conditions",
-where:     "(null AND status = 'active')",
-tableName: "mastertask",
-expected:  "(null AND mastertask.status = 'active')",
-},
-{
-name:      "Multiple true conditions in parentheses",
-where:     "(true AND true AND status = 'active')",
-tableName: "mastertask",
-expected:  "(true AND true AND mastertask.status = 'active')",
-},
-{
-name:      "Simple true without parens - should not prefix",
-where:     "true",
-tableName: "mastertask",
-expected:  "true",
-},
-{
-name:      "Simple condition without parens - should prefix",
-where:     "status = 'active'",
-tableName: "mastertask",
-expected:  "mastertask.status = 'active'",
-},
-{
-name:      "Unregistered table with true - should not prefix true",
-where:     "(true AND status = 'active')",
-tableName: "unregistered_table",
-expected:  "(true AND unregistered_table.status = 'active')",
-},
-// BETWEEN regression: date literals inside BETWEEN must not be prefixed as columns.
-{
-name:      "BETWEEN date range - second date must not be prefixed",
-where:     "applicationdate between '2025-08-31' and '1970-01-01'",
-tableName: "unregistered_table",
-expected:  "unregistered_table.applicationdate between '2025-08-31' and '1970-01-01'",
-},
-{
-name:      "Already-prefixed BETWEEN column - unchanged",
-where:     `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
-tableName: "v_webui_clients",
-expected:  `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
-},
-{
-name:      "Complex OR block with multiple BETWEENs - date values must not be prefixed",
-where:     `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
-tableName: "v_webui_clients",
-expected:  `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
-},
+	tests := []struct {
+		name      string
+		where     string
+		tableName string
+		expected  string
+	}{
+		{
+			name:      "Parentheses with true AND condition - should not prefix true",
+			where:     "(true AND status = 'active')",
+			tableName: "mastertask",
+			expected:  "(true AND mastertask.status = 'active')",
+		},
+		{
+			name:      "Parentheses with multiple conditions including true",
+			where:     "(true AND status = 'active' AND id > 5)",
+			tableName: "mastertask",
+			expected:  "(true AND mastertask.status = 'active' AND mastertask.id > 5)",
+		},
+		{
+			name:      "Nested parentheses with true",
+			where:     "((true AND status = 'active'))",
+			tableName: "mastertask",
+			expected:  "((true AND mastertask.status = 'active'))",
+		},
+		{
+			name:      "Mixed: false AND valid conditions",
+			where:     "(false AND name = 'test')",
+			tableName: "mastertask",
+			expected:  "(false AND mastertask.name = 'test')",
+		},
+		{
+			name:      "Mixed: null AND valid conditions",
+			where:     "(null AND status = 'active')",
+			tableName: "mastertask",
+			expected:  "(null AND mastertask.status = 'active')",
+		},
+		{
+			name:      "Multiple true conditions in parentheses",
+			where:     "(true AND true AND status = 'active')",
+			tableName: "mastertask",
+			expected:  "(true AND true AND mastertask.status = 'active')",
+		},
+		{
+			name:      "Simple true without parens - should not prefix",
+			where:     "true",
+			tableName: "mastertask",
+			expected:  "true",
+		},
+		{
+			name:      "Simple condition without parens - should prefix",
+			where:     "status = 'active'",
+			tableName: "mastertask",
+			expected:  "mastertask.status = 'active'",
+		},
+		{
+			name:      "Unregistered table with true - should not prefix true",
+			where:     "(true AND status = 'active')",
+			tableName: "unregistered_table",
+			expected:  "(true AND unregistered_table.status = 'active')",
+		},
+		// BETWEEN regression: date literals inside BETWEEN must not be prefixed as columns.
+		{
+			name:      "BETWEEN date range - second date must not be prefixed",
+			where:     "applicationdate between '2025-08-31' and '1970-01-01'",
+			tableName: "unregistered_table",
+			expected:  "unregistered_table.applicationdate between '2025-08-31' and '1970-01-01'",
+		},
+		{
+			name:      "Already-prefixed BETWEEN column - unchanged",
+			where:     `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
+			tableName: "v_webui_clients",
+			expected:  `"v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01'`,
+		},
+		{
+			name:      "Complex OR block with multiple BETWEENs - date values must not be prefixed",
+			where:     `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
+			tableName: "v_webui_clients",
+			expected:  `("v_webui_clients".applicationdate between '2025-08-31' and '1970-01-01' or "v_webui_clients".clientcapturedate between '2025-08-31' and '1970-01-01' or "v_webui_clients".startdate between '2025-08-31' AND '1970-01-01')`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := AddTablePrefixToColumns(tt.where, tt.tableName)
+			if result != tt.expected {
+				t.Errorf("AddTablePrefixToColumns(%q, %q) = %q; want %q", tt.where, tt.tableName, result, tt.expected)
+			}
+		})
+	}
 }
 
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-result := AddTablePrefixToColumns(tt.where, tt.tableName)
-if result != tt.expected {
-t.Errorf("AddTablePrefixToColumns(%q, %q) = %q; want %q", tt.where, tt.tableName, result, tt.expected)
-}
-})
-}
+func TestBuildArrayOverlapCondition(t *testing.T) {
+	tests := []struct {
+		name         string
+		column       string
+		value        interface{}
+		expectedCond string
+		expectedArgs int
+	}{
+		{
+			name:         "single scalar value",
+			column:       "tags",
+			value:        "urgent",
+			expectedCond: "tags && ARRAY[?]",
+			expectedArgs: 1,
+		},
+		{
+			name:         "multiple values",
+			column:       "tags",
+			value:        []string{"urgent", "billing", "vip"},
+			expectedCond: "tags && ARRAY[?,?,?]",
+			expectedArgs: 3,
+		},
+		{
+			name:         "JSON-decoded []interface{} value",
+			column:       "tags",
+			value:        []interface{}{"urgent", "billing"},
+			expectedCond: "tags && ARRAY[?,?]",
+			expectedArgs: 2,
+		},
+		{
+			name:         "nil value",
+			column:       "tags",
+			value:        nil,
+			expectedCond: "",
+			expectedArgs: 0,
+		},
+		{
+			name:         "empty slice value",
+			column:       "tags",
+			value:        []string{},
+			expectedCond: "",
+			expectedArgs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cond, args := BuildArrayOverlapCondition(tt.column, tt.value)
+			if cond != tt.expectedCond {
+				t.Errorf("BuildArrayOverlapCondition(%q, %v) condition = %q; want %q", tt.column, tt.value, cond, tt.expectedCond)
+			}
+			if len(args) != tt.expectedArgs {
+				t.Errorf("BuildArrayOverlapCondition(%q, %v) args = %d; want %d", tt.column, tt.value, len(args), tt.expectedArgs)
+			}
+		})
+	}
 }

@@ -1895,6 +1895,11 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 		if condition == "" {
 			return "", nil
 		}
+	case "contains":
+		condition, args = common.BuildArrayOverlapCondition(filter.Column, filter.Value)
+		if condition == "" {
+			return "", nil
+		}
 	default:
 		return "", nil
 	}
@@ -1936,6 +1941,11 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)
+		if condition == "" {
+			return query
+		}
+	case "contains":
+		condition, args = common.BuildArrayOverlapCondition(filter.Column, filter.Value)
 		if condition == "" {
 			return query
 		}

@@ -57,6 +57,36 @@ func TestBuildFilterCondition(t *testing.T) {
 			expectedCondition: "CAST(email AS TEXT) LIKE ?",
 			expectedArgsCount: 1,
 		},
+		{
+			name: "CONTAINS operator with single value",
+			filter: common.FilterOption{
+				Column:   "tags",
+				Operator: "contains",
+				Value:    "urgent",
+			},
+			expectedCondition: "tags && ARRAY[?]",
+			expectedArgsCount: 1,
+		},
+		{
+			name: "CONTAINS operator with multiple values",
+			filter: common.FilterOption{
+				Column:   "tags",
+				Operator: "contains",
+				Value:    []string{"urgent", "billing"},
+			},
+			expectedCondition: "tags && ARRAY[?,?]",
+			expectedArgsCount: 2,
+		},
+		{
+			name: "CONTAINS operator with empty value",
+			filter: common.FilterOption{
+				Column:   "tags",
+				Operator: "contains",
+				Value:    nil,
+			},
+			expectedCondition: "",
+			expectedArgsCount: 0,
+		},
 	}
 
 	for _, tt := range tests {

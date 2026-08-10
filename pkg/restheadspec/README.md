@@ -96,6 +96,8 @@ X-Limit: 50
 
 **Available Operators**: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `contains`, `startswith`, `endswith`, `between`, `betweeninclusive`, `in`, `empty`, `notempty`
 
+> Note: `contains` here is a text-cast ILIKE substring match (works on any column type, including arrays, by stringifying first) — not array containment. resolvespec's `contains` operator has different semantics (real array overlap). See [HEADERS.md](HEADERS.md) for details.
+
 For complete header documentation, see [HEADERS.md](HEADERS.md).
 
 ## Lifecycle Hooks

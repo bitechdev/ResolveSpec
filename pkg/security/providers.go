@@ -924,8 +924,8 @@ func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userRe
 		userRef = v.UserID
 	}
 
-	var template string
-	var hasBlock bool
+	var template sql.NullString
+	var hasBlock sql.NullBool
 
 	runQuery := func() error {
 		query := fmt.Sprintf(`SELECT p_template, p_block FROM %s($1, $2, $3)`, p.sqlNames.RowSecurity)
@@ -945,8 +945,8 @@ func (p *DatabaseRowSecurityProvider) GetRowSecurity(ctx context.Context, userRe
 		Schema:    schema,
 		Tablename: table,
 		UserID:    userRef,
-		Template:  template,
-		HasBlock:  hasBlock,
+		Template:  template.String,
+		HasBlock:  hasBlock.Bool,
 	}, nil
 }
 

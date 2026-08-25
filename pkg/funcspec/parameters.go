@@ -51,7 +51,7 @@ func (h *Handler) ParseParameters(r *http.Request) *RequestParameters {
 		FieldFilters:   make(map[string]string),
 		SearchFilters:  make(map[string]string),
 		SearchOps:      make(map[string]FilterOperator),
-		Limit:          20,       // Default limit
+		Limit:          100000,   // Default limit
 		Offset:         0,        // Default offset
 		ResponseFormat: "simple", // Default format
 		ComplexAPI:     false,    // Default to simple API

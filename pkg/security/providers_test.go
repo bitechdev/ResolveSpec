@@ -793,6 +793,49 @@ func TestDatabaseAuthenticatorRefreshToken(t *testing.T) {
 			t.Errorf("unfulfilled expectations: %v", err)
 		}
 	})
+
+	// A resolvespec_refresh_token implementation that rotates its own
+	// independent refresh token (not just reusing the session/access token)
+	// has nowhere else to put the new refresh token and real access-token
+	// expiry than under UserContext.Claims, since UserContext has no
+	// dedicated fields for either. RefreshToken must surface those claims
+	// keys into LoginResponse.RefreshToken/ExpiresIn rather than silently
+	// dropping them (see the "successful token refresh" case above, which
+	// covers an implementation that has no independent refresh token at all
+	// and gets the 24h default instead).
+	t.Run("surfaces rotated refresh token and expiry from claims", func(t *testing.T) {
+		refreshToken := "refresh-token-abc"
+
+		sessionRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":1,"user_name":"testuser"}`)
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_session`).
+			WithArgs(refreshToken, "refresh").
+			WillReturnRows(sessionRows)
+
+		refreshRows := sqlmock.NewRows([]string{"p_success", "p_error", "p_user"}).
+			AddRow(true, nil, `{"user_id":1,"user_name":"testuser","session_id":"new-access-789","claims":{"refresh_token":"new-refresh-def","expires_in":900}}`)
+		mock.ExpectQuery(`SELECT p_success, p_error, p_user::text FROM resolvespec_refresh_token`).
+			WithArgs(refreshToken, sqlmock.AnyArg()).
+			WillReturnRows(refreshRows)
+
+		resp, err := auth.RefreshToken(ctx, refreshToken)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if resp.Token != "new-access-789" {
+			t.Errorf("expected token new-access-789, got %s", resp.Token)
+		}
+		if resp.RefreshToken != "new-refresh-def" {
+			t.Errorf("expected rotated refresh token new-refresh-def, got %q", resp.RefreshToken)
+		}
+		if resp.ExpiresIn != 900 {
+			t.Errorf("expected ExpiresIn 900 from claims, got %d", resp.ExpiresIn)
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled expectations: %v", err)
+		}
+	})
 }
 
 func TestDatabaseAuthenticatorReconnectsClosedDBPaths(t *testing.T) {

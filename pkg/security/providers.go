@@ -551,11 +551,27 @@ func (a *DatabaseAuthenticator) RefreshToken(ctx context.Context, refreshToken s
 		return nil, fmt.Errorf("failed to parse user context: %w", err)
 	}
 
-	return &LoginResponse{
+	// A resolvespec_refresh_token implementation that issues its own rotating
+	// refresh token (independent of the access/session token) returns it
+	// under claims.refresh_token, since UserContext has no dedicated field
+	// for it. Surface that into LoginResponse.RefreshToken so callers don't
+	// need to reach into User.Claims themselves. claims.expires_in
+	// (seconds) similarly overrides the default access-token ExpiresIn when
+	// the procedure provides a real value. Implementations that don't set
+	// these claims keep today's behavior unchanged (empty RefreshToken,
+	// 24h ExpiresIn default).
+	resp := &LoginResponse{
 		Token:     userCtx.SessionID, // New session token from stored procedure
 		User:      &userCtx,
 		ExpiresIn: int64(24 * time.Hour.Seconds()),
-	}, nil
+	}
+	if refreshToken, ok := userCtx.Claims["refresh_token"].(string); ok && refreshToken != "" {
+		resp.RefreshToken = refreshToken
+	}
+	if expiresIn, ok := userCtx.Claims["expires_in"].(float64); ok && expiresIn > 0 {
+		resp.ExpiresIn = int64(expiresIn)
+	}
+	return resp, nil
 }
 
 // JWTAuthenticator provides JWT token-based authentication

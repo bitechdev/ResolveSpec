@@ -565,9 +565,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				logger.Debug("Querying single record with FetchRowNumber ID: %s", targetID)
 			}
 
-			// For single record, create a new pointer to the struct type
-			singleResult := reflect.New(modelType).Interface()
-			pkName := reflection.GetPrimaryKeyName(singleResult)
+			pkName := reflection.GetPrimaryKeyName(model)
 
 			query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
@@ -580,12 +578,21 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			}
 			query = hookCtx.Query
 
-			if err := query.Scan(ctx, singleResult); err != nil {
+			// Scan through the model configured on the query. Bun rejects Scan with
+			// a destination when the query preloads a has-many relation.
+			if err := query.ScanModel(ctx); err != nil {
 				logger.Error("Error querying record: %v", err)
 				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
 				return err
 			}
-			result = singleResult
+
+			// The configured model is a slice so the same query construction works
+			// for both collection and single-record reads. Extract its one result.
+			scannedResults := reflect.ValueOf(modelPtr).Elem()
+			if scannedResults.Len() == 0 {
+				return sql.ErrNoRows
+			}
+			result = scannedResults.Index(0).Interface()
 		} else {
 			logger.Debug("Querying multiple records")
 
@@ -598,8 +605,9 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			}
 			query = hookCtx.Query
 
-			// Use the modelPtr already created and set on the query
-			if err := query.Scan(ctx, modelPtr); err != nil {
+			// Use the model already configured on the query. This is required by
+			// Bun whenever the query includes a has-many preload.
+			if err := query.ScanModel(ctx); err != nil {
 				logger.Error("Error querying records: %v", err)
 				statusCode, errCode, errMsg = http.StatusInternalServerError, "query_error", "Error executing query"
 				return err

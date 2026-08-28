@@ -340,18 +340,28 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 
 	var data interface{}
 	if id != "" {
-		singleResult := reflect.New(modelType).Interface()
-		pkName := reflection.GetPrimaryKeyName(singleResult)
+		pkName := reflection.GetPrimaryKeyName(model)
 		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-		if err := query.Scan(ctx, singleResult); err != nil {
+		// Scan through the model configured on the query. Bun rejects Scan with
+		// a destination when the query preloads a has-many relation.
+		if err := query.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return nil, nil, fmt.Errorf("record not found")
 			}
 			return nil, nil, fmt.Errorf("query error: %w", err)
 		}
-		data = singleResult
+
+		// The configured model is a slice so the same query construction works
+		// for both collection and single-record reads. Extract its one result.
+		scannedResults := reflect.ValueOf(modelPtr).Elem()
+		if scannedResults.Len() == 0 {
+			return nil, nil, fmt.Errorf("record not found")
+		}
+		data = scannedResults.Index(0).Interface()
 	} else {
-		if err := query.Scan(ctx, modelPtr); err != nil {
+		// Use the model already configured on the query. This is required by
+		// Bun whenever the query includes a has-many preload.
+		if err := query.ScanModel(ctx); err != nil {
 			return nil, nil, fmt.Errorf("query error: %w", err)
 		}
 		data = reflect.ValueOf(modelPtr).Elem().Interface()

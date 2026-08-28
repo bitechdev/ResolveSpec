@@ -82,6 +82,20 @@ type queryMetricsBunUser struct {
 	Name          string `bun:"name"`
 }
 
+type queryMetricsBunParent struct {
+	bun.BaseModel `bun:"table:metrics_bun_parents"`
+	ID            int64                  `bun:"id,pk,autoincrement"`
+	Name          string                 `bun:"name"`
+	Children      []queryMetricsBunChild `bun:"rel:has-many,join:id=parent_id"`
+}
+
+type queryMetricsBunChild struct {
+	bun.BaseModel `bun:"table:metrics_bun_children"`
+	ID            int64  `bun:"id,pk,autoincrement"`
+	ParentID      int64  `bun:"parent_id"`
+	Name          string `bun:"name"`
+}
+
 func TestPgSQLAdapterRecordsSchemaEntityTableMetrics(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -345,4 +359,36 @@ func TestBunAdapterRecordsEntityAndTableMetrics(t *testing.T) {
 	assert.Equal(t, "default", calls[0].schema)
 	assert.Equal(t, "query_metrics_bun_user", calls[0].entity)
 	assert.Equal(t, "metrics_bun_users", calls[0].table)
+}
+
+func TestBunSelectQueryScanModelSupportsHasManyPreload(t *testing.T) {
+	sqldb, err := sql.Open(sqliteshim.ShimName, "file::memory:?cache=shared")
+	require.NoError(t, err)
+	defer sqldb.Close()
+
+	db := bun.NewDB(sqldb, sqlitedialect.New())
+	defer db.Close()
+	ctx := context.Background()
+
+	_, err = db.NewCreateTable().Model((*queryMetricsBunParent)(nil)).IfNotExists().Exec(ctx)
+	require.NoError(t, err)
+	_, err = db.NewCreateTable().Model((*queryMetricsBunChild)(nil)).IfNotExists().Exec(ctx)
+	require.NoError(t, err)
+
+	parent := &queryMetricsBunParent{Name: "parent"}
+	_, err = db.NewInsert().Model(parent).Exec(ctx)
+	require.NoError(t, err)
+	_, err = db.NewInsert().Model(&queryMetricsBunChild{ParentID: parent.ID, Name: "child"}).Exec(ctx)
+	require.NoError(t, err)
+
+	adapter := NewBunAdapter(db)
+	var parents []queryMetricsBunParent
+	err = adapter.NewSelect().Model(&parents).PreloadRelation("Children").Scan(ctx, &parents)
+	require.ErrorContains(t, err, "use Model instead of the dest parameter in Scan")
+
+	parents = nil
+	err = adapter.NewSelect().Model(&parents).PreloadRelation("Children").ScanModel(ctx)
+	require.NoError(t, err)
+	require.Len(t, parents, 1)
+	require.Len(t, parents[0].Children, 1)
 }

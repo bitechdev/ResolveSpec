@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 func TestNewHandler(t *testing.T) {
@@ -199,6 +200,48 @@ func TestGetColumnType(t *testing.T) {
 				t.Errorf("Expected column type '%s', got '%s'", tt.expectedType, colType)
 			}
 		})
+	}
+}
+
+func TestGenerateMetadata_UnwrapsSQLTypes(t *testing.T) {
+	type related struct {
+		Name string `json:"name"`
+	}
+	type model struct {
+		Name      spectypes.SqlString    `json:"name"`
+		Count     spectypes.SqlInt64     `json:"count"`
+		CreatedAt spectypes.SqlTimeStamp `json:"created_at"`
+		Metadata  spectypes.SqlJSONB     `json:"metadata" gorm:"type:jsonb"`
+		Related   related                `json:"related"`
+	}
+
+	metadata := NewHandler(nil, nil).generateMetadata("public", "models", model{})
+	columns := make(map[string]common.Column, len(metadata.Columns))
+	for _, column := range metadata.Columns {
+		columns[column.Name] = column
+	}
+
+	for name, wantType := range map[string]string{
+		"name":       "string",
+		"count":      "bigint",
+		"created_at": "timestamp",
+		"metadata":   "jsonb",
+	} {
+		column, ok := columns[name]
+		if !ok {
+			t.Errorf("expected %q to be a metadata column", name)
+			continue
+		}
+		if column.Type != wantType {
+			t.Errorf("%q: expected type %q, got %q", name, wantType, column.Type)
+		}
+		if !column.IsNullable {
+			t.Errorf("%q: expected SQL wrapper to be nullable", name)
+		}
+	}
+
+	if len(metadata.Relations) != 1 || metadata.Relations[0] != "related" {
+		t.Errorf("expected only related to be a relation, got %v", metadata.Relations)
 	}
 }
 

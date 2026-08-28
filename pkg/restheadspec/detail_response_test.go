@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 // detailTestModel is a simple model with gorm column/type tags for detail format tests.
@@ -205,5 +206,32 @@ func TestBuildDetailFields_SkipsRelations(t *testing.T) {
 
 	if len(fields) != 2 {
 		t.Errorf("expected 2 scalar fields (id, name), got %d", len(fields))
+	}
+}
+
+func TestBuildDetailFields_UnwrapsSQLTypes(t *testing.T) {
+	type model struct {
+		Name      spectypes.SqlString    `gorm:"column:name" json:"name"`
+		CreatedAt spectypes.SqlTimeStamp `gorm:"column:created_at" json:"created_at"`
+		Metadata  spectypes.SqlJSONB     `gorm:"column:metadata;type:jsonb" json:"metadata"`
+	}
+
+	fields := (&Handler{}).buildDetailFields(model{})
+	byName := make(map[string]string, len(fields))
+	for _, field := range fields {
+		byName[field.Name] = field.DataType
+		if !field.Nullable {
+			t.Errorf("%q: expected SQL wrapper to be nullable", field.Name)
+		}
+	}
+
+	for name, want := range map[string]string{
+		"name":       "string",
+		"created_at": "unknown",
+		"metadata":   "unknown",
+	} {
+		if got := byName[name]; got != want {
+			t.Errorf("%q: expected type %q, got %q", name, want, got)
+		}
 	}
 }

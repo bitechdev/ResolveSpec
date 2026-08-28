@@ -85,13 +85,19 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 
 		// Skip relation fields (slice or user-defined struct that isn't time.Time).
 		fieldType, found := modelType.FieldByName(d.Name)
+		var unwrappedType reflect.Type
+		isSQLType := false
 		if found {
 			ft := fieldType.Type
-			if ft.Kind() == reflect.Pointer {
+			if sqlType, ok := unwrapSQLType(ft); ok {
+				unwrappedType = sqlType
+				ft = sqlType
+				isSQLType = true
+			} else if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			isUserStruct := ft.Kind() == reflect.Struct && ft.Name() != "Time" && ft.PkgPath() != ""
-			if ft.Kind() == reflect.Slice || isUserStruct {
+			if !isSQLType && (ft.Kind() == reflect.Slice || isUserStruct) {
 				info.relationNames = append(info.relationNames, jsonName)
 				continue
 			}
@@ -104,6 +110,9 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 
 		// Derive Go type name, unwrapping pointer if needed.
 		goType := d.DataType
+		if isSQLType {
+			goType = unwrappedType.Name()
+		}
 		if goType == "" && found {
 			ft := fieldType.Type
 			for ft.Kind() == reflect.Pointer {
@@ -125,13 +134,32 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 			isPrimary: isPrimary,
 			isUnique:  d.SQLKey == "unique" || d.SQLKey == "uniqueindex",
 			isFK:      d.SQLKey == "foreign_key",
-			nullable:  d.Nullable,
+			nullable:  isSQLType || d.Nullable,
 		}
 		info.columns = append(info.columns, ci)
 	}
 
 	info.schemaDoc = buildSchemaDoc(info)
 	return info
+}
+
+// unwrapSQLType returns the value type wrapped by a spectypes SQL value. These
+// types are scalar columns even when their Go representation is a struct or a
+// slice (for example, SqlNull[string] and SqlJSONB).
+func unwrapSQLType(t reflect.Type) (reflect.Type, bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	if t.PkgPath() != "github.com/bitechdev/ResolveSpec/pkg/spectypes" {
+		return nil, false
+	}
+	if t.Kind() == reflect.Struct {
+		if value, ok := t.FieldByName("Val"); ok {
+			return value.Type, true
+		}
+	}
+	return t, true
 }
 
 // fieldJSONName returns the JSON tag name for a struct field, falling back to the field name.

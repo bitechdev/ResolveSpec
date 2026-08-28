@@ -2073,16 +2073,23 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 			jsonName = field.Name
 		}
 
-		if field.Type.Kind() == reflect.Slice ||
-			(field.Type.Kind() == reflect.Struct && field.Type.Name() != "Time") {
+		columnField := field
+		isSQLType := false
+		if unwrappedType, ok := unwrapSQLType(field.Type); ok {
+			columnField.Type = unwrappedType
+			isSQLType = true
+		}
+
+		if !isSQLType && (columnField.Type.Kind() == reflect.Slice ||
+			(columnField.Type.Kind() == reflect.Struct && columnField.Type.Name() != "Time")) {
 			metadata.Relations = append(metadata.Relations, jsonName)
 			continue
 		}
 
 		column := common.Column{
 			Name:       jsonName,
-			Type:       getColumnType(field),
-			IsNullable: isNullable(field),
+			Type:       getColumnType(columnField),
+			IsNullable: isSQLType || isNullable(field),
 			IsPrimary:  strings.Contains(gormTag, "primaryKey"),
 			IsUnique:   strings.Contains(gormTag, "unique") || strings.Contains(gormTag, "uniqueIndex"),
 			HasIndex:   strings.Contains(gormTag, "index") || strings.Contains(gormTag, "uniqueIndex"),
@@ -2171,6 +2178,31 @@ func getColumnType(field reflect.StructField) string {
 		}
 		return "unknown"
 	}
+}
+
+// unwrapSQLType returns the value type wrapped by a spectypes SQL value. These
+// types represent columns, even when their Go representation is a struct or a
+// slice (for example, SqlNull[string] and SqlJSONB).
+func unwrapSQLType(t reflect.Type) (reflect.Type, bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	if t.PkgPath() != "github.com/bitechdev/ResolveSpec/pkg/spectypes" {
+		return nil, false
+	}
+
+	// SqlNull aliases and the date/time wrappers expose their actual value via
+	// Val. FieldByName also resolves Val through the embedded SqlNull field.
+	if t.Kind() == reflect.Struct {
+		if value, ok := t.FieldByName("Val"); ok {
+			return value.Type, true
+		}
+	}
+
+	// SqlJSONB has no wrapper field, but remains a scalar SQL value rather than
+	// a relation.
+	return t, true
 }
 
 func isNullable(field reflect.StructField) bool {

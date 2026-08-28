@@ -2551,10 +2551,18 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 			jsonName = field.Name
 		}
 
-		// Check if this is a relation field (slice or struct, but not time.Time)
-		if field.Type.Kind() == reflect.Slice ||
-			(field.Type.Kind() == reflect.Struct && field.Type.Name() != "Time") ||
-			(field.Type.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.Struct && field.Type.Elem().Name() != "Time") {
+		columnType := field.Type
+		isSQLType := false
+		if unwrappedType, ok := unwrapSQLType(field.Type); ok {
+			columnType = unwrappedType
+			isSQLType = true
+		}
+
+		// Check if this is a relation field (slice or struct, but not time.Time).
+		// spectypes SQL values are columns even when their Go representation is a
+		// struct or a slice.
+		if !isSQLType && (columnType.Kind() == reflect.Slice ||
+			(columnType.Kind() == reflect.Struct && columnType.Name() != "Time")) {
 			metadata.Relations = append(metadata.Relations, jsonName)
 			continue
 		}
@@ -2575,8 +2583,8 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 
 		column := common.Column{
 			Name:       columnName,
-			Type:       h.getColumnType(field.Type),
-			IsNullable: h.isNullable(field),
+			Type:       h.getColumnType(columnType),
+			IsNullable: isSQLType || h.isNullable(field),
 			IsPrimary:  strings.Contains(gormTag, "primaryKey") || strings.Contains(gormTag, "primary_key"),
 			IsUnique:   strings.Contains(gormTag, "unique"),
 			HasIndex:   strings.Contains(gormTag, "index"),
@@ -2605,6 +2613,27 @@ func (h *Handler) getColumnType(t reflect.Type) string {
 	default:
 		return "unknown"
 	}
+}
+
+// unwrapSQLType returns the value type wrapped by a spectypes SQL value. These
+// types represent columns, even when their Go representation is a struct or a
+// slice (for example, SqlNull[string] and SqlJSONB).
+func unwrapSQLType(t reflect.Type) (reflect.Type, bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+
+	if t.PkgPath() != "github.com/bitechdev/ResolveSpec/pkg/spectypes" {
+		return nil, false
+	}
+
+	if t.Kind() == reflect.Struct {
+		if value, ok := t.FieldByName("Val"); ok {
+			return value.Type, true
+		}
+	}
+
+	return t, true
 }
 
 func (h *Handler) isNullable(field reflect.StructField) bool {
@@ -2705,13 +2734,18 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 			continue
 		}
 
-		// Skip relation fields (slices, structs that aren't time.Time, ptrs to struct)
+		// Skip relation fields (slices and structs that aren't time.Time). spectypes
+		// SQL values are columns, not relations.
 		ft := field.Type
-		if ft.Kind() == reflect.Pointer {
+		isSQLType := false
+		if unwrappedType, ok := unwrapSQLType(ft); ok {
+			ft = unwrappedType
+			isSQLType = true
+		} else if ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
-		if ft.Kind() == reflect.Slice ||
-			(ft.Kind() == reflect.Struct && ft.Name() != "Time") {
+		if !isSQLType && (ft.Kind() == reflect.Slice ||
+			(ft.Kind() == reflect.Struct && ft.Name() != "Time")) {
 			continue
 		}
 
@@ -2739,7 +2773,7 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 			sqlKey = "unique"
 		}
 
-		nullable := field.Type.Kind() == reflect.Pointer
+		nullable := isSQLType || field.Type.Kind() == reflect.Pointer
 		if strings.Contains(gormLower, "not null") {
 			nullable = false
 		} else if strings.Contains(gormLower, "nullable") || strings.Contains(gormLower, ",null") {
@@ -2748,7 +2782,7 @@ func (h *Handler) buildDetailFields(model interface{}) []reflection.ModelFieldDe
 
 		fields = append(fields, reflection.ModelFieldDetail{
 			Name:        jsonName,
-			DataType:    h.getColumnType(field.Type),
+			DataType:    h.getColumnType(ft),
 			SQLName:     sqlName,
 			SQLDataType: sqlDataType,
 			SQLKey:      sqlKey,

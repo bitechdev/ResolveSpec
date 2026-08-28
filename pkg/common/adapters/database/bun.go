@@ -669,10 +669,7 @@ func (b *BunSelectQuery) PreloadRelation(relation string, apply ...func(common.S
 	b.query = b.query.Relation(relation, func(sq *bun.SelectQuery) *bun.SelectQuery {
 		defer func() {
 			if r := recover(); r != nil {
-				err := logger.HandlePanic("BunSelectQuery.PreloadRelation", r)
-				if err != nil {
-					return
-				}
+				_ = logger.HandlePanic("BunSelectQuery.PreloadRelation", r)
 			}
 		}()
 		if len(apply) == 0 {

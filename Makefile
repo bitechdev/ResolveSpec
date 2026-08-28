@@ -1,5 +1,7 @@
 .PHONY: test test-unit test-integration docker-up docker-down clean
 
+GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
+
 # Run all unit tests
 test-unit:
 	@echo "Running unit tests..."
@@ -49,7 +51,9 @@ release-version: ## Create and push a release with specific version (use: make r
 
 lint: ## Run linter
 	@echo "Running linter..."
-	@if command -v golangci-lint > /dev/null; then \
+	@if [ -x "$(GOLANGCI_LINT)" ]; then \
+		"$(GOLANGCI_LINT)" run --config=.golangci.json; \
+	elif command -v golangci-lint > /dev/null; then \
 		golangci-lint run --config=.golangci.json; \
 	else \
 		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
@@ -58,7 +62,9 @@ lint: ## Run linter
 
 lintfix: ## Run linter
 	@echo "Running linter..."
-	@if command -v golangci-lint > /dev/null; then \
+	@if [ -x "$(GOLANGCI_LINT)" ]; then \
+		"$(GOLANGCI_LINT)" run --config=.golangci.json --fix; \
+	elif command -v golangci-lint > /dev/null; then \
 		golangci-lint run --config=.golangci.json --fix; \
 	else \
 		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \

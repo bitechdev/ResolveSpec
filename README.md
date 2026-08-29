@@ -135,6 +135,73 @@ For complete documentation including setup, headers, lifecycle hooks, cursor pag
 
 For detailed examples of reading data, cursor pagination, recursive CRUD operations, filtering, sorting, and more, see [pkg/resolvespec/README.md](pkg/resolvespec/README.md).
 
+## PostGIS & Vector (PostgreSQL only)
+
+First-class support for PostGIS geometry/geography and pgvector columns in `resolvespec` + `restheadspec`. No extra dependencies. On non-Postgres databases the spatial/vector operators simply don't match.
+
+### Column types (`pkg/spectypes`)
+
+| Go type            | SQL type     | Wire / JSON                                             |
+|--------------------|--------------|--------------------------------------------------------|
+| `SqlGeometry`      | `geometry`   | JSON in/out = **GeoJSON**; also accepts EWKT / hex-EWKB |
+| `SqlGeography`     | `geography`  | same as `SqlGeometry`                                   |
+| `SqlVector`        | `vector`     | `[]float32` ⇄ `[1,2,3]`                                 |
+| `SqlHalfVector`    | `halfvec`    | `[]float32` ⇄ `[1,2,3]`                                 |
+| `SqlSparseVector`  | `sparsevec`  | `{"dim":8,"indices":[1,4],"values":[0.5,0.2]}`          |
+| `SqlBitVector`     | `bit`/`varbit` | bool array or `"1011"` string                        |
+
+- Geometry `Value()` emits `SRID=<n>;<WKT>` (PostGIS implicit text→geometry cast; no wrapper function needed).
+- Declare dimensioned types with a tag: `gorm:"type:vector(1536)"` — the tag wins over the canonical name in metadata/OpenAPI.
+- Metadata endpoint and OpenAPI schema report `geometry`/`vector`/`halfvec`/`sparsevec`/`bit`.
+
+### Spatial filter operators
+
+`value` is a geometry (GeoJSON object, EWKT string, or hex-EWKB) unless noted.
+
+| Operator | Value shape |
+|----------|-------------|
+| `st_intersects`, `st_contains`, `st_within`, `st_covers`, `st_coveredby`, `st_overlaps`, `st_touches`, `st_crosses`, `st_equals`, `st_disjoint` | geometry |
+| `st_dwithin` | `{"geom": <geometry>, "distance": <meters>}` |
+| `bbox` (alias `&&`) | geometry, or `{"bbox":[minx,miny,maxx,maxy],"srid":4326}` |
+
+### Vector similarity filter operators
+
+| Operator | pgvector op | Value shape |
+|----------|-------------|-------------|
+| `l2_within` / `euclidean_within` | `<->` | `{"vector":[...], "distance": <n>}` |
+| `cosine_within` | `<=>` | same (also `"lt"`/`"lte"`/`"gt"`/`"gte"` instead of `"distance"`) |
+| `ip_within` / `inner_within` | `<#>` | same |
+
+### KNN search (ordering + distance column)
+
+**resolvespec** — `options.vector_search`:
+
+```json
+{ "options": { "vector_search": {
+  "column": "embedding",
+  "vector": [0.1, 0.2, 0.3],
+  "metric": "cosine",
+  "as": "_distance",
+  "direction": "asc"
+}}}
+```
+
+Orders rows by distance; when `as` is set, returns the distance as an extra column (all model columns are auto-selected).
+`metric`: `l2` (default) | `cosine` | `ip`.
+
+**restheadspec** — headers:
+
+```HTTP
+X-Vector-Search-embedding: cosine
+X-Vector-Search-Vector: [0.1,0.2,0.3]
+X-Vector-Search-As: _distance
+X-Vector-Search-Dir: asc
+```
+
+Spatial/vector filters via headers: `X-SpatialFilter-<col>` / `X-VectorFilter-<col>` with a JSON operator object, e.g.
+`X-SpatialFilter-geom: {"op":"st_dwithin","geom":"SRID=4326;POINT(0 0)","distance":1000}`
+(optional `"logic":"or"`).
+
 ## Installation
 
 ```Shell

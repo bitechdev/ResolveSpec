@@ -87,6 +87,43 @@ func TestBuildFilterCondition(t *testing.T) {
 			expectedCondition: "",
 			expectedArgsCount: 0,
 		},
+		{
+			name: "st_dwithin spatial operator",
+			filter: common.FilterOption{
+				Column:   "geom",
+				Operator: "st_dwithin",
+				Value: map[string]any{
+					"geom":     "SRID=4326;POINT(0 0)",
+					"distance": 1000.0,
+				},
+			},
+			expectedCondition: "ST_DWithin(geom, ST_GeomFromEWKT(?), ?)",
+			expectedArgsCount: 2,
+		},
+		{
+			name: "st_intersects spatial operator",
+			filter: common.FilterOption{
+				Column:        "geom",
+				Operator:      "st_intersects",
+				Value:         "SRID=4326;POLYGON((0 0,1 0,1 1,0 1,0 0))",
+				LogicOperator: "",
+			},
+			expectedCondition: "ST_Intersects(geom, ST_GeomFromEWKT(?))",
+			expectedArgsCount: 1,
+		},
+		{
+			name: "l2_within vector operator",
+			filter: common.FilterOption{
+				Column:   "embedding",
+				Operator: "l2_within",
+				Value: map[string]any{
+					"vector":   []any{1.0, 2.0, 3.0},
+					"distance": 0.5,
+				},
+			},
+			expectedCondition: "embedding <-> ? < ?",
+			expectedArgsCount: 2,
+		},
 	}
 
 	for _, tt := range tests {

@@ -42,6 +42,10 @@ type RequestOptions struct {
 	CursorBackward string  `json:"cursor_backward"`
 	FetchRowNumber *string `json:"fetch_row_number"`
 
+	// VectorSearch performs a pgvector nearest-neighbour ordering (KNN) and
+	// optionally returns the computed distance as an extra column.
+	VectorSearch *VectorSearchOption `json:"vector_search"`
+
 	// Join table aliases (used for validation of prefixed columns in filters/sorts)
 	// Not serialized to JSON as it's internal validation state
 	JoinAliases []string `json:"-"`
@@ -112,6 +116,17 @@ func ResolveSortColumns(sort []SortOption, pkName string) []SortOption {
 		resolved = append(resolved, s)
 	}
 	return resolved
+}
+
+// VectorSearchOption describes a pgvector KNN search: order rows by the distance
+// between Column and Vector using Metric, and (when As is set) select that
+// distance as an additional result column.
+type VectorSearchOption struct {
+	Column    string    `json:"column"`
+	Vector    []float32 `json:"vector"`
+	Metric    string    `json:"metric"`    // "l2" (default) | "cosine" | "ip"
+	As        string    `json:"as"`        // distance column alias; default "_distance"
+	Direction string    `json:"direction"` // "asc" (default) | "desc"
 }
 
 type CustomOperator struct {

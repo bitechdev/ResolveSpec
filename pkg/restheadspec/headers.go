@@ -182,6 +182,22 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 			h.parseSearchOp(&options, key, decodedValue, "AND")
 		case strings.HasPrefix(key, "x-searchcols"):
 			options.SearchColumns = h.parseCommaSeparated(decodedValue)
+		case strings.HasPrefix(key, "x-spatialfilter-"):
+			h.parseGeoFilter(&options, key, "x-spatialfilter-", decodedValue)
+		case strings.HasPrefix(key, "x-vectorfilter-"):
+			h.parseGeoFilter(&options, key, "x-vectorfilter-", decodedValue)
+
+		// pgvector KNN search
+		case key == "x-vector-search-vector":
+			h.ensureVectorSearch(&options).Vector = parseFloat32List(decodedValue)
+		case key == "x-vector-search-as":
+			h.ensureVectorSearch(&options).As = decodedValue
+		case key == "x-vector-search-dir":
+			h.ensureVectorSearch(&options).Direction = decodedValue
+		case strings.HasPrefix(key, "x-vector-search-"):
+			vs := h.ensureVectorSearch(&options)
+			vs.Column = strings.TrimPrefix(key, "x-vector-search-")
+			vs.Metric = decodedValue
 		case strings.HasPrefix(key, "x-custom-sql-w"):
 			if options.CustomSQLWhere != "" {
 				options.CustomSQLWhere = fmt.Sprintf("%s AND (%s)", options.CustomSQLWhere, decodedValue)
@@ -307,6 +323,83 @@ func (h *Handler) parseOptionsFromHeaders(r common.Request, model interface{}) E
 	}
 
 	return options
+}
+
+// ensureVectorSearch returns the options' VectorSearchOption, allocating it on
+// first use.
+func (h *Handler) ensureVectorSearch(options *ExtendedRequestOptions) *common.VectorSearchOption {
+	if options.VectorSearch == nil {
+		options.VectorSearch = &common.VectorSearchOption{}
+	}
+	return options.VectorSearch
+}
+
+// parseFloat32List parses a JSON array ("[1,2,3]") or comma-separated list into
+// a []float32.
+func parseFloat32List(value string) []float32 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	var raw []float64
+	if err := json.Unmarshal([]byte(value), &raw); err == nil {
+		out := make([]float32, len(raw))
+		for i, f := range raw {
+			out[i] = float32(f)
+		}
+		return out
+	}
+	parts := strings.Split(strings.Trim(value, "[]"), ",")
+	out := make([]float32, 0, len(parts))
+	for _, p := range parts {
+		f, err := strconv.ParseFloat(strings.TrimSpace(p), 32)
+		if err != nil {
+			return nil
+		}
+		out = append(out, float32(f))
+	}
+	return out
+}
+
+// parseGeoFilter parses an x-spatialfilter-<col> / x-vectorfilter-<col> header.
+// The value is a JSON object: {"op":"st_dwithin","geom":...,"distance":...} or
+// {"op":"st_intersects","value":<geojson>}. An optional "logic":"or" controls
+// how the filter combines with the previous one.
+func (h *Handler) parseGeoFilter(options *ExtendedRequestOptions, key, prefix, value string) {
+	col := strings.TrimPrefix(key, prefix)
+	if col == "" || strings.TrimSpace(value) == "" {
+		return
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		logger.Warn("Invalid %s%s filter JSON: %v", prefix, col, err)
+		return
+	}
+	op, _ := raw["op"].(string)
+	if op == "" {
+		logger.Warn("%s%s filter missing \"op\"", prefix, col)
+		return
+	}
+	logicOp := "AND"
+	if lo, ok := raw["logic"].(string); ok && strings.EqualFold(lo, "or") {
+		logicOp = "OR"
+	}
+
+	var fv interface{}
+	if v, ok := raw["value"]; ok {
+		fv = v
+	} else {
+		delete(raw, "op")
+		delete(raw, "logic")
+		fv = raw
+	}
+
+	options.Filters = append(options.Filters, common.FilterOption{
+		Column:        col,
+		Operator:      op,
+		Value:         fv,
+		LogicOperator: logicOp,
+	})
 }
 
 // parseSelectFields parses x-select-fields header
@@ -1362,6 +1455,14 @@ type ColumnCastInfo struct {
 // Returns ColumnCastInfo indicating whether the column should be cast to text in SQL
 func (h *Handler) ValidateAndAdjustFilterForColumnType(filter *common.FilterOption, model interface{}) ColumnCastInfo {
 	if filter == nil || model == nil {
+		return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
+	}
+
+	// Never cast geometry/geography or pgvector columns to TEXT — spatial and
+	// vector operators need the native column type. Also bypass when the
+	// operator itself is spatial/vector (e.g. st_dwithin, l2_within).
+	if common.IsSpatialOperator(filter.Operator) || common.IsVectorOperator(filter.Operator) ||
+		reflection.IsSpatialColumn(model, filter.Column) || reflection.IsVectorColumn(model, filter.Column) {
 		return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
 	}
 

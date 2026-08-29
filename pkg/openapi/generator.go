@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 // OpenAPISpec represents the OpenAPI 3.0 specification structure
@@ -438,6 +439,28 @@ func (g *Generator) generatePropertySchema(field reflect.StructField) *Schema {
 	// Get description from tag
 	if desc := field.Tag.Get("description"); desc != "" {
 		schema.Description = desc
+	}
+
+	// spectypes PostGIS / pgvector wrappers get dedicated schemas.
+	if n, ok := spectypes.SQLTypeName(field.Type); ok {
+		switch n {
+		case "geometry", "geography":
+			schema.Type = "object"
+			schema.Format = "geojson"
+			return schema
+		case "vector", "halfvec":
+			schema.Type = "array"
+			schema.Items = &Schema{Type: "number"}
+			schema.Format = "vector"
+			return schema
+		case "sparsevec":
+			schema.Type = "object"
+			schema.Format = "sparsevec"
+			return schema
+		case "bit":
+			schema.Type = "string"
+			return schema
+		}
 	}
 
 	switch fieldType.Kind() {

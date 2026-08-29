@@ -68,6 +68,14 @@ See [`resolvespec-python/todo.md`](./resolvespec-python/todo.md) for detailed Py
    - [ ] Computed column improvements
    - [ ] Recursive query support
 
+3. **PostGIS & pgvector (PostgreSQL)**
+   - [x] Custom types: `SqlGeometry`/`SqlGeography` (GeoJSON I/O), `SqlHalfVector`, `SqlSparseVector`, `SqlBitVector`
+   - [x] Spatial filter operators (`st_dwithin`, `st_intersects`, `bbox`, …) in resolvespec + restheadspec
+   - [x] Vector similarity filter operators (`l2_within`, `cosine_within`, `ip_within`)
+   - [x] KNN structured option (`options.vector_search` / `X-Vector-Search-*` headers)
+   - [x] Metadata + OpenAPI report geometry/vector column types
+   - [ ] Integration tests against a PostGIS + pgvector database (needs test DB with extensions)
+
 3. **Testing & Quality**
    - [ ] Increase test coverage to 70%+
    - [ ] Add integration tests for all ORMs
@@ -96,5 +104,5 @@ See [`resolvespec-python/todo.md`](./resolvespec-python/todo.md) for detailed Py
 
 ---
 
-**Last Updated:** 2026-02-07
-**Updated:** Added resolvespec-js client testing and implementation tasks
+**Last Updated:** 2026-08-29
+**Updated:** Added PostGIS + pgvector support (types, filter operators, KNN, metadata/OpenAPI)

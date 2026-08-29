@@ -419,7 +419,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 		// If we have computed columns/expressions but options.Columns is empty,
 		// populate it with all model columns first since computed columns are additions
-		if len(options.Columns) == 0 && (len(options.ComputedQL) > 0 || len(options.ComputedColumns) > 0) {
+		vectorSearchActive := options.VectorSearch != nil &&
+			options.VectorSearch.Column != "" && len(options.VectorSearch.Vector) > 0
+
+		if len(options.Columns) == 0 &&
+			(len(options.ComputedQL) > 0 || len(options.ComputedColumns) > 0 ||
+				(vectorSearchActive && options.VectorSearch.As != "")) {
 			logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
 			options.Columns = reflection.GetSQLModelColumns(model)
 		}
@@ -470,6 +475,29 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				query = query.Column(reflection.ExtractSourceColumn(col))
 			}
 
+		}
+
+		// pgvector KNN search: order by distance to the query vector and,
+		// optionally, return that distance as an extra column. Postgres only.
+		if vectorSearchActive {
+			vs := options.VectorSearch
+			op := common.VectorOperator(vs.Metric)
+			lit, litErr := common.VectorLiteral(vs.Vector)
+			if litErr != nil {
+				logger.Error("Invalid vector search vector: %v", litErr)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "invalid_vector_search", "Invalid vector search vector"
+				return litErr
+			}
+			col := common.QuoteIdent(vs.Column)
+			dir := "ASC"
+			if strings.EqualFold(vs.Direction, "desc") {
+				dir = "DESC"
+			}
+			if vs.As != "" {
+				query = query.ColumnExpr(fmt.Sprintf("(%s %s ?) AS %s", col, op, common.QuoteIdent(vs.As)), lit)
+			}
+			query = query.OrderExpr(fmt.Sprintf("%s %s ? %s", col, op, dir), lit)
+			logger.Debug("Applying vector search on %s (%s)", vs.Column, op)
 		}
 
 		// Apply expand (Just expand to Preload for now)
@@ -2330,6 +2358,18 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		colName := h.qualifyColumnName(filter.Column, tableName)
 		return applyWhere(fmt.Sprintf("(%s IS NOT NULL AND %s != '')", colName, colName))
 	default:
+		if common.IsSpatialOperator(filter.Operator) {
+			if cond, sargs, ok := common.BuildSpatialCondition(rawQualifiedColumn, filter.Operator, filter.Value); ok {
+				return applyWhere(cond, sargs...)
+			}
+			return query
+		}
+		if common.IsVectorOperator(filter.Operator) {
+			if cond, vargs, ok := common.BuildVectorCondition(rawQualifiedColumn, filter.Operator, filter.Value); ok {
+				return applyWhere(cond, vargs...)
+			}
+			return query
+		}
 		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
 		return applyWhere(fmt.Sprintf("%s = ?", qualifiedColumn), filter.Value)
 	}
@@ -2429,6 +2469,20 @@ func (h *Handler) buildFilterCondition(qualifiedColumn string, filter *common.Fi
 		colName := h.qualifyColumnName(filter.Column, tableName)
 		return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", colName, colName), nil
 	default:
+		if common.IsSpatialOperator(filter.Operator) {
+			rawCol := h.qualifyColumnName(filter.Column, tableName)
+			if cond, sargs, ok := common.BuildSpatialCondition(rawCol, filter.Operator, filter.Value); ok {
+				return cond, sargs
+			}
+			return "", nil
+		}
+		if common.IsVectorOperator(filter.Operator) {
+			rawCol := h.qualifyColumnName(filter.Column, tableName)
+			if cond, vargs, ok := common.BuildVectorCondition(rawCol, filter.Operator, filter.Value); ok {
+				return cond, vargs
+			}
+			return "", nil
+		}
 		logger.Warn("Unknown filter operator: %s, defaulting to equals", filter.Operator)
 		return fmt.Sprintf("%s = ?", qualifiedColumn), []interface{}{filter.Value}
 	}

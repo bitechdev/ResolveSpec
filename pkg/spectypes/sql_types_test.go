@@ -955,4 +955,3 @@ func TestSqlByteArray_Base64_RoundTrip(t *testing.T) {
 		t.Errorf("Round-trip failed: expected %v, got %v", original, b3.Val)
 	}
 }
-

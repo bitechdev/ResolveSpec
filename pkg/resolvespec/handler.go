@@ -16,6 +16,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 // FallbackHandler is a function that handles requests when no model is found
@@ -332,8 +333,13 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			query = query.Table(tableName)
 		}
 
-		if len(options.Columns) == 0 && (len(options.ComputedColumns) > 0) {
-			logger.Debug("Populating options.Columns with all model columns since computed columns are additions")
+		vectorSearchActive := options.VectorSearch != nil &&
+			options.VectorSearch.Column != "" && len(options.VectorSearch.Vector) > 0
+
+		if len(options.Columns) == 0 &&
+			(len(options.ComputedColumns) > 0 ||
+				(vectorSearchActive && options.VectorSearch.As != "")) {
+			logger.Debug("Populating options.Columns with all model columns since computed/vector columns are additions")
 			options.Columns = reflection.GetSQLModelColumns(model)
 		}
 
@@ -350,6 +356,29 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				logger.Debug("Applying computed column: %s", cu.Name)
 				query = query.ColumnExpr(fmt.Sprintf("(%s) AS %s", cu.Expression, cu.Name))
 			}
+		}
+
+		// pgvector KNN search: order by distance to the query vector and,
+		// optionally, return that distance as an extra column. Postgres only.
+		if vectorSearchActive {
+			vs := options.VectorSearch
+			op := common.VectorOperator(vs.Metric)
+			lit, litErr := common.VectorLiteral(vs.Vector)
+			if litErr != nil {
+				logger.Error("Invalid vector search vector: %v", litErr)
+				statusCode, errCode, errMsg = http.StatusBadRequest, "invalid_vector_search", "Invalid vector search vector"
+				return litErr
+			}
+			col := common.QuoteIdent(vs.Column)
+			dir := "ASC"
+			if strings.EqualFold(vs.Direction, "desc") {
+				dir = "DESC"
+			}
+			if vs.As != "" {
+				query = query.ColumnExpr(fmt.Sprintf("(%s %s ?) AS %s", col, op, common.QuoteIdent(vs.As)), lit)
+			}
+			query = query.OrderExpr(fmt.Sprintf("%s %s ? %s", col, op, dir), lit)
+			logger.Debug("Applying vector search on %s (%s)", vs.Column, op)
 		}
 
 		// Apply preloading
@@ -1909,7 +1938,21 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 			return "", nil
 		}
 	default:
-		return "", nil
+		if common.IsSpatialOperator(filter.Operator) {
+			q, a, ok := common.BuildSpatialCondition(filter.Column, filter.Operator, filter.Value)
+			if !ok {
+				return "", nil
+			}
+			condition, args = q, a
+		} else if common.IsVectorOperator(filter.Operator) {
+			q, a, ok := common.BuildVectorCondition(filter.Column, filter.Operator, filter.Value)
+			if !ok {
+				return "", nil
+			}
+			condition, args = q, a
+		} else {
+			return "", nil
+		}
 	}
 
 	return condition, args
@@ -1958,7 +2001,21 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 			return query
 		}
 	default:
-		return query
+		if common.IsSpatialOperator(filter.Operator) {
+			q, a, ok := common.BuildSpatialCondition(filter.Column, filter.Operator, filter.Value)
+			if !ok {
+				return query
+			}
+			condition, args = q, a
+		} else if common.IsVectorOperator(filter.Operator) {
+			q, a, ok := common.BuildVectorCondition(filter.Column, filter.Operator, filter.Value)
+			if !ok {
+				return query
+			}
+			condition, args = q, a
+		} else {
+			return query
+		}
 	}
 
 	// Apply filter with appropriate logic operator
@@ -2094,9 +2151,20 @@ func (h *Handler) generateMetadata(schema, entity string, model interface{}) *co
 			continue
 		}
 
+		colTypeStr := getColumnType(columnField)
+		// Fill the gap for spectypes wrappers whose Go representation (struct or
+		// slice) has no obvious SQL mapping — PostGIS geometry/geography and
+		// pgvector vector/halfvec/sparsevec/bit. A gorm `type:` tag still wins
+		// (dimensioned types like vector(1536)).
+		if colTypeStr == "unknown" && !strings.Contains(field.Tag.Get("gorm"), "type:") {
+			if n, ok := spectypes.SQLTypeName(field.Type); ok {
+				colTypeStr = n
+			}
+		}
+
 		column := common.Column{
 			Name:       jsonName,
-			Type:       getColumnType(columnField),
+			Type:       colTypeStr,
 			IsNullable: isSQLType || isNullable(field),
 			IsPrimary:  strings.Contains(gormTag, "primaryKey"),
 			IsUnique:   strings.Contains(gormTag, "unique") || strings.Contains(gormTag, "uniqueIndex"),

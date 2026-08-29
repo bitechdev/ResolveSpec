@@ -219,20 +219,20 @@ func readGeom(r *wkbReader) (geom, int, error) {
 		switch baseType {
 		case 4:
 			pts := make([][]float64, len(parts))
-			for i, p := range parts {
-				pts[i] = p.coord
+			for i := range parts {
+				pts[i] = parts[i].coord
 			}
 			return geom{typ: "MultiPoint", line: pts}, srid, nil
 		case 5:
 			lines := make([][][]float64, len(parts))
-			for i, p := range parts {
-				lines[i] = p.line
+			for i := range parts {
+				lines[i] = parts[i].line
 			}
 			return geom{typ: "MultiLineString", poly: lines}, srid, nil
 		default:
 			polys := make([][][][]float64, len(parts))
-			for i, p := range parts {
-				polys[i] = p.poly
+			for i := range parts {
+				polys[i] = parts[i].poly
 			}
 			return geom{typ: "MultiPolygon", multi: polys}, srid, nil
 		}
@@ -284,8 +284,8 @@ func geomToGeoJSONStruct(g geom) (geoJSON, error) {
 		coords = g.multi
 	case "GeometryCollection":
 		subs := make([]geoJSON, len(g.geoms))
-		for i, sub := range g.geoms {
-			s, err := geomToGeoJSONStruct(sub)
+		for i := range g.geoms {
+			s, err := geomToGeoJSONStruct(g.geoms[i])
 			if err != nil {
 				return geoJSON{}, err
 			}
@@ -683,8 +683,8 @@ func geomToWKT(g geom) (string, error) {
 		return "MULTIPOLYGON (" + strings.Join(parts, ", ") + ")", nil
 	case "GeometryCollection":
 		parts := make([]string, len(g.geoms))
-		for i, sub := range g.geoms {
-			w, err := geomToWKT(sub)
+		for i := range g.geoms {
+			w, err := geomToWKT(g.geoms[i])
 			if err != nil {
 				return "", err
 			}

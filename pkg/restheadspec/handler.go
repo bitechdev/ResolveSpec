@@ -2902,8 +2902,21 @@ func (h *Handler) sendFormattedResponse(w common.ResponseWriter, data interface{
 	switch options.ResponseFormat {
 	case "simple":
 		// Simple format: just return the data array
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			logger.Error("Failed to marshal JSON response: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if string(jsonData) == "null" {
+			if options.SingleRecordAsObject {
+				jsonData = []byte("{}")
+			} else {
+				jsonData = []byte("[]")
+			}
+		}
 		w.WriteHeader(http.StatusOK)
-		if err := w.WriteJSON(data); err != nil {
+		if _, err := w.Write(jsonData); err != nil {
 			logger.Error("Failed to write JSON response: %v", err)
 		}
 	case "syncfusion":

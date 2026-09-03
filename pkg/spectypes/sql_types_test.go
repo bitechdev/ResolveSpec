@@ -178,7 +178,7 @@ func TestSqlTimeStamp_JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal failed: %v", err)
 	}
-	expected := `"2024-01-15T10:30:45"`
+	expected := `"2024-01-15T10:30:45Z"`
 	if string(data) != expected {
 		t.Errorf("expected %s, got %s", expected, string(data))
 	}

@@ -336,21 +336,21 @@ type (
 	SqlUUID      = SqlNull[uuid.UUID]
 )
 
-// SqlTimeStamp - Timestamp with custom formatting (YYYY-MM-DDTHH:MM:SS).
+// SqlTimeStamp - Timestamp serialized as RFC3339 with timezone offset.
 type SqlTimeStamp struct{ SqlNull[time.Time] }
 
 func (t SqlTimeStamp) MarshalJSON() ([]byte, error) {
 	if !t.Valid || t.Val.IsZero() || t.Val.Before(time.Date(0002, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		return []byte("null"), nil
 	}
-	return []byte(fmt.Sprintf(`"%s"`, t.Val.Format("2006-01-02T15:04:05"))), nil
+	return []byte(fmt.Sprintf(`"%s"`, t.Val.Format(time.RFC3339))), nil
 }
 
 func (t *SqlTimeStamp) UnmarshalJSON(b []byte) error {
 	if err := t.SqlNull.UnmarshalJSON(b); err != nil {
 		return err
 	}
-	if t.Valid && (t.Val.IsZero() || t.Val.Format("2006-01-02T15:04:05") == "0001-01-01T00:00:00") {
+	if t.Valid && (t.Val.IsZero() || t.Val.Year() <= 1) {
 		t.Valid = false
 	}
 	return nil
@@ -360,7 +360,7 @@ func (t SqlTimeStamp) Value() (driver.Value, error) {
 	if !t.Valid || t.Val.IsZero() || t.Val.Before(time.Date(0002, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		return nil, nil
 	}
-	return t.Val.Format("2006-01-02T15:04:05"), nil
+	return t.Val.Format(time.RFC3339), nil
 }
 
 func SqlTimeStampNow() SqlTimeStamp {

@@ -347,6 +347,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		if len(options.Columns) > 0 {
 			logger.Debug("Selecting columns: %v", options.Columns)
 			for _, col := range options.Columns {
+				if expr, jargs, alias, ok := common.ResolveJSONColumnExpr(model, "", col); ok {
+					query = query.ColumnExpr(expr+" AS "+common.QuoteIdent(alias), jargs...)
+					continue
+				}
 				query = query.Column(reflection.ExtractSourceColumn(col))
 			}
 		}
@@ -393,7 +397,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 
 		// Apply filters with proper grouping for OR logic
-		query = h.applyFilters(query, options.Filters)
+		query = h.applyFilters(query, options.Filters, model)
 
 		// Apply custom operators
 		for _, customOp := range options.CustomOperators {
@@ -413,6 +417,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				direction = "DESC"
 			}
 			logger.Debug("Applying sort: %s %s", sort.Column, direction)
+			if expr, jargs, _, ok := common.ResolveJSONColumnExpr(model, "", sort.Column); ok {
+				query = query.OrderExpr(fmt.Sprintf("%s %s", expr, direction), jargs...)
+				continue
+			}
 			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
 		}
 
@@ -536,7 +544,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 			// Apply the same filters as the main query
 			for _, filter := range options.Filters {
-				rowNumQuery = h.applyFilter(rowNumQuery, filter)
+				rowNumQuery = h.applyFilter(rowNumQuery, filter, model)
 			}
 
 			// Apply custom operators
@@ -1829,7 +1837,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 // applyFilters applies all filters with proper grouping for OR logic
 // Groups consecutive OR filters together to ensure proper query precedence
 // Example: [A, B(OR), C(OR), D(AND)] => WHERE (A OR B OR C) AND D
-func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
@@ -1849,11 +1857,11 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 			}
 
 			// Apply the OR group as a single grouped WHERE clause
-			query = h.applyFilterGroup(query, orGroup)
+			query = h.applyFilterGroup(query, orGroup, model)
 			i = j
 		} else {
 			// Single filter with AND logic (or first filter)
-			condition, args := h.buildFilterCondition(filters[i])
+			condition, args := h.buildFilterCondition(filters[i], model)
 			if condition != "" {
 				query = query.Where(condition, args...)
 			}
@@ -1866,7 +1874,7 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 
 // applyFilterGroup applies a group of filters that should be OR'd together
 // Always wraps them in parentheses and applies as a single WHERE clause
-func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
@@ -1876,7 +1884,7 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 	var args []interface{}
 
 	for _, filter := range filters {
-		condition, filterArgs := h.buildFilterCondition(filter)
+		condition, filterArgs := h.buildFilterCondition(filter, model)
 		if condition != "" {
 			conditions = append(conditions, condition)
 			args = append(args, filterArgs...)
@@ -1897,10 +1905,17 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 	return query.Where(groupedCondition, args...)
 }
 
-// buildFilterCondition builds a filter condition and returns it with args
-func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionString string, conditionArgs []interface{}) {
+// buildFilterCondition builds a filter condition and returns it with args.
+// model, when non-nil, lets JSON sub-field references (data->>'x', data#>>'{a,b}',
+// or the dotted data.x shorthand for a JSON column) resolve to a safe,
+// parameterised expression before the ordinary operator handling below.
+func (h *Handler) buildFilterCondition(filter common.FilterOption, model interface{}) (conditionString string, conditionArgs []interface{}) {
 	var condition string
 	var args []interface{}
+
+	if cond, jargs, ok := common.BuildJSONFilterCondition(model, "", filter.Column, filter.Operator, filter.Value); ok {
+		return cond, jargs
+	}
 
 	switch filter.Operator {
 	case "eq", "=":
@@ -1958,12 +1973,19 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (conditionStr
 	return condition, args
 }
 
-func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption) common.SelectQuery {
+func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, model interface{}) common.SelectQuery {
 	// Determine which method to use based on LogicOperator
 	useOrLogic := strings.EqualFold(filter.LogicOperator, "OR")
 
 	var condition string
 	var args []interface{}
+
+	if cond, jargs, ok := common.BuildJSONFilterCondition(model, "", filter.Column, filter.Operator, filter.Value); ok {
+		if useOrLogic {
+			return query.WhereOr(cond, jargs...)
+		}
+		return query.Where(cond, jargs...)
+	}
 
 	switch filter.Operator {
 	case "eq", "=":
@@ -2394,7 +2416,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 
 			if len(preload.Filters) > 0 {
 				for _, filter := range preload.Filters {
-					sq = h.applyFilter(sq, filter)
+					sq = h.applyFilter(sq, filter, nil)
 				}
 			}
 			if len(preload.Sort) > 0 {

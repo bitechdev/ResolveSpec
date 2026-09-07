@@ -128,7 +128,7 @@ func TestBuildFilterCondition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			condition, args := h.buildFilterCondition(tt.filter)
+			condition, args := h.buildFilterCondition(tt.filter, nil)
 
 			if condition != tt.expectedCondition {
 				t.Errorf("Expected condition '%s', got '%s'", tt.expectedCondition, condition)

@@ -91,3 +91,9 @@ func IsVectorType(t reflect.Type) bool {
 	n, ok := SQLTypeName(t)
 	return ok && (n == "vector" || n == "halfvec" || n == "sparsevec")
 }
+
+// IsJSONType reports whether t is a spectypes JSON/JSONB wrapper.
+func IsJSONType(t reflect.Type) bool {
+	n, ok := SQLTypeName(t)
+	return ok && (n == "jsonb" || n == "json")
+}

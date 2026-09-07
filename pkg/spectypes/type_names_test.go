@@ -51,6 +51,20 @@ func TestIsSpatialType(t *testing.T) {
 	}
 }
 
+func TestIsJSONType(t *testing.T) {
+	if !IsJSONType(reflect.TypeOf(SqlJSONB{})) {
+		t.Error("SqlJSONB should be a JSON type")
+	}
+	if !IsJSONType(reflect.TypeOf(&SqlJSONB{})) {
+		t.Error("*SqlJSONB should be a JSON type (pointer unwrapped)")
+	}
+	for _, v := range []any{SqlGeometry{}, SqlVector{}, SqlString{}, SqlStringArray{}, ""} {
+		if IsJSONType(reflect.TypeOf(v)) {
+			t.Errorf("%T should not be a JSON type", v)
+		}
+	}
+}
+
 func TestIsVectorType(t *testing.T) {
 	for _, v := range []any{SqlVector{}, SqlHalfVector{}, SqlSparseVector{}} {
 		if !IsVectorType(reflect.TypeOf(v)) {

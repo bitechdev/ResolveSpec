@@ -471,7 +471,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		// Apply column selection
 		if len(options.Columns) > 0 {
 			logger.Debug("Selecting columns: %v", options.Columns)
+			selectAlias := reflection.ExtractTableNameOnly(tableName)
 			for _, col := range options.Columns {
+				// JSON sub-field selection (data->>'x', data.x, data#>>'{a,b}'):
+				// emit a parameterised expression aliased to a stable name.
+				if expr, jargs, alias, ok := common.ResolveJSONColumnExpr(model, selectAlias, col); ok {
+					query = query.ColumnExpr(expr+" AS "+common.QuoteIdent(alias), jargs...)
+					continue
+				}
 				query = query.Column(reflection.ExtractSourceColumn(col))
 			}
 
@@ -610,12 +617,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 				// Apply the OR group as a single grouped condition
 				logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
-				query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName)
+				query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName, model)
 				i = j
 			} else {
 				// Single AND filter - apply normally
 				logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
-				query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp)
+				query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp, model)
 				i++
 			}
 		}
@@ -715,8 +722,12 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			}
 			logger.Debug("Applying sort: %s %s", sort.Column, direction)
 
-			// Check if it's an expression (enclosed in brackets) - use directly without quoting
-			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
+			// JSON sub-field reference (data->>'x', data#>>'{a,b}', or dotted
+			// shorthand when the base is a JSON column) - resolve to a safe
+			// parameterised expression before the generic branches.
+			if expr, jargs, _, ok := common.ResolveJSONColumnExpr(model, tableAlias, sort.Column); ok {
+				query = query.OrderExpr(fmt.Sprintf("%s %s", expr, direction), jargs...)
+			} else if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
 				// For expressions, pass as raw SQL to prevent auto-quoting
 				query = query.OrderExpr(fmt.Sprintf("%s %s", sort.Column, direction))
 			} else if strings.Contains(sort.Column, ".") {
@@ -1063,7 +1074,7 @@ func (h *Handler) applyPreloadWithRecursion(query common.SelectQuery, preload co
 		// Apply filters
 		if len(preload.Filters) > 0 {
 			for _, filter := range preload.Filters {
-				sq = h.applyFilter(sq, filter, "", false, "AND")
+				sq = h.applyFilter(sq, filter, "", false, "AND", nil)
 			}
 		}
 
@@ -2288,15 +2299,10 @@ func (h *Handler) qualifyColumnName(columnName, fullTableName string) string {
 	return fmt.Sprintf("%s.%s", tableOnly, columnName)
 }
 
-func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, tableName string, needsCast bool, logicOp string) common.SelectQuery {
+func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, tableName string, needsCast bool, logicOp string, model interface{}) common.SelectQuery {
 	// Qualify the column name with table name if not already qualified
 	rawQualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
 	qualifiedColumn := rawQualifiedColumn
-
-	// Apply casting to text if needed for non-numeric columns or non-numeric values
-	if needsCast {
-		qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
-	}
 
 	// Helper function to apply the correct Where method based on logic operator
 	applyWhere := func(condition string, args ...interface{}) common.SelectQuery {
@@ -2304,6 +2310,19 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 			return query.WhereOr(condition, args...)
 		}
 		return query.Where(condition, args...)
+	}
+
+	// JSON sub-field access (data->>'x', data#>>'{a,b}', or the dotted data.x
+	// shorthand when "data" is a JSON column): resolve to a safe, parameterised
+	// expression before the ordinary column handling below.
+	tableAlias := reflection.ExtractTableNameOnly(tableName)
+	if cond, jargs, ok := common.BuildJSONFilterCondition(model, tableAlias, filter.Column, filter.Operator, filter.Value); ok {
+		return applyWhere(cond, jargs...)
+	}
+
+	// Apply casting to text if needed for non-numeric columns or non-numeric values
+	if needsCast {
+		qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
 	}
 
 	switch strings.ToLower(filter.Operator) {
@@ -2377,16 +2396,25 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 
 // applyOrFilterGroup applies a group of OR filters as a single grouped condition
 // This ensures OR conditions are properly grouped with parentheses to prevent OR logic from escaping
-func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common.FilterOption, castInfo []ColumnCastInfo, tableName string) common.SelectQuery {
+func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common.FilterOption, castInfo []ColumnCastInfo, tableName string, model interface{}) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
+
+	tableAlias := reflection.ExtractTableNameOnly(tableName)
 
 	// Build individual filter conditions
 	conditions := []string{}
 	args := []interface{}{}
 
 	for i, filter := range filters {
+		// JSON sub-field access: resolve to a safe parameterised condition first.
+		if cond, jargs, ok := common.BuildJSONFilterCondition(model, tableAlias, filter.Column, filter.Operator, filter.Value); ok {
+			conditions = append(conditions, cond)
+			args = append(args, jargs...)
+			continue
+		}
+
 		// Qualify the column name with table name if not already qualified
 		rawQualifiedColumn := h.qualifyColumnName(filter.Column, tableName)
 		qualifiedColumn := rawQualifiedColumn

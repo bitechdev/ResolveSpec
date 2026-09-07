@@ -173,7 +173,7 @@ func ParseColumnRef(raw string) (ColumnRef, bool) {
 // SQL renders the reference as a parameterised SQL expression plus its args.
 // tableAlias, when non-empty, qualifies the base column (each dot-separated
 // part is quoted independently, so "public.users" -> `"public"."users"`).
-func (r ColumnRef) SQL(tableAlias string) (string, []interface{}) {
+func (r ColumnRef) SQL(tableAlias string) (expr string, args []interface{}) {
 	base := quoteQualifiedIdent(r.Base)
 	if tableAlias != "" {
 		base = quoteQualifiedIdent(tableAlias) + "." + QuoteIdent(r.Base)
@@ -190,8 +190,8 @@ func (r ColumnRef) SQL(tableAlias string) (string, []interface{}) {
 	if r.AsText {
 		op = "#>>"
 	}
-	expr := fmt.Sprintf("(%s %s ?::text[])", base, op)
-	args := []interface{}{pgTextArrayLiteral(r.Path)}
+	expr = fmt.Sprintf("(%s %s ?::text[])", base, op)
+	args = []interface{}{pgTextArrayLiteral(r.Path)}
 
 	if r.Cast != "" {
 		expr = fmt.Sprintf("(%s)::%s", expr, r.Cast)
@@ -324,8 +324,9 @@ func validateRef(ref *ColumnRef) bool {
 // (letters/digits/spaces only) rather than, say, part of a JSON operator.
 func looksLikeCastTail(s string) bool {
 	for _, r := range s {
-		if !(r == ' ' || r == '_' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		isCastChar := r == ' ' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !isCastChar {
 			return false
 		}
 	}

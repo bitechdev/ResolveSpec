@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 func TestExtractSourceColumn(t *testing.T) {
@@ -122,5 +123,37 @@ func TestValidateColumnWithJSONOperators(t *testing.T) {
 				t.Errorf("ValidateColumn(%q) expected no error, got %v", tc.column, err)
 			}
 		})
+	}
+}
+
+func TestValidateColumn_JSONPathsAndDottedShorthand(t *testing.T) {
+	type Model struct {
+		ID   int64              `json:"id"`
+		Name string             `json:"name"`
+		Data spectypes.SqlJSONB `json:"data"`
+	}
+	v := NewColumnValidator(Model{})
+
+	valid := []string{
+		"data->>'city'",
+		"data->'addr'->>'city'",
+		"data#>>'{addr,city}'",
+		"data.addr.city",      // dotted shorthand, base is JSON -> allowed
+		"(data->>'age')::int", // cast + paren
+	}
+	for _, c := range valid {
+		if err := v.ValidateColumn(c); err != nil {
+			t.Errorf("ValidateColumn(%q) = %v, want nil", c, err)
+		}
+	}
+
+	invalid := []string{
+		"nope->>'city'", // base column does not exist
+		"name.first",    // dotted shorthand but 'name' is not a JSON column
+	}
+	for _, c := range invalid {
+		if err := v.ValidateColumn(c); err == nil {
+			t.Errorf("ValidateColumn(%q) = nil, want error", c)
+		}
 	}
 }

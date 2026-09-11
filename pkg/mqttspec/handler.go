@@ -676,7 +676,7 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 
 	// Apply columns
 	if hookCtx.Options != nil && len(hookCtx.Options.Columns) > 0 {
-		query = query.Column(hookCtx.Options.Columns...)
+		query = common.ApplySelectColumns(query, hookCtx.Model, "", hookCtx.Options.Columns)
 	}
 
 	// Apply preloads (simplified)
@@ -714,6 +714,10 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	if hookCtx.Options != nil {
 		// Apply filters
 		for _, filter := range hookCtx.Options.Filters {
+			if cond, jargs, ok := common.BuildJSONFilterCondition(hookCtx.Model, "", filter.Column, filter.Operator, filter.Value); ok {
+				query = query.Where(cond, jargs...)
+				continue
+			}
 			op := strings.ToLower(filter.Operator)
 			if op == "like" || op == "ilike" {
 				query = query.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
@@ -727,6 +731,10 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 			direction := "ASC"
 			if sort.Direction == "desc" {
 				direction = "DESC"
+			}
+			if expr, jargs, _, ok := common.ResolveJSONColumnExpr(hookCtx.Model, "", sort.Column); ok {
+				query = query.OrderExpr(fmt.Sprintf("%s %s", expr, direction), jargs...)
+				continue
 			}
 			query = query.Order(fmt.Sprintf("%s %s", sort.Column, direction))
 		}
@@ -746,7 +754,7 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 
 		// Apply columns
 		if len(hookCtx.Options.Columns) > 0 {
-			query = query.Column(hookCtx.Options.Columns...)
+			query = common.ApplySelectColumns(query, hookCtx.Model, "", hookCtx.Options.Columns)
 		}
 	}
 
@@ -772,6 +780,10 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {
+			if cond, jargs, ok := common.BuildJSONFilterCondition(hookCtx.Model, "", filter.Column, filter.Operator, filter.Value); ok {
+				countQuery = countQuery.Where(cond, jargs...)
+				continue
+			}
 			op := strings.ToLower(filter.Operator)
 			if op == "like" || op == "ilike" {
 				countQuery = countQuery.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)

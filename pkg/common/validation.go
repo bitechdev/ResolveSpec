@@ -109,6 +109,19 @@ func (v *ColumnValidator) ValidateColumn(column string) error {
 		return nil
 	}
 
+	// JSON-traversing references (data->>'x', data#>>'{a,b}', or the dotted
+	// data.x shorthand): validate the base column, and for the ambiguous
+	// dotted form require that the base is actually a JSON column.
+	if ref, isJSON := ParseColumnRef(column); isJSON {
+		if ref.Ambiguous && !reflection.IsJSONColumn(v.model, ref.Base) {
+			return fmt.Errorf("invalid column '%s': '%s' is not a JSON column", column, ref.Base)
+		}
+		if _, exists := v.validColumns[strings.ToLower(ref.Base)]; !exists {
+			return fmt.Errorf("invalid column '%s': column does not exist in model", column)
+		}
+		return nil
+	}
+
 	// Extract source column name (remove JSON operators like ->> or ->)
 	sourceColumn := reflection.ExtractSourceColumn(column)
 

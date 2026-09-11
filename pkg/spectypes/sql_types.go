@@ -425,9 +425,7 @@ func (t SqlTime) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	s := t.Val.Format("15:04:05")
-	if s == "00:00:00" {
-		return []byte("null"), nil
-	}
+
 	return []byte(fmt.Sprintf(`"%s"`, s)), nil
 }
 
@@ -435,9 +433,7 @@ func (t *SqlTime) UnmarshalJSON(b []byte) error {
 	if err := t.SqlNull.UnmarshalJSON(b); err != nil {
 		return err
 	}
-	if t.Valid && t.Val.Format("15:04:05") == "00:00:00" {
-		t.Valid = false
-	}
+
 	return nil
 }
 

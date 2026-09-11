@@ -920,6 +920,411 @@ func TestSqlString_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestSqlBool_Scan tests SqlBool Scan from various input types.
+func TestSqlBool_Scan(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected bool
+		valid    bool
+	}{
+		{"bool true", true, true, true},
+		{"bool false", false, false, true},
+		{"string true", "true", true, true},
+		{"string 1", "1", true, true},
+		{"int64 1 fallback", int64(1), true, true},
+		{"int64 0 fallback", int64(0), false, true},
+		{"nil", nil, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b SqlBool
+			if err := b.Scan(tt.input); err != nil {
+				t.Fatalf("Scan failed: %v", err)
+			}
+			if b.Valid != tt.valid {
+				t.Errorf("expected valid=%v, got valid=%v", tt.valid, b.Valid)
+			}
+			if tt.valid && b.Val != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, b.Val)
+			}
+		})
+	}
+}
+
+func TestSqlBool_Value(t *testing.T) {
+	b := NewSqlBool(true)
+	val, err := b.Value()
+	if err != nil {
+		t.Fatalf("Value failed: %v", err)
+	}
+	if val != true {
+		t.Errorf("expected true, got %v", val)
+	}
+
+	b2 := SqlBool{Valid: false}
+	val2, err := b2.Value()
+	if err != nil {
+		t.Fatalf("Value failed: %v", err)
+	}
+	if val2 != nil {
+		t.Errorf("expected nil, got %v", val2)
+	}
+}
+
+func TestSqlBool_JSON(t *testing.T) {
+	b := NewSqlBool(true)
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(data) != "true" {
+		t.Errorf("expected true, got %s", string(data))
+	}
+
+	var b2 SqlBool
+	if err := json.Unmarshal([]byte("false"), &b2); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if !b2.Valid || b2.Val != false {
+		t.Errorf("expected valid=true val=false, got valid=%v val=%v", b2.Valid, b2.Val)
+	}
+
+	var b3 SqlBool
+	if err := json.Unmarshal([]byte("null"), &b3); err != nil {
+		t.Fatalf("Unmarshal null failed: %v", err)
+	}
+	if b3.Valid {
+		t.Error("expected invalid after unmarshaling null")
+	}
+}
+
+// TestSqlNull_FromString_EdgeCases tests FromString edge cases shared by all SqlNull instantiations.
+func TestSqlNull_FromString_EdgeCases(t *testing.T) {
+	t.Run("empty string is null", func(t *testing.T) {
+		var n SqlInt64
+		if err := n.FromString(""); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if n.Valid {
+			t.Error("expected invalid for empty string")
+		}
+	})
+
+	t.Run("NULL case-insensitive", func(t *testing.T) {
+		var n SqlString
+		if err := n.FromString("NuLL"); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if n.Valid {
+			t.Error("expected invalid for 'NuLL'")
+		}
+	})
+
+	t.Run("whitespace trimmed", func(t *testing.T) {
+		var n SqlInt64
+		if err := n.FromString("  42  "); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if !n.Valid || n.Val != 42 {
+			t.Errorf("expected valid=true val=42, got valid=%v val=%v", n.Valid, n.Val)
+		}
+	})
+
+	t.Run("invalid int string stays invalid", func(t *testing.T) {
+		var n SqlInt64
+		if err := n.FromString("not-a-number"); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if n.Valid {
+			t.Error("expected invalid for non-numeric string")
+		}
+	})
+
+	t.Run("float string truncated into int type", func(t *testing.T) {
+		var n SqlInt64
+		if err := n.FromString("3.7"); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if !n.Valid || n.Val != 3 {
+			t.Errorf("expected valid=true val=3, got valid=%v val=%v", n.Valid, n.Val)
+		}
+	})
+
+	t.Run("invalid bool string stays invalid", func(t *testing.T) {
+		var n SqlBool
+		if err := n.FromString("maybe"); err != nil {
+			t.Fatalf("FromString failed: %v", err)
+		}
+		if n.Valid {
+			t.Error("expected invalid for non-bool string")
+		}
+	})
+}
+
+// TestSqlNull_String tests the String() stringer fallback.
+func TestSqlNull_String(t *testing.T) {
+	t.Run("invalid returns empty", func(t *testing.T) {
+		n := SqlInt64{Valid: false}
+		if n.String() != "" {
+			t.Errorf("expected empty string, got %q", n.String())
+		}
+	})
+
+	t.Run("stringer type delegates", func(t *testing.T) {
+		u := uuid.New()
+		n := NewSqlUUID(u)
+		if n.String() != u.String() {
+			t.Errorf("expected %s, got %s", u.String(), n.String())
+		}
+	})
+
+	t.Run("non-stringer falls back to fmt", func(t *testing.T) {
+		n := NewSqlInt64(42)
+		if n.String() != "42" {
+			t.Errorf("expected 42, got %s", n.String())
+		}
+	})
+}
+
+// TestNewSql_Generic tests the generic NewSql constructor.
+func TestNewSql_Generic(t *testing.T) {
+	t.Run("exact type match", func(t *testing.T) {
+		n := NewSql[int64](int64(5))
+		if !n.Valid || n.Val != 5 {
+			t.Errorf("expected valid=true val=5, got valid=%v val=%v", n.Valid, n.Val)
+		}
+	})
+
+	t.Run("nil value", func(t *testing.T) {
+		n := NewSql[int64](nil)
+		if n.Valid {
+			t.Error("expected invalid for nil")
+		}
+	})
+
+	t.Run("from another SqlNull", func(t *testing.T) {
+		src := SqlNull[int64]{Val: 9, Valid: true}
+		n := NewSql[int64](src)
+		if !n.Valid || n.Val != 9 {
+			t.Errorf("expected valid=true val=9, got valid=%v val=%v", n.Valid, n.Val)
+		}
+	})
+
+	t.Run("string conversion fallback", func(t *testing.T) {
+		n := NewSql[string](42)
+		if !n.Valid || n.Val != "42" {
+			t.Errorf("expected valid=true val=42, got valid=%v val=%q", n.Valid, n.Val)
+		}
+	})
+}
+
+// TestSqlNull_Int64_Conversions tests Int64() across differently-typed SqlNull values.
+func TestSqlNull_Int64_Conversions(t *testing.T) {
+	if v := (SqlNull[string]{Val: "42", Valid: true}).Int64(); v != 42 {
+		t.Errorf("expected 42, got %d", v)
+	}
+	if v := (SqlNull[bool]{Val: true, Valid: true}).Int64(); v != 1 {
+		t.Errorf("expected 1, got %d", v)
+	}
+	if v := (SqlNull[bool]{Val: false, Valid: true}).Int64(); v != 0 {
+		t.Errorf("expected 0, got %d", v)
+	}
+	if v := (SqlNull[float64]{Val: 3.9, Valid: true}).Int64(); v != 3 {
+		t.Errorf("expected 3, got %d", v)
+	}
+	if v := (SqlNull[int64]{Valid: false}).Int64(); v != 0 {
+		t.Errorf("expected 0 for invalid, got %d", v)
+	}
+}
+
+// TestSqlNull_Float64_Conversions tests Float64() across differently-typed SqlNull values.
+func TestSqlNull_Float64_Conversions(t *testing.T) {
+	if v := (SqlNull[string]{Val: "3.14", Valid: true}).Float64(); v != 3.14 {
+		t.Errorf("expected 3.14, got %v", v)
+	}
+	if v := (SqlNull[int64]{Val: 10, Valid: true}).Float64(); v != 10.0 {
+		t.Errorf("expected 10.0, got %v", v)
+	}
+	if v := (SqlNull[float64]{Valid: false}).Float64(); v != 0.0 {
+		t.Errorf("expected 0.0 for invalid, got %v", v)
+	}
+}
+
+// TestSqlNull_Bool_Conversions tests Bool() across differently-typed SqlNull values.
+func TestSqlNull_Bool_Conversions(t *testing.T) {
+	if v := (SqlNull[string]{Val: "YES", Valid: true}).Bool(); v != true {
+		t.Error("expected true for 'YES'")
+	}
+	if v := (SqlNull[string]{Val: "no", Valid: true}).Bool(); v != false {
+		t.Error("expected false for 'no'")
+	}
+	if v := (SqlNull[int]{Val: 1, Valid: true}).Bool(); v != true {
+		t.Error("expected true for int 1")
+	}
+	if v := (SqlNull[int]{Val: 0, Valid: true}).Bool(); v != false {
+		t.Error("expected false for int 0")
+	}
+	if v := (SqlNull[bool]{Valid: false}).Bool(); v != false {
+		t.Error("expected false for invalid")
+	}
+}
+
+// TestSqlNull_Time_NonTimeType verifies Time() returns zero value when T is not time.Time.
+func TestSqlNull_Time_NonTimeType(t *testing.T) {
+	n := SqlNull[string]{Val: "2024-01-15", Valid: true}
+	if !n.Time().IsZero() {
+		t.Error("expected zero time for non-time.Time SqlNull")
+	}
+}
+
+// TestSqlNull_UUID_NonUUIDType verifies UUID() returns uuid.Nil when T is not uuid.UUID.
+func TestSqlNull_UUID_NonUUIDType(t *testing.T) {
+	n := SqlNull[string]{Val: "not-a-uuid", Valid: true}
+	if n.UUID() != uuid.Nil {
+		t.Error("expected uuid.Nil for non-uuid.UUID SqlNull")
+	}
+}
+
+// TestSqlTime_Midnight verifies midnight times are serialized as "00:00:00", not null.
+func TestSqlTime_Midnight(t *testing.T) {
+	midnight := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	tm := NewSqlTime(midnight)
+
+	data, err := json.Marshal(tm)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(data) != `"00:00:00"` {
+		t.Errorf("expected \"00:00:00\", got %s", string(data))
+	}
+
+	val, err := tm.Value()
+	if err != nil {
+		t.Fatalf("Value failed: %v", err)
+	}
+	if val != "00:00:00" {
+		t.Errorf("expected 00:00:00, got %v", val)
+	}
+}
+
+func TestSqlTime_Value_Invalid(t *testing.T) {
+	tm := SqlTime{}
+	val, err := tm.Value()
+	if err != nil {
+		t.Fatalf("Value failed: %v", err)
+	}
+	if val != nil {
+		t.Errorf("expected nil, got %v", val)
+	}
+}
+
+// TestSqlDate_ZeroValueString verifies String() blanks out sentinel zero dates.
+func TestSqlDate_ZeroValueString(t *testing.T) {
+	d := SqlDate{SqlNull: SqlNull[time.Time]{Val: time.Time{}, Valid: true}}
+	if d.String() != "" {
+		t.Errorf("expected empty string for zero date, got %q", d.String())
+	}
+
+	sentinel := time.Date(1800, 12, 31, 0, 0, 0, 0, time.UTC)
+	d2 := SqlDate{SqlNull: SqlNull[time.Time]{Val: sentinel, Valid: true}}
+	if d2.String() != "" {
+		t.Errorf("expected empty string for 1800-12-31 sentinel, got %q", d2.String())
+	}
+}
+
+// TestSqlTimeStamp_Value tests driver.Valuer for SqlTimeStamp, including the pre-year-2 cutoff.
+func TestSqlTimeStamp_Value(t *testing.T) {
+	t.Run("valid recent timestamp", func(t *testing.T) {
+		ts := NewSqlTimeStamp(time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC))
+		val, err := ts.Value()
+		if err != nil {
+			t.Fatalf("Value failed: %v", err)
+		}
+		if val != "2024-01-15T10:30:00Z" {
+			t.Errorf("expected 2024-01-15T10:30:00Z, got %v", val)
+		}
+	})
+
+	t.Run("year 1 is treated as null", func(t *testing.T) {
+		ts := NewSqlTimeStamp(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC))
+		val, err := ts.Value()
+		if err != nil {
+			t.Fatalf("Value failed: %v", err)
+		}
+		if val != nil {
+			t.Errorf("expected nil, got %v", val)
+		}
+	})
+
+	t.Run("invalid is null", func(t *testing.T) {
+		ts := SqlTimeStamp{}
+		val, err := ts.Value()
+		if err != nil {
+			t.Fatalf("Value failed: %v", err)
+		}
+		if val != nil {
+			t.Errorf("expected nil, got %v", val)
+		}
+	})
+}
+
+func TestSqlTimeStamp_UnmarshalJSON_YearOneInvalid(t *testing.T) {
+	var ts SqlTimeStamp
+	if err := json.Unmarshal([]byte(`"0001-01-01T00:00:00Z"`), &ts); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if ts.Valid {
+		t.Error("expected invalid for year 0001 timestamp")
+	}
+}
+
+// TestTryParseDT tests the internal multi-format date/time parser.
+func TestTryParseDT(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"RFC3339", "2024-01-15T10:30:00Z"},
+		{"date only", "2024-01-15"},
+		{"datetime no tz", "2024-01-15T10:30:00"},
+		{"space separated", "2024-01-15 10:30:00"},
+		{"UK date slash", "15/01/2024"},
+		{"UK date dash", "15-01-2024"},
+		{"time only", "10:30:00"},
+		{"short time", "10:30"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tm, err := tryParseDT(tt.input)
+			if err != nil {
+				t.Fatalf("tryParseDT failed for %q: %v", tt.input, err)
+			}
+			if tm.IsZero() {
+				t.Errorf("expected non-zero time for %q", tt.input)
+			}
+		})
+	}
+
+	t.Run("invalid format", func(t *testing.T) {
+		_, err := tryParseDT("not a date at all")
+		if err == nil {
+			t.Error("expected error for unparseable string")
+		}
+	})
+}
+
+// TestToJSONDT tests RFC3339 formatting helper.
+func TestToJSONDT(t *testing.T) {
+	dt := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	expected := dt.Format(time.RFC3339)
+	if got := ToJSONDT(dt); got != expected {
+		t.Errorf("expected %s, got %s", expected, got)
+	}
+}
+
 // TestSqlByteArray_Base64_RoundTrip tests complete round-trip: Go -> JSON -> Go -> SQL -> Go
 func TestSqlByteArray_Base64_RoundTrip(t *testing.T) {
 	original := []byte{0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0xFF, 0xFE} // "Hello " + binary data

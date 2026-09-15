@@ -269,7 +269,7 @@ func (h *Handler) executeRead(ctx context.Context, schema, entity, id string, op
 	}
 
 	// Filters
-	query = h.applyFilters(query, options.Filters)
+	query = h.applyFilters(query, options.Filters, model)
 
 	// Custom operators
 	for _, customOp := range options.CustomOperators {
@@ -751,8 +751,10 @@ func (h *Handler) executeDelete(ctx context.Context, schema, entity, id string) 
 	return recordToDelete, nil
 }
 
-// applyFilters applies all filters with OR grouping logic.
-func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+// applyFilters applies all filters with OR grouping logic. model, when
+// non-nil, lets citext columns be recognised so LIKE/ILIKE compares them
+// natively instead of casting to TEXT (which would defeat a citext index).
+func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
@@ -768,10 +770,10 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 				orGroup = append(orGroup, filters[j])
 				j++
 			}
-			query = h.applyFilterGroup(query, orGroup)
+			query = h.applyFilterGroup(query, orGroup, model)
 			i = j
 		} else {
-			condition, args := h.buildFilterCondition(filters[i])
+			condition, args := h.buildFilterCondition(filters[i], model)
 			if condition != "" {
 				query = query.Where(condition, args...)
 			}
@@ -782,12 +784,12 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 	return query
 }
 
-func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption) common.SelectQuery {
+func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
 	var conditions []string
 	var args []interface{}
 
 	for _, filter := range filters {
-		condition, filterArgs := h.buildFilterCondition(filter)
+		condition, filterArgs := h.buildFilterCondition(filter, model)
 		if condition != "" {
 			conditions = append(conditions, condition)
 			args = append(args, filterArgs...)
@@ -803,7 +805,14 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 	return query.Where("("+strings.Join(conditions, " OR ")+")", args...)
 }
 
-func (h *Handler) buildFilterCondition(filter common.FilterOption) (condition string, args []interface{}) {
+func (h *Handler) buildFilterCondition(filter common.FilterOption, model interface{}) (condition string, args []interface{}) {
+	// citext columns are already case-insensitive; casting to TEXT would
+	// switch to case-sensitive matching and defeat a citext index.
+	likeColumn := filter.Column
+	if !reflection.IsCitextColumn(model, filter.Column) {
+		likeColumn = fmt.Sprintf("CAST(%s AS TEXT)", filter.Column)
+	}
+
 	switch filter.Operator {
 	case "eq", "=":
 		return fmt.Sprintf("%s = ?", filter.Column), []interface{}{filter.Value}
@@ -818,9 +827,9 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption) (condition st
 	case "lte", "<=":
 		return fmt.Sprintf("%s <= ?", filter.Column), []interface{}{filter.Value}
 	case "like":
-		return fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column), []interface{}{filter.Value}
+		return fmt.Sprintf("%s LIKE ?", likeColumn), []interface{}{filter.Value}
 	case "ilike":
-		return fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column), []interface{}{filter.Value}
+		return fmt.Sprintf("%s ILIKE ?", likeColumn), []interface{}{filter.Value}
 	case "in":
 		condition, args := common.BuildInCondition(filter.Column, filter.Value)
 		return condition, args

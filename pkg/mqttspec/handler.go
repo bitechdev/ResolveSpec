@@ -720,7 +720,13 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 			}
 			op := strings.ToLower(filter.Operator)
 			if op == "like" || op == "ilike" {
-				query = query.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				// citext columns are already case-insensitive; casting to TEXT would
+				// switch to case-sensitive matching and defeat a citext index.
+				if reflection.IsCitextColumn(hookCtx.Model, filter.Column) {
+					query = query.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				} else {
+					query = query.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				}
 			} else {
 				query = query.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
 			}
@@ -786,7 +792,13 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 			}
 			op := strings.ToLower(filter.Operator)
 			if op == "like" || op == "ilike" {
-				countQuery = countQuery.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				// citext columns are already case-insensitive; casting to TEXT would
+				// switch to case-sensitive matching and defeat a citext index.
+				if reflection.IsCitextColumn(hookCtx.Model, filter.Column) {
+					countQuery = countQuery.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				} else {
+					countQuery = countQuery.Where(fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
+				}
 			} else {
 				countQuery = countQuery.Where(fmt.Sprintf("%s %s ?", filter.Column, h.getOperatorSQL(filter.Operator)), filter.Value)
 			}

@@ -863,6 +863,11 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption, model interfa
 	op := strings.ToLower(filter.Operator)
 	if op == "like" || op == "ilike" {
 		operatorSQL := h.getOperatorSQL(filter.Operator)
+		// citext columns are already case-insensitive; casting to TEXT would
+		// switch to case-sensitive matching and defeat a citext index.
+		if reflection.IsCitextColumn(model, filter.Column) {
+			return fmt.Sprintf("%s %s ?", filter.Column, operatorSQL), []interface{}{filter.Value}
+		}
 		return fmt.Sprintf("CAST(%s AS TEXT) %s ?", filter.Column, operatorSQL), []interface{}{filter.Value}
 	}
 	operatorSQL := h.getOperatorSQL(filter.Operator)

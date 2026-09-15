@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 type PrimaryKeyNameProvider interface {
@@ -728,19 +729,19 @@ func GetColumnTypeFromModel(model interface{}, colName string) reflect.Kind {
 			// Parse JSON tag (format: "name,omitempty")
 			parts := strings.Split(jsonTag, ",")
 			if parts[0] == sourceColName {
-				return field.Type.Kind()
+				return spectypes.UnwrapKind(field.Type)
 			}
 		}
 
 		// Check field name (case-insensitive)
 		if strings.EqualFold(field.Name, sourceColName) {
-			return field.Type.Kind()
+			return spectypes.UnwrapKind(field.Type)
 		}
 
 		// Check snake_case conversion
 		snakeCaseName := ToSnakeCase(field.Name)
 		if snakeCaseName == sourceColName {
-			return field.Type.Kind()
+			return spectypes.UnwrapKind(field.Type)
 		}
 	}
 

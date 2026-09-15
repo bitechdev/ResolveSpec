@@ -1466,6 +1466,12 @@ func (h *Handler) ValidateAndAdjustFilterForColumnType(filter *common.FilterOpti
 		return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
 	}
 
+	// Never cast citext columns to TEXT: CAST(col AS TEXT) swaps in case-sensitive
+	// comparison semantics and prevents PostgreSQL from using a citext index.
+	if reflection.IsCitextColumn(model, filter.Column) {
+		return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
+	}
+
 	colType := reflection.GetColumnTypeFromModel(model, filter.Column)
 	if colType == reflect.Invalid {
 		// Column not found in model, no casting needed

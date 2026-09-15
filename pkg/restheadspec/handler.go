@@ -2325,6 +2325,13 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
 	}
 
+	// citext columns already compare case-insensitively; casting to TEXT for
+	// LIKE/ILIKE would switch to case-sensitive matching and defeat a citext index.
+	likeColumn := rawQualifiedColumn
+	if !reflection.IsCitextColumn(model, filter.Column) {
+		likeColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
+	}
+
 	switch strings.ToLower(filter.Operator) {
 	case "eq", "equals":
 		return applyWhere(fmt.Sprintf("%s = ?", qualifiedColumn), filter.Value)
@@ -2339,11 +2346,14 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 	case "lte", "less_than_equals", "le":
 		return applyWhere(fmt.Sprintf("%s <= ?", qualifiedColumn), filter.Value)
 	case "like":
-		// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
-		return applyWhere(fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", rawQualifiedColumn), filter.Value)
+		// Cast to TEXT for LIKE to support date/time/timestamp columns; citext
+		// columns are compared natively (see likeColumn above).
+		return applyWhere(fmt.Sprintf("%s LIKE ?", likeColumn), filter.Value)
 	case "ilike":
-		// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
-		return applyWhere(fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", rawQualifiedColumn), filter.Value)
+		// Cast to TEXT for ILIKE to support date/time/timestamp columns; citext
+		// columns are compared natively (see likeColumn above) since citext is
+		// already case-insensitive.
+		return applyWhere(fmt.Sprintf("%s ILIKE ?", likeColumn), filter.Value)
 	case "in":
 		cond, inArgs := common.BuildInCondition(qualifiedColumn, filter.Value)
 		if cond == "" {
@@ -2421,8 +2431,12 @@ func (h *Handler) applyOrFilterGroup(query common.SelectQuery, filters []*common
 
 		op := strings.ToLower(filter.Operator)
 		if op == "like" || op == "ilike" {
-			// Always cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns
-			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
+			// Cast to TEXT for LIKE/ILIKE to support date/time/timestamp columns.
+			// citext columns are left native: they're already case-insensitive and
+			// casting would defeat a citext index.
+			if !reflection.IsCitextColumn(model, filter.Column) {
+				qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)
+			}
 		} else if castInfo[i].NeedsCast {
 			// Apply casting to text if needed for non-numeric columns or non-numeric values
 			qualifiedColumn = fmt.Sprintf("CAST(%s AS TEXT)", rawQualifiedColumn)

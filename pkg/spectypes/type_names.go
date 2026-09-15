@@ -97,3 +97,27 @@ func IsJSONType(t reflect.Type) bool {
 	n, ok := SQLTypeName(t)
 	return ok && (n == "jsonb" || n == "json")
 }
+
+// UnwrapKind returns the reflect.Kind to use when reasoning about a column's
+// comparability (numeric vs. string vs. other) for filter building. Plain Go
+// types return their own Kind unchanged. spectypes.SqlNull[T] wrappers (and
+// types that embed one, such as SqlTimeStamp/SqlDate/SqlTime) always report
+// reflect.Struct for their own Kind even when T is an int64 or string, which
+// would otherwise make numeric/text columns look "complex" and force an
+// unnecessary CAST(... AS TEXT) that defeats native column indexes. For those
+// wrappers, UnwrapKind returns the Kind of the wrapped value T instead.
+func UnwrapKind(t reflect.Type) reflect.Kind {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil {
+		return reflect.Invalid
+	}
+	if t.Kind() != reflect.Struct || t.PkgPath() != pkgPath {
+		return t.Kind()
+	}
+	if f, ok := t.FieldByName("Val"); ok {
+		return f.Type.Kind()
+	}
+	return t.Kind()
+}

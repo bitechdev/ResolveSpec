@@ -145,8 +145,16 @@ func IsJSONColumn(model interface{}, colName string) bool {
 // tagDeclaresJSON reports whether an ORM struct tag declares a json/jsonb column
 // type, e.g. `bun:"meta,type:jsonb"` or `gorm:"column:meta;type:json"`.
 func tagDeclaresJSON(tag string) bool {
+	return columnTypeTagValue(tag) == "json" || strings.HasPrefix(columnTypeTagValue(tag), "json(") ||
+		columnTypeTagValue(tag) == "jsonb" || strings.HasPrefix(columnTypeTagValue(tag), "jsonb(")
+}
+
+// columnTypeTagValue extracts the lower-cased value of a `type:` entry from a
+// bun or gorm struct tag, e.g. `bun:"name,type:citext"` -> "citext". Returns ""
+// if the tag carries no `type:` entry.
+func columnTypeTagValue(tag string) string {
 	if tag == "" {
-		return false
+		return ""
 	}
 	for _, part := range strings.FieldsFunc(tag, func(r rune) bool {
 		return r == ',' || r == ';' || r == ' '
@@ -155,12 +163,22 @@ func tagDeclaresJSON(tag string) bool {
 		if !found {
 			continue
 		}
-		value = strings.ToLower(strings.TrimSpace(value))
-		// Match "json" and "jsonb", including parametrised forms just in case.
-		if value == "json" || value == "jsonb" ||
-			strings.HasPrefix(value, "json(") || strings.HasPrefix(value, "jsonb(") {
-			return true
-		}
+		return strings.ToLower(strings.TrimSpace(value))
 	}
-	return false
+	return ""
+}
+
+// IsCitextColumn reports whether colName carries an explicit `type:citext`
+// bun/gorm tag. citext columns must never be CAST(... AS TEXT) for comparisons:
+// that swaps in case-sensitive text semantics and defeats any citext index.
+func IsCitextColumn(model interface{}, colName string) bool {
+	f, ok := getColumnStructField(model, colName)
+	if !ok {
+		return false
+	}
+	tagVal := columnTypeTagValue(f.Tag.Get("bun"))
+	if tagVal == "" {
+		tagVal = columnTypeTagValue(f.Tag.Get("gorm"))
+	}
+	return tagVal == "citext"
 }

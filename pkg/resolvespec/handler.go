@@ -1937,10 +1937,10 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption, model interfa
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column)
+		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, model))
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column)
+		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, model))
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)
@@ -1971,6 +1971,18 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption, model interfa
 	}
 
 	return condition, args
+}
+
+// likeColumn returns the column expression to use for LIKE/ILIKE. citext
+// columns are compared natively — they're already case-insensitive, and
+// CAST(... AS TEXT) would switch to case-sensitive matching and defeat a
+// citext index. Every other column is cast to TEXT so LIKE/ILIKE also works
+// against date/time/timestamp and numeric columns.
+func likeColumn(column string, model interface{}) string {
+	if reflection.IsCitextColumn(model, column) {
+		return column
+	}
+	return fmt.Sprintf("CAST(%s AS TEXT)", column)
 }
 
 func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, model interface{}) common.SelectQuery {
@@ -2007,10 +2019,10 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("CAST(%s AS TEXT) LIKE ?", filter.Column)
+		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, model))
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("CAST(%s AS TEXT) ILIKE ?", filter.Column)
+		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, model))
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)

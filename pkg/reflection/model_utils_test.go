@@ -3,6 +3,8 @@ package reflection
 import (
 	"reflect"
 	"testing"
+
+	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
 )
 
 // Test models for GORM
@@ -1044,6 +1046,22 @@ func TestGetColumnTypeFromModel(t *testing.T) {
 				t.Errorf("GetColumnTypeFromModel(%v, %q) = %v, want %v", tt.model, tt.colName, result, tt.expected)
 			}
 		})
+	}
+}
+
+// SqlNull-wrapped columns (e.g. nullable bigint foreign keys) must report the
+// wrapped value's Kind, not reflect.Struct, so numeric eq/gt/lt filters don't
+// get an unnecessary CAST(... AS TEXT) that defeats the column's index.
+type SqlNullFKModel struct {
+	RidParent spectypes.SqlInt64 `bun:"rid_parent" json:"rid_parent"`
+}
+
+func TestGetColumnTypeFromModel_SqlNullWrapper(t *testing.T) {
+	model := SqlNullFKModel{RidParent: spectypes.NewSqlInt64(90446096)}
+
+	result := GetColumnTypeFromModel(model, "rid_parent")
+	if result != reflect.Int64 {
+		t.Errorf("GetColumnTypeFromModel(rid_parent) = %v, want %v (SqlInt64 must unwrap to its numeric Kind)", result, reflect.Int64)
 	}
 }
 

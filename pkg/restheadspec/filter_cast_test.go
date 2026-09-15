@@ -137,3 +137,39 @@ func TestApplyFilter_Citext_NeverCastForEqOrIlike(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateAndAdjustFilterForColumnType_NumericColumn_Ilike reproduces a
+// global "search all columns" request (x-searchor-contains-<col> per column,
+// e.g. the X-Filter-All style OR group) landing an ILIKE filter with a
+// '%...%'-wrapped numeric-looking value on a numeric column such as
+// rid_parent. Before the fix, ValidateAndAdjustFilterForColumnType trimmed
+// the '%' wildcards, saw a numeric string, and rewrote filter.Value to an
+// int64 -- so applyFilter's CAST(col AS TEXT) ILIKE ? bound an integer
+// argument instead of the wildcard string, and Postgres rejected it with
+// "operator does not exist: text ~~* integer".
+func TestValidateAndAdjustFilterForColumnType_NumericColumn_Ilike(t *testing.T) {
+	h := &Handler{}
+	model := atdetailModel{}
+
+	filter := &common.FilterOption{Column: "rid_parent", Operator: "ilike", Value: "%345346346%"}
+	info := h.ValidateAndAdjustFilterForColumnType(filter, model)
+
+	if !info.NeedsCast {
+		t.Fatalf("expected NeedsCast=true so the numeric column is cast to TEXT for ILIKE")
+	}
+	if filter.Value != "%345346346%" {
+		t.Fatalf("ILIKE must keep the wildcard-wrapped string value untouched, got %#v", filter.Value)
+	}
+
+	q := &jsonCapQuery{}
+	h.applyFilter(q, *filter, "public.atdetail", info.NeedsCast, "OR", model)
+
+	c := q.only(t)
+	const want = "CAST(atdetail.rid_parent AS TEXT) ILIKE ?"
+	if c.query != want {
+		t.Fatalf("query = %q, want %q", c.query, want)
+	}
+	if !reflect.DeepEqual(c.args, []interface{}{"%345346346%"}) {
+		t.Fatalf("args = %#v, want [\"%%345346346%%\"]", c.args)
+	}
+}

@@ -1479,6 +1479,18 @@ func (h *Handler) ValidateAndAdjustFilterForColumnType(filter *common.FilterOpti
 		return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
 	}
 
+	// LIKE/ILIKE always compare against text, wildcards and all. Never coerce
+	// the value to the column's native numeric/bool/time type here: doing so
+	// strips the '%' wildcards and hands the driver a non-string argument,
+	// which fails with "operator does not exist: text ~~* integer" once the
+	// column is cast to TEXT below.
+	if op := strings.ToLower(filter.Operator); op == "like" || op == "ilike" {
+		if reflection.IsStringType(colType) {
+			return ColumnCastInfo{NeedsCast: false, IsNumericType: false}
+		}
+		return ColumnCastInfo{NeedsCast: true, IsNumericType: reflection.IsNumericType(colType)}
+	}
+
 	// Check if the input value is numeric
 	valueIsNumeric := false
 	if strVal, ok := filter.Value.(string); ok {

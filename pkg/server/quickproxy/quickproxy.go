@@ -154,7 +154,7 @@ func newReverseProxy(target *url.URL, timeout time.Duration) *httputil.ReversePr
 // starts serving requests.
 func (s *Service) Handler(fallback http.Handler) http.Handler {
 	if fallback == nil {
-		fallback = http.HandlerFunc(http.NotFound)
+		fallback = http.NotFoundHandler()
 	}
 
 	for i := range s.rules {

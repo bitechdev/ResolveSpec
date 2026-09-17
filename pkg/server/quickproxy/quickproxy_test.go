@@ -26,9 +26,15 @@ func TestNewService_Validation(t *testing.T) {
 		{"bad exclude prefix", []Rule{
 			{URLPrefix: "/", Target: "http://localhost:1", Exclude: []string{"health"}},
 		}, true},
+		{"exclude outside rule's URLPrefix", []Rule{
+			{URLPrefix: "/api", Target: "http://localhost:1", Exclude: []string{"/health"}},
+		}, true},
 		{"valid", []Rule{{URLPrefix: "/api", Target: "http://localhost:1"}}, false},
 		{"valid with exclude", []Rule{
 			{URLPrefix: "/", Target: "http://localhost:1", Exclude: []string{"/health"}},
+		}, false},
+		{"valid with nested exclude", []Rule{
+			{URLPrefix: "/api", Target: "http://localhost:1", Exclude: []string{"/api/health"}},
 		}, false},
 	}
 

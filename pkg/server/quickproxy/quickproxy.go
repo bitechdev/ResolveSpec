@@ -28,9 +28,11 @@ type Rule struct {
 	Target string
 
 	// Exclude is a list of URL path prefixes that this rule should not
-	// proxy, even though they fall under URLPrefix. Each entry must start
-	// with "/". A request matching an Exclude prefix is treated as if this
-	// rule didn't match at all: matching continues against any other
+	// proxy, even though they fall under URLPrefix. Each entry is a full
+	// path from root and must itself start with URLPrefix (e.g. rule
+	// URLPrefix "/api" excluding a subpath must use "/api/health", not
+	// "/health"). A request matching an Exclude prefix is treated as if
+	// this rule didn't match at all: matching continues against any other
 	// configured rule, falling back if none match. This is typically used
 	// to carve out paths (e.g. "/health") from a catch-all "/" rule so
 	// they're served by the fallback handler instead of being proxied.
@@ -121,6 +123,9 @@ func NewService(rules []Rule, opts ...Option) (*Service, error) {
 		for _, ex := range r.Exclude {
 			if !strings.HasPrefix(ex, "/") {
 				return nil, fmt.Errorf("quickproxy: exclude prefix %q for rule %q must start with /", ex, r.URLPrefix)
+			}
+			if !strings.HasPrefix(ex, r.URLPrefix) {
+				return nil, fmt.Errorf("quickproxy: exclude prefix %q for rule %q must itself start with the rule's URLPrefix", ex, r.URLPrefix)
 			}
 		}
 

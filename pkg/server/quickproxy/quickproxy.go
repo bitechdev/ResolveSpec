@@ -26,6 +26,15 @@ type Rule struct {
 	// The incoming request path and query are forwarded unchanged; only the
 	// scheme and host are rewritten to Target's.
 	Target string
+
+	// Exclude is a list of URL path prefixes that this rule should not
+	// proxy, even though they fall under URLPrefix. Each entry must start
+	// with "/". A request matching an Exclude prefix is treated as if this
+	// rule didn't match at all: matching continues against any other
+	// configured rule, falling back if none match. This is typically used
+	// to carve out paths (e.g. "/health") from a catch-all "/" rule so
+	// they're served by the fallback handler instead of being proxied.
+	Exclude []string
 }
 
 // DefaultTimeout is the dial and response-header timeout applied to
@@ -50,8 +59,19 @@ func WithTimeout(d time.Duration) Option {
 
 // compiledRule pairs a Rule with its ready-to-use reverse proxy.
 type compiledRule struct {
-	prefix string
-	proxy  *httputil.ReverseProxy
+	prefix   string
+	excludes []string
+	proxy    *httputil.ReverseProxy
+}
+
+// excluded reports whether path falls under one of the rule's Exclude prefixes.
+func (r *compiledRule) excluded(path string) bool {
+	for _, ex := range r.excludes {
+		if strings.HasPrefix(path, ex) {
+			return true
+		}
+	}
+	return false
 }
 
 // Service holds a compiled set of proxy rules and performs longest-prefix
@@ -98,9 +118,16 @@ func NewService(rules []Rule, opts ...Option) (*Service, error) {
 			return nil, fmt.Errorf("quickproxy: invalid target %q for prefix %q", r.Target, r.URLPrefix)
 		}
 
+		for _, ex := range r.Exclude {
+			if !strings.HasPrefix(ex, "/") {
+				return nil, fmt.Errorf("quickproxy: exclude prefix %q for rule %q must start with /", ex, r.URLPrefix)
+			}
+		}
+
 		compiled = append(compiled, compiledRule{
-			prefix: r.URLPrefix,
-			proxy:  newReverseProxy(target, cfg.timeout),
+			prefix:   r.URLPrefix,
+			excludes: r.Exclude,
+			proxy:    newReverseProxy(target, cfg.timeout),
 		})
 	}
 
@@ -174,11 +201,17 @@ func (s *Service) Handler(fallback http.Handler) http.Handler {
 }
 
 // match returns the longest-prefix rule matching path, or nil if none match.
+// A rule whose Exclude covers path is skipped, and matching continues
+// against the next-longest-prefix rule.
 func (s *Service) match(path string) *compiledRule {
 	for i := range s.rules {
-		if strings.HasPrefix(path, s.rules[i].prefix) {
-			return &s.rules[i]
+		if !strings.HasPrefix(path, s.rules[i].prefix) {
+			continue
 		}
+		if s.rules[i].excluded(path) {
+			continue
+		}
+		return &s.rules[i]
 	}
 	return nil
 }

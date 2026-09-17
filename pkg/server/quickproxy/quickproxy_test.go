@@ -23,7 +23,13 @@ func TestNewService_Validation(t *testing.T) {
 			{URLPrefix: "/api", Target: "http://localhost:1"},
 			{URLPrefix: "/api", Target: "http://localhost:2"},
 		}, true},
+		{"bad exclude prefix", []Rule{
+			{URLPrefix: "/", Target: "http://localhost:1", Exclude: []string{"health"}},
+		}, true},
 		{"valid", []Rule{{URLPrefix: "/api", Target: "http://localhost:1"}}, false},
+		{"valid with exclude", []Rule{
+			{URLPrefix: "/", Target: "http://localhost:1", Exclude: []string{"/health"}},
+		}, false},
 	}
 
 	for _, tt := range tests {
@@ -175,6 +181,81 @@ func TestHandler_LongestPrefixMatch(t *testing.T) {
 		"/api/v1/thing": "specific",
 		"/api/other":    "general",
 		"/anything":     "general",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+
+		if got := rr.Body.String(); got != want {
+			t.Errorf("path %s: body = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestHandler_ExcludeFallsBackToFallback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("upstream:" + r.URL.Path))
+	}))
+	defer upstream.Close()
+
+	svc, err := NewService([]Rule{
+		{URLPrefix: "/", Target: upstream.URL, Exclude: []string{"/health"}},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	handler := svc.Handler(fallbackHandler("fallback-content"))
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Body.String(); got != "fallback-content" {
+		t.Fatalf("body = %q, want fallback-content", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Body.String(); got != "fallback-content" {
+		t.Fatalf("body = %q, want fallback-content", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/other", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if got := rr.Body.String(); got != "upstream:/other" {
+		t.Fatalf("body = %q, want upstream:/other", got)
+	}
+}
+
+func TestHandler_ExcludeFallsThroughToNextRule(t *testing.T) {
+	specific := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("specific"))
+	}))
+	defer specific.Close()
+
+	general := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("general"))
+	}))
+	defer general.Close()
+
+	svc, err := NewService([]Rule{
+		{URLPrefix: "/api", Target: general.URL},
+		{URLPrefix: "/api/v1", Target: specific.URL, Exclude: []string{"/api/v1/health"}},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	handler := svc.Handler(fallbackHandler("fallback"))
+
+	for path, want := range map[string]string{
+		"/api/v1/thing":  "specific",
+		"/api/v1/health": "general",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rr := httptest.NewRecorder()

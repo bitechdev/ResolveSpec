@@ -25,6 +25,9 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 	// Hook 1: BeforeRead - Load security rules
 	handler.Hooks().Register(BeforeRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
+		if security.IsModelSecurityDisabled(secCtx) {
+			return nil
+		}
 		return security.LoadSecurityRules(secCtx, securityList)
 	})
 

@@ -254,6 +254,15 @@ func ShouldSkipRowSecurity(secCtx SecurityContext, operation string) bool {
 	return rules.SecurityDisabled || (operation == "read" && rules.CanPublicRead)
 }
 
+// IsModelSecurityDisabled reports whether all model-level security processing
+// is disabled for the model. This is distinct from ShouldSkipRowSecurity:
+// CanPublicRead skips row filtering for reads but must still allow other read
+// security, such as column masking, to be loaded.
+func IsModelSecurityDisabled(secCtx SecurityContext) bool {
+	rules, ok := resolveModelRules(secCtx)
+	return ok && rules.SecurityDisabled
+}
+
 // ApplyColumnSecurity is a public wrapper for applyColumnSecurity that accepts a SecurityContext
 // This allows other packages to apply column-level security using the generic interface
 func ApplyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) error {

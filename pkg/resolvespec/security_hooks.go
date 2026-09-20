@@ -31,6 +31,9 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 	// Hook 2: BeforeScan - Apply row-level security filters
 	handler.Hooks().Register(BeforeScan, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
+		if security.ShouldSkipRowSecurity(secCtx, hookCtx.Operation) {
+			return nil
+		}
 		return security.ApplyRowSecurity(secCtx, securityList)
 	})
 
@@ -95,6 +98,10 @@ func (s *securityContext) GetSchema() string {
 
 func (s *securityContext) GetEntity() string {
 	return s.ctx.Entity
+}
+
+func (s *securityContext) GetOperation() string {
+	return s.ctx.Operation
 }
 
 func (s *securityContext) GetModel() interface{} {

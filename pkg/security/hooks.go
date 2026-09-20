@@ -232,7 +232,26 @@ func LoadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error
 // ApplyRowSecurity is a public wrapper for applyRowSecurity that accepts a SecurityContext
 // This allows other packages to apply row-level security using the generic interface
 func ApplyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error {
+	// Spec adapters that expose the dispatched operation can enforce the same
+	// model-rule bypass even when ApplyRowSecurity is called directly.
+	if operationCtx, ok := secCtx.(interface{ GetOperation() string }); ok &&
+		ShouldSkipRowSecurity(secCtx, operationCtx.GetOperation()) {
+		return nil
+	}
 	return applyRowSecurity(secCtx, securityList)
+}
+
+// ShouldSkipRowSecurity reports whether row-security enforcement should be
+// skipped for the operation. It uses the same model-rule resolution as
+// CheckModelAuthAllowed so the model registry remains the single source of
+// truth for security behavior.
+func ShouldSkipRowSecurity(secCtx SecurityContext, operation string) bool {
+	rules, ok := resolveModelRules(secCtx)
+	if !ok {
+		return false
+	}
+
+	return rules.SecurityDisabled || (operation == "read" && rules.CanPublicRead)
 }
 
 // ApplyColumnSecurity is a public wrapper for applyColumnSecurity that accepts a SecurityContext
@@ -303,25 +322,14 @@ func checkModelDeleteAllowed(secCtx SecurityContext) error {
 //  7. Guest (UserID == 0) → return "authentication required".
 //  8. Authenticated user → allow (operation-specific checks remain in BeforeUpdate/BeforeDelete).
 func CheckModelAuthAllowed(secCtx SecurityContext, operation string) error {
-	rules, ok := GetModelRulesFromContext(secCtx.GetContext())
+	rules, ok := resolveModelRules(secCtx)
 	if !ok {
-		schema := secCtx.GetSchema()
-		entity := secCtx.GetEntity()
-		var err error
-		if schema != "" {
-			rules, err = modelregistry.GetModelRulesByName(fmt.Sprintf("%s.%s", schema, entity))
+		// Model not registered - fall through to auth check
+		userID, _ := secCtx.GetUserID()
+		if userID == 0 {
+			return fmt.Errorf("authentication required")
 		}
-		if err != nil || schema == "" {
-			rules, err = modelregistry.GetModelRulesByName(entity)
-		}
-		if err != nil {
-			// Model not registered - fall through to auth check
-			userID, _ := secCtx.GetUserID()
-			if userID == 0 {
-				return fmt.Errorf("authentication required")
-			}
-			return nil
-		}
+		return nil
 	}
 
 	if rules.SecurityDisabled {
@@ -345,6 +353,31 @@ func CheckModelAuthAllowed(secCtx SecurityContext, operation string) error {
 		return fmt.Errorf("authentication required")
 	}
 	return nil
+}
+
+// resolveModelRules returns model rules from the request context first, then
+// falls back to the schema-qualified and unqualified registry names.
+func resolveModelRules(secCtx SecurityContext) (modelregistry.ModelRules, bool) {
+	if rules, ok := GetModelRulesFromContext(secCtx.GetContext()); ok {
+		return rules, true
+	}
+
+	schema := secCtx.GetSchema()
+	entity := secCtx.GetEntity()
+	var err error
+	if schema != "" {
+		var rules modelregistry.ModelRules
+		rules, err = modelregistry.GetModelRulesByName(fmt.Sprintf("%s.%s", schema, entity))
+		if err == nil {
+			return rules, true
+		}
+	}
+
+	rules, err := modelregistry.GetModelRulesByName(entity)
+	if err != nil {
+		return modelregistry.ModelRules{}, false
+	}
+	return rules, true
 }
 
 // CheckModelUpdateAllowed is the public wrapper for checkModelUpdateAllowed.

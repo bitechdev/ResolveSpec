@@ -306,15 +306,16 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 		hookCtx := &HookContext{
-			Context: ctx,
-			Handler: h,
-			Schema:  schema,
-			Entity:  entity,
-			Model:   model,
-			Options: options,
-			ID:      id,
-			Writer:  w,
-			Tx:      tx,
+			Context:   ctx,
+			Handler:   h,
+			Schema:    schema,
+			Entity:    entity,
+			Model:     model,
+			Operation: "read",
+			Options:   options,
+			ID:        id,
+			Writer:    w,
+			Tx:        tx,
 		}
 		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusInternalServerError, "hook_error", "BeforeRead hook failed"
@@ -722,15 +723,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			var nestedResult *common.ProcessResult
 			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 				hookCtx := &HookContext{
-					Context: ctx,
-					Handler: h,
-					Schema:  schema,
-					Entity:  entity,
-					Model:   model,
-					Options: options,
-					Data:    v,
-					Writer:  w,
-					Tx:      tx,
+					Context:   ctx,
+					Handler:   h,
+					Schema:    schema,
+					Entity:    entity,
+					Model:     model,
+					Operation: "create",
+					Options:   options,
+					Data:      v,
+					Writer:    w,
+					Tx:        tx,
 				}
 				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -769,15 +771,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		var responseData interface{} = v
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			hookCtx := &HookContext{
-				Context: ctx,
-				Handler: h,
-				Schema:  schema,
-				Entity:  entity,
-				Model:   model,
-				Options: options,
-				Data:    v,
-				Writer:  w,
-				Tx:      tx,
+				Context:   ctx,
+				Handler:   h,
+				Schema:    schema,
+				Entity:    entity,
+				Model:     model,
+				Operation: "create",
+				Options:   options,
+				Data:      v,
+				Writer:    w,
+				Tx:        tx,
 			}
 			if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 				return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -851,15 +854,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 				for _, item := range v {
 					hookCtx := &HookContext{
-						Context: ctx,
-						Handler: h,
-						Schema:  schema,
-						Entity:  entity,
-						Model:   model,
-						Options: options,
-						Data:    item,
-						Writer:  w,
-						Tx:      tx,
+						Context:   ctx,
+						Handler:   h,
+						Schema:    schema,
+						Entity:    entity,
+						Model:     model,
+						Operation: "create",
+						Options:   options,
+						Data:      item,
+						Writer:    w,
+						Tx:        tx,
 					}
 					if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 						return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -898,15 +902,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
 			for _, item := range v {
 				hookCtx := &HookContext{
-					Context: ctx,
-					Handler: h,
-					Schema:  schema,
-					Entity:  entity,
-					Model:   model,
-					Options: options,
-					Data:    item,
-					Writer:  w,
-					Tx:      tx,
+					Context:   ctx,
+					Handler:   h,
+					Schema:    schema,
+					Entity:    entity,
+					Model:     model,
+					Operation: "create",
+					Options:   options,
+					Data:      item,
+					Writer:    w,
+					Tx:        tx,
 				}
 				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -982,15 +987,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				for _, item := range v {
 					if itemMap, ok := item.(map[string]interface{}); ok {
 						hookCtx := &HookContext{
-							Context: ctx,
-							Handler: h,
-							Schema:  schema,
-							Entity:  entity,
-							Model:   model,
-							Options: options,
-							Data:    itemMap,
-							Writer:  w,
-							Tx:      tx,
+							Context:   ctx,
+							Handler:   h,
+							Schema:    schema,
+							Entity:    entity,
+							Model:     model,
+							Operation: "create",
+							Options:   options,
+							Data:      itemMap,
+							Writer:    w,
+							Tx:        tx,
 						}
 						if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 							return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -1035,15 +1041,16 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 				}
 
 				hookCtx := &HookContext{
-					Context: ctx,
-					Handler: h,
-					Schema:  schema,
-					Entity:  entity,
-					Model:   model,
-					Options: options,
-					Data:    itemMap,
-					Writer:  w,
-					Tx:      tx,
+					Context:   ctx,
+					Handler:   h,
+					Schema:    schema,
+					Entity:    entity,
+					Model:     model,
+					Operation: "create",
+					Options:   options,
+					Data:      itemMap,
+					Writer:    w,
+					Tx:        tx,
 				}
 				if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 					return fmt.Errorf("BeforeCreate hook failed: %w", err)
@@ -1166,16 +1173,17 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			// they must run before the existence-check select so that select is
 			// also subject to RLS on this connection/transaction.
 			hookCtx := &HookContext{
-				Context: ctx,
-				Handler: h,
-				Schema:  schema,
-				Entity:  entity,
-				Model:   model,
-				Options: options,
-				ID:      urlID,
-				Data:    updates,
-				Writer:  w,
-				Tx:      tx,
+				Context:   ctx,
+				Handler:   h,
+				Schema:    schema,
+				Entity:    entity,
+				Model:     model,
+				Operation: "update",
+				Options:   options,
+				ID:        urlID,
+				Data:      updates,
+				Writer:    w,
+				Tx:        tx,
 			}
 
 			if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
@@ -1387,16 +1395,17 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 					// Execute BeforeUpdate hooks inside transaction
 					hookCtx := &HookContext{
-						Context: ctx,
-						Handler: h,
-						Schema:  schema,
-						Entity:  entity,
-						Model:   model,
-						Options: options,
-						ID:      itemIDStr,
-						Data:    item,
-						Writer:  w,
-						Tx:      tx,
+						Context:   ctx,
+						Handler:   h,
+						Schema:    schema,
+						Entity:    entity,
+						Model:     model,
+						Operation: "update",
+						Options:   options,
+						ID:        itemIDStr,
+						Data:      item,
+						Writer:    w,
+						Tx:        tx,
 					}
 
 					if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
@@ -1543,16 +1552,17 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 						// Execute BeforeUpdate hooks inside transaction
 						hookCtx := &HookContext{
-							Context: ctx,
-							Handler: h,
-							Schema:  schema,
-							Entity:  entity,
-							Model:   model,
-							Options: options,
-							ID:      itemIDStr,
-							Data:    itemMap,
-							Writer:  w,
-							Tx:      tx,
+							Context:   ctx,
+							Handler:   h,
+							Schema:    schema,
+							Entity:    entity,
+							Model:     model,
+							Operation: "update",
+							Options:   options,
+							ID:        itemIDStr,
+							Data:      itemMap,
+							Writer:    w,
+							Tx:        tx,
 						}
 
 						if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
@@ -1648,15 +1658,16 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	// Execute BeforeDelete hooks (covers model-rule checks before any deletion)
 	hookCtx := &HookContext{
-		Context: ctx,
-		Handler: h,
-		Schema:  schema,
-		Entity:  entity,
-		Model:   model,
-		ID:      id,
-		Data:    data,
-		Writer:  w,
-		Tx:      h.db,
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		Model:     model,
+		Operation: "delete",
+		ID:        id,
+		Data:      data,
+		Writer:    w,
+		Tx:        h.db,
 	}
 	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)

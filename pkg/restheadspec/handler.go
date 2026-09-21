@@ -233,8 +233,18 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 			return
 		}
 		validId, _ := strconv.ParseInt(id, 10, 64)
-		if validId > 0 {
-			h.handleUpdate(ctx, w, id, nil, data, options)
+		updateID := id
+		isUpdate := validId > 0
+		if !isUpdate {
+			// No valid /:id in the URL - check whether the body itself carries
+			// a valid primary key value and treat this as an update if so.
+			if pkID, ok := h.extractPrimaryKeyFromBody(model, data); ok && pkID != "0" {
+				updateID = pkID
+				isUpdate = true
+			}
+		}
+		if isUpdate {
+			h.handleUpdate(ctx, w, updateID, nil, data, options)
 		} else {
 			h.handleCreate(ctx, w, data, options)
 		}
@@ -268,6 +278,49 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	default:
 		logger.Error("Invalid HTTP method: %s", method)
 		h.sendError(w, http.StatusMethodNotAllowed, "invalid_method", "Invalid HTTP method", nil)
+	}
+}
+
+// extractPrimaryKeyFromBody looks for a valid primary key value inside a
+// decoded (single-record) POST body, keyed by the model's primary key column
+// or its JSON equivalent. It returns the string form of that value and true
+// if one was found and is non-empty/non-zero; otherwise ("", false).
+func (h *Handler) extractPrimaryKeyFromBody(model interface{}, data interface{}) (string, bool) {
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		// Batch payloads (slices) aren't eligible for this implicit-update detection.
+		return "", false
+	}
+
+	pkCol := reflection.GetPrimaryKeyName(model)
+	if pkCol == "" {
+		return "", false
+	}
+
+	val, exists := dataMap[pkCol]
+	if !exists {
+		modelType := reflection.GetPointerElement(reflect.TypeOf(model))
+		for jsonKey, col := range reflection.BuildJSONToDBColumnMap(modelType) {
+			if col == pkCol {
+				val, exists = dataMap[jsonKey]
+				break
+			}
+		}
+	}
+	if !exists || val == nil || reflection.IsEmptyValue(val) {
+		return "", false
+	}
+
+	switch v := val.(type) {
+	case float64:
+		if v <= 0 {
+			return "", false
+		}
+		return strconv.FormatInt(int64(v), 10), true
+	case string:
+		return v, true
+	default:
+		return fmt.Sprintf("%v", v), true
 	}
 }
 

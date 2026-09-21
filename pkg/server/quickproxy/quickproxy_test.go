@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,6 +128,75 @@ func TestHandler_UnreachableUpstreamFallsBack(t *testing.T) {
 	}
 	if got := rr.Body.String(); got != "fallback-content" {
 		t.Fatalf("body = %q, want fallback-content", got)
+	}
+}
+
+func TestHandler_UnreachableUpstreamFallsBackWithBody(t *testing.T) {
+	// A closed listener address: nothing is listening, so dialing fails and
+	// ReverseProxy invokes ErrorHandler. The fallback handler must still see
+	// the original request body, even though ReverseProxy consumed and
+	// closed it while attempting (and failing) the upstream request.
+	unreachable := "http://127.0.0.1:1"
+
+	svc, err := NewService([]Rule{{URLPrefix: "/", Target: unreachable}}, WithTimeout(500*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	echoBody := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("fallback reading body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+
+	handler := svc.Handler(echoBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader("payload=1"))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if got := rr.Body.String(); got != "payload=1" {
+		t.Fatalf("body = %q, want payload=1", got)
+	}
+}
+
+func TestHandler_404FallsBackWithBody(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	svc, err := NewService([]Rule{{URLPrefix: "/", Target: upstream.URL}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	echoBody := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("fallback reading body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+
+	handler := svc.Handler(echoBody)
+
+	req := httptest.NewRequest(http.MethodPut, "/missing", strings.NewReader("payload=2"))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if got := rr.Body.String(); got != "payload=2" {
+		t.Fatalf("body = %q, want payload=2", got)
 	}
 }
 

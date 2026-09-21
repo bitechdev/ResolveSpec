@@ -5,8 +5,10 @@
 package quickproxy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -191,6 +193,15 @@ func (s *Service) Handler(fallback http.Handler) http.Handler {
 
 	for i := range s.rules {
 		s.rules[i].proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, _ error) {
+			// ReverseProxy consumes and closes r.Body while attempting the
+			// upstream request, even when that attempt fails (per the
+			// http.RoundTripper contract). Restore a fresh copy from
+			// r.GetBody, set below, before handing the request to fallback.
+			if r.GetBody != nil {
+				if body, err := r.GetBody(); err == nil {
+					r.Body = body
+				}
+			}
 			fallback.ServeHTTP(w, r)
 		}
 	}
@@ -201,6 +212,22 @@ func (s *Service) Handler(fallback http.Handler) http.Handler {
 			fallback.ServeHTTP(w, r)
 			return
 		}
+
+		// Buffer the body so it can be replayed to fallback if the upstream
+		// attempt fails; see ErrorHandler above.
+		if r.Body != nil && r.Body != http.NoBody {
+			bodyBytes, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err != nil {
+				http.Error(w, "failed to read request body", http.StatusInternalServerError)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			r.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+			}
+		}
+
 		rule.proxy.ServeHTTP(w, r)
 	})
 }

@@ -142,6 +142,7 @@ describe('HeaderSpecClient', () => {
     function mockFetch<T>(data: APIResponse<T>, ok = true) {
         return vi.fn().mockResolvedValue({
             ok,
+            headers: new Headers(),
             json: () => Promise.resolve(data),
         });
     }

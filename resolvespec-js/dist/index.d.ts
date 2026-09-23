@@ -34,6 +34,8 @@ export declare function buildHeaders(options: Options): Record<string, string>;
 export declare interface ClientConfig {
     baseUrl: string;
     token?: string;
+    /** Custom HTTP headers. Token and HeaderSpec query options take precedence. */
+    headers?: Record<string, string>;
 }
 
 export declare interface Column {

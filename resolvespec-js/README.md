@@ -28,7 +28,7 @@ import { ResolveSpecClient, getResolveSpecClient } from '@warkypublic/resolvespe
 // Class instantiation
 const client = new ResolveSpecClient({ baseUrl: 'http://localhost:3000', token: 'your-token' });
 
-// Or singleton factory (returns cached instance per baseUrl)
+// Or singleton factory (returns cached instance per baseUrl and effective headers)
 const client = getResolveSpecClient({ baseUrl: 'http://localhost:3000', token: 'your-token' });
 
 // Read with filters, sort, pagination
@@ -211,3 +211,25 @@ pnpm run lint     # eslint
 ## License
 
 MIT
+
+### Custom HTTP headers
+
+Both `ResolveSpecClient` and `HeaderSpecClient` (including their factory functions)
+accept `headers` in `ClientConfig` and send them on every HTTP request:
+
+```typescript
+const client = new ResolveSpecClient({
+  baseUrl: 'http://localhost:3000',
+  token: 'your-token',
+  headers: { 'X-Tenant': 'acme' },
+});
+```
+
+Header names are merged case-insensitively. Custom headers override the default
+`Content-Type`; a supplied `token` overrides custom `Authorization`, and HeaderSpec
+query options override matching custom query headers. Without a token, custom
+`Authorization` is preserved. Configuration is copied at construction; create or
+retrieve a client with new configuration to change headers. Factory clients are
+cached by URL and effective headers, keeping different tenants and tokens separate.
+
+Grid adapters must forward `dataSourceOptions.headers` to this `headers` option.

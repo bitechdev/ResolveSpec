@@ -126,4 +126,6 @@ export interface TableMetadata {
 export interface ClientConfig {
     baseUrl: string;
     token?: string;
+    /** Custom HTTP headers. Token and HeaderSpec query options take precedence. */
+    headers?: Record<string, string>;
 }

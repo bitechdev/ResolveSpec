@@ -1,9 +1,10 @@
+import { clientCacheKey, clientHeaders } from '../common/http';
 import type { ClientConfig, APIResponse, TableMetadata, Options, RequestBody } from '../common/types';
 
 const instances = new Map<string, ResolveSpecClient>();
 
 export function getResolveSpecClient(config: ClientConfig): ResolveSpecClient {
-    const key = config.baseUrl;
+    const key = clientCacheKey(config);
     let instance = instances.get(key);
     if (!instance) {
         instance = new ResolveSpecClient(config);
@@ -16,7 +17,7 @@ export class ResolveSpecClient {
     private config: ClientConfig;
 
     constructor(config: ClientConfig) {
-        this.config = config;
+        this.config = { ...config, headers: { ...config.headers } };
     }
 
     private buildUrl(schema: string, entity: string, id?: string): string {
@@ -28,15 +29,7 @@ export class ResolveSpecClient {
     }
 
     private baseHeaders(): HeadersInit {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-
-        if (this.config.token) {
-            headers['Authorization'] = `Bearer ${this.config.token}`;
-        }
-
-        return headers;
+        return clientHeaders(this.config);
     }
 
     private async fetchWithError<T>(url: string, options: RequestInit): Promise<APIResponse<T>> {

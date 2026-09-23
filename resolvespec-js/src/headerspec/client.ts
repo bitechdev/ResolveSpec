@@ -1,3 +1,4 @@
+import { clientCacheKey, clientHeaders, mergeHeaders } from '../common/http';
 import type {
   APIResponse,
   ClientConfig,
@@ -203,7 +204,7 @@ function formatFilterValue(filter: FilterOption): string {
 const instances = new Map<string, HeaderSpecClient>();
 
 export function getHeaderSpecClient(config: ClientConfig): HeaderSpecClient {
-  const key = config.baseUrl;
+  const key = clientCacheKey(config);
   let instance = instances.get(key);
   if (!instance) {
     instance = new HeaderSpecClient(config);
@@ -222,7 +223,7 @@ export class HeaderSpecClient {
   private config: ClientConfig;
 
   constructor(config: ClientConfig) {
-    this.config = config;
+    this.config = { ...config, headers: { ...config.headers } };
   }
 
   private buildUrl(schema: string, entity: string, id?: string): string {
@@ -234,13 +235,7 @@ export class HeaderSpecClient {
   }
 
   private baseHeaders(): Record<string, string> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (this.config.token) {
-      headers["Authorization"] = `Bearer ${this.config.token}`;
-    }
-    return headers;
+    return clientHeaders(this.config);
   }
 
   private async fetchWithError<T>(
@@ -296,7 +291,7 @@ export class HeaderSpecClient {
     const optHeaders = options ? buildHeaders(options) : {};
     return this.fetchWithError<T>(url, {
       method: "GET",
-      headers: { ...this.baseHeaders(), ...optHeaders },
+      headers: mergeHeaders(this.baseHeaders(), optHeaders),
     });
   }
 
@@ -310,7 +305,7 @@ export class HeaderSpecClient {
     const optHeaders = options ? buildHeaders(options) : {};
     return this.fetchWithError<T>(url, {
       method: "POST",
-      headers: { ...this.baseHeaders(), ...optHeaders },
+      headers: mergeHeaders(this.baseHeaders(), optHeaders),
       body: JSON.stringify(data),
     });
   }
@@ -326,7 +321,7 @@ export class HeaderSpecClient {
     const optHeaders = options ? buildHeaders(options) : {};
     return this.fetchWithError<T>(url, {
       method: "PUT",
-      headers: { ...this.baseHeaders(), ...optHeaders },
+      headers: mergeHeaders(this.baseHeaders(), optHeaders),
       body: JSON.stringify(data),
     });
   }

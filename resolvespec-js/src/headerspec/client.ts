@@ -1,4 +1,5 @@
 import { clientCacheKey, clientHeaders, mergeHeaders } from '../common/http';
+import { b64DecodeUnicode, b64EncodeUnicode } from '@warkypublic/artemis-kit/base64';
 import type {
   APIResponse,
   ClientConfig,
@@ -13,10 +14,7 @@ import type {
  * Encode a value with base64 and ZIP_ prefix for complex header values.
  */
 export function encodeHeaderValue(value: string): string {
-  if (typeof btoa === "function") {
-    return "ZIP_" + btoa(value);
-  }
-  return "ZIP_" + Buffer.from(value, "utf-8").toString("base64");
+  return "ZIP_" + b64EncodeUnicode(value);
 }
 
 /**
@@ -42,10 +40,7 @@ export function decodeHeaderValue(value: string): string {
 }
 
 function decodeBase64(str: string): string {
-  if (typeof atob === "function") {
-    return atob(str);
-  }
-  return Buffer.from(str, "base64").toString("utf-8");
+  return b64DecodeUnicode(str);
 }
 
 /**

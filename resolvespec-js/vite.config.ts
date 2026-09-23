@@ -14,7 +14,7 @@ export default defineConfig({
             fileName: (format) => `index.${format === 'es' ? 'js' : 'cjs'}`,
         },
         rollupOptions: {
-            external: ['uuid', 'semver'],
+            external: ['uuid', 'semver', '@warkypublic/artemis-kit/base64'],
         },
     },
 });

@@ -1,484 +1,432 @@
-import { v4 as l } from "uuid";
-function u(...r) {
-  const e = {};
-  for (const t of r)
-    for (const [s, n] of Object.entries(t)) {
-      for (const i of Object.keys(e))
-        i.toLowerCase() === s.toLowerCase() && delete e[i];
-      Object.defineProperty(e, s, { value: n, enumerable: !0, configurable: !0, writable: !0 });
-    }
-  return e;
+import { v4 as e } from "uuid";
+import { b64DecodeUnicode as t, b64EncodeUnicode as n } from "@warkypublic/artemis-kit/base64";
+//#region src/common/http.ts
+function r(...e) {
+	let t = {};
+	for (let n of e) for (let [e, r] of Object.entries(n)) {
+		for (let n of Object.keys(t)) n.toLowerCase() === e.toLowerCase() && delete t[n];
+		Object.defineProperty(t, e, {
+			value: r,
+			enumerable: !0,
+			configurable: !0,
+			writable: !0
+		});
+	}
+	return t;
 }
-function m(r) {
-  return u(
-    { "Content-Type": "application/json" },
-    r.headers ?? {},
-    r.token ? { Authorization: `Bearer ${r.token}` } : {}
-  );
+function i(e) {
+	return r({ "Content-Type": "application/json" }, e.headers ?? {}, e.token ? { Authorization: `Bearer ${e.token}` } : {});
 }
-function p(r) {
-  const e = Object.entries(m(r)).map(([t, s]) => [t.toLowerCase(), s]).sort(([t], [s]) => t.localeCompare(s));
-  return JSON.stringify([r.baseUrl, e]);
+function a(e) {
+	let t = Object.entries(i(e)).map(([e, t]) => [e.toLowerCase(), t]).sort(([e], [t]) => e.localeCompare(t));
+	return JSON.stringify([e.baseUrl, t]);
 }
-const f = /* @__PURE__ */ new Map();
-function v(r) {
-  const e = p(r);
-  let t = f.get(e);
-  return t || (t = new y(r), f.set(e, t)), t;
+//#endregion
+//#region src/resolvespec/client.ts
+var o = /* @__PURE__ */ new Map();
+function s(e) {
+	let t = a(e), n = o.get(t);
+	return n || (n = new c(e), o.set(t, n)), n;
 }
-class y {
-  constructor(e) {
-    this.config = { ...e, headers: { ...e.headers } };
-  }
-  buildUrl(e, t, s) {
-    let n = `${this.config.baseUrl}/${e}/${t}`;
-    return s && (n += `/${s}`), n;
-  }
-  baseHeaders() {
-    return m(this.config);
-  }
-  async fetchWithError(e, t) {
-    const s = await fetch(e, t), n = await s.json();
-    if (!s.ok)
-      throw new Error(n.error?.message || "An error occurred");
-    return n;
-  }
-  async getMetadata(e, t) {
-    const s = this.buildUrl(e, t);
-    return this.fetchWithError(s, {
-      method: "GET",
-      headers: this.baseHeaders()
-    });
-  }
-  async read(e, t, s, n) {
-    const i = typeof s == "number" || typeof s == "string" ? String(s) : void 0, a = this.buildUrl(e, t, i), c = {
-      operation: "read",
-      id: Array.isArray(s) ? s : void 0,
-      options: n
-    };
-    return this.fetchWithError(a, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify(c)
-    });
-  }
-  async create(e, t, s, n) {
-    const i = this.buildUrl(e, t), a = {
-      operation: "create",
-      data: s,
-      options: n
-    };
-    return this.fetchWithError(i, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify(a)
-    });
-  }
-  async update(e, t, s, n, i) {
-    const a = typeof n == "number" || typeof n == "string" ? String(n) : void 0, c = this.buildUrl(e, t, a), o = {
-      operation: "update",
-      id: Array.isArray(n) ? n : void 0,
-      data: s,
-      options: i
-    };
-    return this.fetchWithError(c, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify(o)
-    });
-  }
-  async delete(e, t, s) {
-    const n = this.buildUrl(e, t, String(s)), i = {
-      operation: "delete"
-    };
-    return this.fetchWithError(n, {
-      method: "POST",
-      headers: this.baseHeaders(),
-      body: JSON.stringify(i)
-    });
-  }
+var c = class {
+	constructor(e) {
+		this.config = {
+			...e,
+			headers: { ...e.headers }
+		};
+	}
+	buildUrl(e, t, n) {
+		let r = `${this.config.baseUrl}/${e}/${t}`;
+		return n && (r += `/${n}`), r;
+	}
+	baseHeaders() {
+		return i(this.config);
+	}
+	async fetchWithError(e, t) {
+		let n = await fetch(e, t), r = await n.json();
+		if (!n.ok) throw Error(r.error?.message || "An error occurred");
+		return r;
+	}
+	async getMetadata(e, t) {
+		let n = this.buildUrl(e, t);
+		return this.fetchWithError(n, {
+			method: "GET",
+			headers: this.baseHeaders()
+		});
+	}
+	async read(e, t, n, r) {
+		let i = typeof n == "number" || typeof n == "string" ? String(n) : void 0, a = this.buildUrl(e, t, i), o = {
+			operation: "read",
+			id: Array.isArray(n) ? n : void 0,
+			options: r
+		};
+		return this.fetchWithError(a, {
+			method: "POST",
+			headers: this.baseHeaders(),
+			body: JSON.stringify(o)
+		});
+	}
+	async create(e, t, n, r) {
+		let i = this.buildUrl(e, t), a = {
+			operation: "create",
+			data: n,
+			options: r
+		};
+		return this.fetchWithError(i, {
+			method: "POST",
+			headers: this.baseHeaders(),
+			body: JSON.stringify(a)
+		});
+	}
+	async update(e, t, n, r, i) {
+		let a = typeof r == "number" || typeof r == "string" ? String(r) : void 0, o = this.buildUrl(e, t, a), s = {
+			operation: "update",
+			id: Array.isArray(r) ? r : void 0,
+			data: n,
+			options: i
+		};
+		return this.fetchWithError(o, {
+			method: "POST",
+			headers: this.baseHeaders(),
+			body: JSON.stringify(s)
+		});
+	}
+	async delete(e, t, n) {
+		let r = this.buildUrl(e, t, String(n));
+		return this.fetchWithError(r, {
+			method: "POST",
+			headers: this.baseHeaders(),
+			body: JSON.stringify({ operation: "delete" })
+		});
+	}
+}, l = /* @__PURE__ */ new Map();
+function u(e) {
+	let t = e.url, n = l.get(t);
+	return n || (n = new d(e), l.set(t, n)), n;
 }
-const b = /* @__PURE__ */ new Map();
-function O(r) {
-  const e = r.url;
-  let t = b.get(e);
-  return t || (t = new S(r), b.set(e, t)), t;
-}
-class S {
-  constructor(e) {
-    this.ws = null, this.messageHandlers = /* @__PURE__ */ new Map(), this.subscriptions = /* @__PURE__ */ new Map(), this.eventListeners = {}, this.state = "disconnected", this.reconnectAttempts = 0, this.reconnectTimer = null, this.heartbeatTimer = null, this.isManualClose = !1, this.config = {
-      url: e.url,
-      reconnect: e.reconnect ?? !0,
-      reconnectInterval: e.reconnectInterval ?? 3e3,
-      maxReconnectAttempts: e.maxReconnectAttempts ?? 10,
-      heartbeatInterval: e.heartbeatInterval ?? 3e4,
-      debug: e.debug ?? !1
-    };
-  }
-  async connect() {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.log("Already connected");
-      return;
-    }
-    return this.isManualClose = !1, this.setState("connecting"), new Promise((e, t) => {
-      try {
-        this.ws = new WebSocket(this.config.url), this.ws.onopen = () => {
-          this.log("Connected to WebSocket server"), this.setState("connected"), this.reconnectAttempts = 0, this.startHeartbeat(), this.emit("connect"), e();
-        }, this.ws.onmessage = (s) => {
-          this.handleMessage(s.data);
-        }, this.ws.onerror = (s) => {
-          this.log("WebSocket error:", s);
-          const n = new Error("WebSocket connection error");
-          this.emit("error", n), t(n);
-        }, this.ws.onclose = (s) => {
-          this.log("WebSocket closed:", s.code, s.reason), this.stopHeartbeat(), this.setState("disconnected"), this.emit("disconnect", s), this.config.reconnect && !this.isManualClose && this.reconnectAttempts < this.config.maxReconnectAttempts && (this.reconnectAttempts++, this.log(`Reconnection attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`), this.setState("reconnecting"), this.reconnectTimer = setTimeout(() => {
-            this.connect().catch((n) => {
-              this.log("Reconnection failed:", n);
-            });
-          }, this.config.reconnectInterval));
-        };
-      } catch (s) {
-        t(s);
-      }
-    });
-  }
-  disconnect() {
-    this.isManualClose = !0, this.reconnectTimer && (clearTimeout(this.reconnectTimer), this.reconnectTimer = null), this.stopHeartbeat(), this.ws && (this.setState("disconnecting"), this.ws.close(), this.ws = null), this.setState("disconnected"), this.messageHandlers.clear();
-  }
-  async request(e, t, s) {
-    this.ensureConnected();
-    const n = l(), i = {
-      id: n,
-      type: "request",
-      operation: e,
-      entity: t,
-      schema: s?.schema,
-      record_id: s?.record_id,
-      data: s?.data,
-      options: s?.options
-    };
-    return new Promise((a, c) => {
-      this.messageHandlers.set(n, (o) => {
-        o.success ? a(o.data) : c(new Error(o.error?.message || "Request failed"));
-      }), this.send(i), setTimeout(() => {
-        this.messageHandlers.has(n) && (this.messageHandlers.delete(n), c(new Error("Request timeout")));
-      }, 3e4);
-    });
-  }
-  async read(e, t) {
-    return this.request("read", e, {
-      schema: t?.schema,
-      record_id: t?.record_id,
-      options: {
-        filters: t?.filters,
-        columns: t?.columns,
-        sort: t?.sort,
-        preload: t?.preload,
-        limit: t?.limit,
-        offset: t?.offset
-      }
-    });
-  }
-  async create(e, t, s) {
-    return this.request("create", e, {
-      schema: s?.schema,
-      data: t
-    });
-  }
-  async update(e, t, s, n) {
-    return this.request("update", e, {
-      schema: n?.schema,
-      record_id: t,
-      data: s
-    });
-  }
-  async delete(e, t, s) {
-    await this.request("delete", e, {
-      schema: s?.schema,
-      record_id: t
-    });
-  }
-  async meta(e, t) {
-    return this.request("meta", e, {
-      schema: t?.schema
-    });
-  }
-  async subscribe(e, t, s) {
-    this.ensureConnected();
-    const n = l(), i = {
-      id: n,
-      type: "subscription",
-      operation: "subscribe",
-      entity: e,
-      schema: s?.schema,
-      options: {
-        filters: s?.filters
-      }
-    };
-    return new Promise((a, c) => {
-      this.messageHandlers.set(n, (o) => {
-        if (o.success && o.data?.subscription_id) {
-          const h = o.data.subscription_id;
-          this.subscriptions.set(h, {
-            id: h,
-            entity: e,
-            schema: s?.schema,
-            options: { filters: s?.filters },
-            callback: t
-          }), this.log(`Subscribed to ${e} with ID: ${h}`), a(h);
-        } else
-          c(new Error(o.error?.message || "Subscription failed"));
-      }), this.send(i), setTimeout(() => {
-        this.messageHandlers.has(n) && (this.messageHandlers.delete(n), c(new Error("Subscription timeout")));
-      }, 1e4);
-    });
-  }
-  async unsubscribe(e) {
-    this.ensureConnected();
-    const t = l(), s = {
-      id: t,
-      type: "subscription",
-      operation: "unsubscribe",
-      subscription_id: e
-    };
-    return new Promise((n, i) => {
-      this.messageHandlers.set(t, (a) => {
-        a.success ? (this.subscriptions.delete(e), this.log(`Unsubscribed from ${e}`), n()) : i(new Error(a.error?.message || "Unsubscribe failed"));
-      }), this.send(s), setTimeout(() => {
-        this.messageHandlers.has(t) && (this.messageHandlers.delete(t), i(new Error("Unsubscribe timeout")));
-      }, 1e4);
-    });
-  }
-  getSubscriptions() {
-    return Array.from(this.subscriptions.values());
-  }
-  getState() {
-    return this.state;
-  }
-  isConnected() {
-    return this.ws?.readyState === WebSocket.OPEN;
-  }
-  on(e, t) {
-    this.eventListeners[e] = t;
-  }
-  off(e) {
-    delete this.eventListeners[e];
-  }
-  // Private methods
-  handleMessage(e) {
-    try {
-      const t = JSON.parse(e);
-      switch (this.log("Received message:", t), this.emit("message", t), t.type) {
-        case "response":
-          this.handleResponse(t);
-          break;
-        case "notification":
-          this.handleNotification(t);
-          break;
-        case "pong":
-          break;
-        default:
-          this.log("Unknown message type:", t.type);
-      }
-    } catch (t) {
-      this.log("Error parsing message:", t);
-    }
-  }
-  handleResponse(e) {
-    const t = this.messageHandlers.get(e.id);
-    t && (t(e), this.messageHandlers.delete(e.id));
-  }
-  handleNotification(e) {
-    const t = this.subscriptions.get(e.subscription_id);
-    t?.callback && t.callback(e);
-  }
-  send(e) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN)
-      throw new Error("WebSocket is not connected");
-    const t = JSON.stringify(e);
-    this.log("Sending message:", e), this.ws.send(t);
-  }
-  startHeartbeat() {
-    this.heartbeatTimer || (this.heartbeatTimer = setInterval(() => {
-      if (this.isConnected()) {
-        const e = {
-          id: l(),
-          type: "ping"
-        };
-        this.send(e);
-      }
-    }, this.config.heartbeatInterval));
-  }
-  stopHeartbeat() {
-    this.heartbeatTimer && (clearInterval(this.heartbeatTimer), this.heartbeatTimer = null);
-  }
-  setState(e) {
-    this.state !== e && (this.state = e, this.emit("stateChange", e));
-  }
-  ensureConnected() {
-    if (!this.isConnected())
-      throw new Error("WebSocket is not connected. Call connect() first.");
-  }
-  emit(e, ...t) {
-    const s = this.eventListeners[e];
-    s && s(...t);
-  }
-  log(...e) {
-    this.config.debug && console.log("[WebSocketClient]", ...e);
-  }
-}
-function W(r) {
-  return typeof btoa == "function" ? "ZIP_" + btoa(r) : "ZIP_" + Buffer.from(r, "utf-8").toString("base64");
-}
-function H(r) {
-  let e = r;
-  return e.startsWith("ZIP_") ? (e = e.slice(4).replace(/[\n\r ]/g, ""), e = g(e)) : e.startsWith("__") && (e = e.slice(2).replace(/[\n\r ]/g, ""), e = g(e)), (e.startsWith("ZIP_") || e.startsWith("__")) && (e = H(e)), e;
-}
-function g(r) {
-  return typeof atob == "function" ? atob(r) : Buffer.from(r, "base64").toString("utf-8");
-}
-function d(r) {
-  const e = {};
-  if (r.columns?.length && (e["X-Select-Fields"] = r.columns.join(",")), r.omit_columns?.length && (e["X-Not-Select-Fields"] = r.omit_columns.join(",")), r.filters?.length)
-    for (const t of r.filters) {
-      const s = t.logic_operator ?? "AND", n = C(t.operator), i = E(t);
-      t.operator === "eq" && s === "AND" ? e[`X-FieldFilter-${t.column}`] = i : s === "OR" ? e[`X-SearchOr-${n}-${t.column}`] = i : e[`X-SearchOp-${n}-${t.column}`] = i;
-    }
-  if (r.sort?.length) {
-    const t = r.sort.map((s) => s.direction.toUpperCase() === "DESC" ? `-${s.column}` : `+${s.column}`);
-    e["X-Sort"] = t.join(",");
-  }
-  if (r.limit !== void 0 && (e["X-Limit"] = String(r.limit)), r.offset !== void 0 && (e["X-Offset"] = String(r.offset)), r.cursor_forward && (e["X-Cursor-Forward"] = r.cursor_forward), r.cursor_backward && (e["X-Cursor-Backward"] = r.cursor_backward), r.preload?.length) {
-    const t = r.preload.map((s) => s.columns?.length ? `${s.relation}:${s.columns.join(",")}` : s.relation);
-    e["X-Preload"] = t.join("|");
-  }
-  if (r.fetch_row_number && (e["X-Fetch-RowNumber"] = r.fetch_row_number), r.computedColumns?.length)
-    for (const t of r.computedColumns)
-      e[`X-CQL-SEL-${t.name}`] = t.expression;
-  if (r.customOperators?.length) {
-    const t = r.customOperators.map(
-      (s) => s.sql
-    );
-    e["X-Custom-SQL-W"] = t.join(" AND ");
-  }
-  return e;
-}
-function C(r) {
-  switch (r) {
-    case "eq":
-      return "equals";
-    case "neq":
-      return "notequals";
-    case "gt":
-      return "greaterthan";
-    case "gte":
-      return "greaterthanorequal";
-    case "lt":
-      return "lessthan";
-    case "lte":
-      return "lessthanorequal";
-    case "like":
-    case "ilike":
-    case "contains":
-      return "contains";
-    case "startswith":
-      return "beginswith";
-    case "endswith":
-      return "endswith";
-    case "in":
-      return "in";
-    case "between":
-      return "between";
-    case "between_inclusive":
-      return "betweeninclusive";
-    case "is_null":
-      return "empty";
-    case "is_not_null":
-      return "notempty";
-    default:
-      return r;
-  }
-}
-function E(r) {
-  return r.value === null || r.value === void 0 ? "" : Array.isArray(r.value) ? r.value.join(",") : String(r.value);
-}
-const w = /* @__PURE__ */ new Map();
-function T(r) {
-  const e = p(r);
-  let t = w.get(e);
-  return t || (t = new _(r), w.set(e, t)), t;
-}
-class _ {
-  constructor(e) {
-    this.config = { ...e, headers: { ...e.headers } };
-  }
-  buildUrl(e, t, s) {
-    let n = `${this.config.baseUrl}/${e}/${t}`;
-    return s && (n += `/${s}`), n;
-  }
-  baseHeaders() {
-    return m(this.config);
-  }
-  async fetchWithError(e, t) {
-    const s = await fetch(e, t), n = await s.json();
-    if (!s.ok)
-      throw new Error(
-        n.error?.message || `${s.statusText} (${s.status})`
-      );
-    return {
-      data: n,
-      success: !0,
-      error: n.error ? n.error : void 0,
-      metadata: {
-        count: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
-        total: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
-        filtered: s.headers.get("content-range") ? Number(s.headers.get("content-range")?.split("/")[1]) : 0,
-        offset: s.headers.get("content-range") ? Number(
-          s.headers.get("content-range")?.split("/")[0].split("-")[0]
-        ) : 0,
-        limit: s.headers.get("x-limit") ? Number(s.headers.get("x-limit")) : 0
-      }
-    };
-  }
-  async read(e, t, s, n) {
-    const i = this.buildUrl(e, t, s), a = n ? d(n) : {};
-    return this.fetchWithError(i, {
-      method: "GET",
-      headers: u(this.baseHeaders(), a)
-    });
-  }
-  async create(e, t, s, n) {
-    const i = this.buildUrl(e, t), a = n ? d(n) : {};
-    return this.fetchWithError(i, {
-      method: "POST",
-      headers: u(this.baseHeaders(), a),
-      body: JSON.stringify(s)
-    });
-  }
-  async update(e, t, s, n, i) {
-    const a = this.buildUrl(e, t, s), c = i ? d(i) : {};
-    return this.fetchWithError(a, {
-      method: "PUT",
-      headers: u(this.baseHeaders(), c),
-      body: JSON.stringify(n)
-    });
-  }
-  async delete(e, t, s) {
-    const n = this.buildUrl(e, t, s);
-    return this.fetchWithError(n, {
-      method: "DELETE",
-      headers: this.baseHeaders()
-    });
-  }
-}
-export {
-  _ as HeaderSpecClient,
-  y as ResolveSpecClient,
-  S as WebSocketClient,
-  d as buildHeaders,
-  H as decodeHeaderValue,
-  W as encodeHeaderValue,
-  T as getHeaderSpecClient,
-  v as getResolveSpecClient,
-  O as getWebSocketClient
+var d = class {
+	constructor(e) {
+		this.ws = null, this.messageHandlers = /* @__PURE__ */ new Map(), this.subscriptions = /* @__PURE__ */ new Map(), this.eventListeners = {}, this.state = "disconnected", this.reconnectAttempts = 0, this.reconnectTimer = null, this.heartbeatTimer = null, this.isManualClose = !1, this.config = {
+			url: e.url,
+			reconnect: e.reconnect ?? !0,
+			reconnectInterval: e.reconnectInterval ?? 3e3,
+			maxReconnectAttempts: e.maxReconnectAttempts ?? 10,
+			heartbeatInterval: e.heartbeatInterval ?? 3e4,
+			debug: e.debug ?? !1
+		};
+	}
+	async connect() {
+		if (this.ws?.readyState === WebSocket.OPEN) {
+			this.log("Already connected");
+			return;
+		}
+		return this.isManualClose = !1, this.setState("connecting"), new Promise((e, t) => {
+			try {
+				this.ws = new WebSocket(this.config.url), this.ws.onopen = () => {
+					this.log("Connected to WebSocket server"), this.setState("connected"), this.reconnectAttempts = 0, this.startHeartbeat(), this.emit("connect"), e();
+				}, this.ws.onmessage = (e) => {
+					this.handleMessage(e.data);
+				}, this.ws.onerror = (e) => {
+					this.log("WebSocket error:", e);
+					let n = /* @__PURE__ */ Error("WebSocket connection error");
+					this.emit("error", n), t(n);
+				}, this.ws.onclose = (e) => {
+					this.log("WebSocket closed:", e.code, e.reason), this.stopHeartbeat(), this.setState("disconnected"), this.emit("disconnect", e), this.config.reconnect && !this.isManualClose && this.reconnectAttempts < this.config.maxReconnectAttempts && (this.reconnectAttempts++, this.log(`Reconnection attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`), this.setState("reconnecting"), this.reconnectTimer = setTimeout(() => {
+						this.connect().catch((e) => {
+							this.log("Reconnection failed:", e);
+						});
+					}, this.config.reconnectInterval));
+				};
+			} catch (e) {
+				t(e);
+			}
+		});
+	}
+	disconnect() {
+		this.isManualClose = !0, this.reconnectTimer &&= (clearTimeout(this.reconnectTimer), null), this.stopHeartbeat(), this.ws &&= (this.setState("disconnecting"), this.ws.close(), null), this.setState("disconnected"), this.messageHandlers.clear();
+	}
+	async request(t, n, r) {
+		this.ensureConnected();
+		let i = e(), a = {
+			id: i,
+			type: "request",
+			operation: t,
+			entity: n,
+			schema: r?.schema,
+			record_id: r?.record_id,
+			data: r?.data,
+			options: r?.options
+		};
+		return new Promise((e, t) => {
+			this.messageHandlers.set(i, (n) => {
+				n.success ? e(n.data) : t(Error(n.error?.message || "Request failed"));
+			}), this.send(a), setTimeout(() => {
+				this.messageHandlers.has(i) && (this.messageHandlers.delete(i), t(/* @__PURE__ */ Error("Request timeout")));
+			}, 3e4);
+		});
+	}
+	async read(e, t) {
+		return this.request("read", e, {
+			schema: t?.schema,
+			record_id: t?.record_id,
+			options: {
+				filters: t?.filters,
+				columns: t?.columns,
+				sort: t?.sort,
+				preload: t?.preload,
+				limit: t?.limit,
+				offset: t?.offset
+			}
+		});
+	}
+	async create(e, t, n) {
+		return this.request("create", e, {
+			schema: n?.schema,
+			data: t
+		});
+	}
+	async update(e, t, n, r) {
+		return this.request("update", e, {
+			schema: r?.schema,
+			record_id: t,
+			data: n
+		});
+	}
+	async delete(e, t, n) {
+		await this.request("delete", e, {
+			schema: n?.schema,
+			record_id: t
+		});
+	}
+	async meta(e, t) {
+		return this.request("meta", e, { schema: t?.schema });
+	}
+	async subscribe(t, n, r) {
+		this.ensureConnected();
+		let i = e(), a = {
+			id: i,
+			type: "subscription",
+			operation: "subscribe",
+			entity: t,
+			schema: r?.schema,
+			options: { filters: r?.filters }
+		};
+		return new Promise((e, o) => {
+			this.messageHandlers.set(i, (i) => {
+				if (i.success && i.data?.subscription_id) {
+					let a = i.data.subscription_id;
+					this.subscriptions.set(a, {
+						id: a,
+						entity: t,
+						schema: r?.schema,
+						options: { filters: r?.filters },
+						callback: n
+					}), this.log(`Subscribed to ${t} with ID: ${a}`), e(a);
+				} else o(Error(i.error?.message || "Subscription failed"));
+			}), this.send(a), setTimeout(() => {
+				this.messageHandlers.has(i) && (this.messageHandlers.delete(i), o(/* @__PURE__ */ Error("Subscription timeout")));
+			}, 1e4);
+		});
+	}
+	async unsubscribe(t) {
+		this.ensureConnected();
+		let n = e(), r = {
+			id: n,
+			type: "subscription",
+			operation: "unsubscribe",
+			subscription_id: t
+		};
+		return new Promise((e, i) => {
+			this.messageHandlers.set(n, (n) => {
+				n.success ? (this.subscriptions.delete(t), this.log(`Unsubscribed from ${t}`), e()) : i(Error(n.error?.message || "Unsubscribe failed"));
+			}), this.send(r), setTimeout(() => {
+				this.messageHandlers.has(n) && (this.messageHandlers.delete(n), i(/* @__PURE__ */ Error("Unsubscribe timeout")));
+			}, 1e4);
+		});
+	}
+	getSubscriptions() {
+		return Array.from(this.subscriptions.values());
+	}
+	getState() {
+		return this.state;
+	}
+	isConnected() {
+		return this.ws?.readyState === WebSocket.OPEN;
+	}
+	on(e, t) {
+		this.eventListeners[e] = t;
+	}
+	off(e) {
+		delete this.eventListeners[e];
+	}
+	handleMessage(e) {
+		try {
+			let t = JSON.parse(e);
+			switch (this.log("Received message:", t), this.emit("message", t), t.type) {
+				case "response":
+					this.handleResponse(t);
+					break;
+				case "notification":
+					this.handleNotification(t);
+					break;
+				case "pong": break;
+				default: this.log("Unknown message type:", t.type);
+			}
+		} catch (e) {
+			this.log("Error parsing message:", e);
+		}
+	}
+	handleResponse(e) {
+		let t = this.messageHandlers.get(e.id);
+		t && (t(e), this.messageHandlers.delete(e.id));
+	}
+	handleNotification(e) {
+		let t = this.subscriptions.get(e.subscription_id);
+		t?.callback && t.callback(e);
+	}
+	send(e) {
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw Error("WebSocket is not connected");
+		let t = JSON.stringify(e);
+		this.log("Sending message:", e), this.ws.send(t);
+	}
+	startHeartbeat() {
+		this.heartbeatTimer ||= setInterval(() => {
+			if (this.isConnected()) {
+				let t = {
+					id: e(),
+					type: "ping"
+				};
+				this.send(t);
+			}
+		}, this.config.heartbeatInterval);
+	}
+	stopHeartbeat() {
+		this.heartbeatTimer &&= (clearInterval(this.heartbeatTimer), null);
+	}
+	setState(e) {
+		this.state !== e && (this.state = e, this.emit("stateChange", e));
+	}
+	ensureConnected() {
+		if (!this.isConnected()) throw Error("WebSocket is not connected. Call connect() first.");
+	}
+	emit(e, ...t) {
+		let n = this.eventListeners[e];
+		n && n(...t);
+	}
+	log(...e) {
+		this.config.debug && console.log("[WebSocketClient]", ...e);
+	}
 };
+//#endregion
+//#region src/headerspec/client.ts
+function f(e) {
+	return "ZIP_" + n(e);
+}
+function p(e) {
+	let t = e;
+	return t.startsWith("ZIP_") ? (t = t.slice(4).replace(/[\n\r ]/g, ""), t = m(t)) : t.startsWith("__") && (t = t.slice(2).replace(/[\n\r ]/g, ""), t = m(t)), (t.startsWith("ZIP_") || t.startsWith("__")) && (t = p(t)), t;
+}
+function m(e) {
+	return t(e);
+}
+function h(e) {
+	let t = {};
+	if (e.columns?.length && (t["X-Select-Fields"] = e.columns.join(",")), e.omit_columns?.length && (t["X-Not-Select-Fields"] = e.omit_columns.join(",")), e.filters?.length) for (let n of e.filters) {
+		let e = n.logic_operator ?? "AND", r = g(n.operator), i = _(n);
+		n.operator === "eq" && e === "AND" ? t[`X-FieldFilter-${n.column}`] = i : e === "OR" ? t[`X-SearchOr-${r}-${n.column}`] = i : t[`X-SearchOp-${r}-${n.column}`] = i;
+	}
+	if (e.sort?.length && (t["X-Sort"] = e.sort.map((e) => e.direction.toUpperCase() === "DESC" ? `-${e.column}` : `+${e.column}`).join(",")), e.limit !== void 0 && (t["X-Limit"] = String(e.limit)), e.offset !== void 0 && (t["X-Offset"] = String(e.offset)), e.cursor_forward && (t["X-Cursor-Forward"] = e.cursor_forward), e.cursor_backward && (t["X-Cursor-Backward"] = e.cursor_backward), e.preload?.length && (t["X-Preload"] = e.preload.map((e) => e.columns?.length ? `${e.relation}:${e.columns.join(",")}` : e.relation).join("|")), e.fetch_row_number && (t["X-Fetch-RowNumber"] = e.fetch_row_number), e.computedColumns?.length) for (let n of e.computedColumns) t[`X-CQL-SEL-${n.name}`] = n.expression;
+	return e.customOperators?.length && (t["X-Custom-SQL-W"] = e.customOperators.map((e) => e.sql).join(" AND ")), t;
+}
+function g(e) {
+	switch (e) {
+		case "eq": return "equals";
+		case "neq": return "notequals";
+		case "gt": return "greaterthan";
+		case "gte": return "greaterthanorequal";
+		case "lt": return "lessthan";
+		case "lte": return "lessthanorequal";
+		case "like":
+		case "ilike":
+		case "contains": return "contains";
+		case "startswith": return "beginswith";
+		case "endswith": return "endswith";
+		case "in": return "in";
+		case "between": return "between";
+		case "between_inclusive": return "betweeninclusive";
+		case "is_null": return "empty";
+		case "is_not_null": return "notempty";
+		default: return e;
+	}
+}
+function _(e) {
+	return e.value === null || e.value === void 0 ? "" : Array.isArray(e.value) ? e.value.join(",") : String(e.value);
+}
+var v = /* @__PURE__ */ new Map();
+function y(e) {
+	let t = a(e), n = v.get(t);
+	return n || (n = new b(e), v.set(t, n)), n;
+}
+var b = class {
+	constructor(e) {
+		this.config = {
+			...e,
+			headers: { ...e.headers }
+		};
+	}
+	buildUrl(e, t, n) {
+		let r = `${this.config.baseUrl}/${e}/${t}`;
+		return n && (r += `/${n}`), r;
+	}
+	baseHeaders() {
+		return i(this.config);
+	}
+	async fetchWithError(e, t) {
+		let n = await fetch(e, t), r = await n.json();
+		if (!n.ok) throw Error(r.error?.message || `${n.statusText} (${n.status})`);
+		return {
+			data: r,
+			success: !0,
+			error: r.error ? r.error : void 0,
+			metadata: {
+				count: n.headers.get("content-range") ? Number(n.headers.get("content-range")?.split("/")[1]) : 0,
+				total: n.headers.get("content-range") ? Number(n.headers.get("content-range")?.split("/")[1]) : 0,
+				filtered: n.headers.get("content-range") ? Number(n.headers.get("content-range")?.split("/")[1]) : 0,
+				offset: n.headers.get("content-range") ? Number(n.headers.get("content-range")?.split("/")[0].split("-")[0]) : 0,
+				limit: n.headers.get("x-limit") ? Number(n.headers.get("x-limit")) : 0
+			}
+		};
+	}
+	async read(e, t, n, i) {
+		let a = this.buildUrl(e, t, n), o = i ? h(i) : {};
+		return this.fetchWithError(a, {
+			method: "GET",
+			headers: r(this.baseHeaders(), o)
+		});
+	}
+	async create(e, t, n, i) {
+		let a = this.buildUrl(e, t), o = i ? h(i) : {};
+		return this.fetchWithError(a, {
+			method: "POST",
+			headers: r(this.baseHeaders(), o),
+			body: JSON.stringify(n)
+		});
+	}
+	async update(e, t, n, i, a) {
+		let o = this.buildUrl(e, t, n), s = a ? h(a) : {};
+		return this.fetchWithError(o, {
+			method: "PUT",
+			headers: r(this.baseHeaders(), s),
+			body: JSON.stringify(i)
+		});
+	}
+	async delete(e, t, n) {
+		let r = this.buildUrl(e, t, n);
+		return this.fetchWithError(r, {
+			method: "DELETE",
+			headers: this.baseHeaders()
+		});
+	}
+};
+//#endregion
+export { b as HeaderSpecClient, c as ResolveSpecClient, d as WebSocketClient, h as buildHeaders, p as decodeHeaderValue, f as encodeHeaderValue, y as getHeaderSpecClient, s as getResolveSpecClient, u as getWebSocketClient };

@@ -126,9 +126,20 @@ describe('encodeHeaderValue / decodeHeaderValue', () => {
         expect(decoded).toBe(original);
     });
 
+    it('should round-trip UTF-8 values', () => {
+        const original = 'café ☕ 你好';
+        expect(decodeHeaderValue(encodeHeaderValue(original))).toBe(original);
+    });
+
     it('should decode __ prefixed values', () => {
         const encoded = '__' + btoa('hello');
         expect(decodeHeaderValue(encoded)).toBe('hello');
+    });
+
+    it('should decode UTF-8 values with the __ prefix', () => {
+        const bytes = new TextEncoder().encode('café ☕');
+        const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
+        expect(decodeHeaderValue('__' + btoa(binary))).toBe('café ☕');
     });
 
     it('should return plain values as-is', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@warkypublic/resolvespec-js",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TypeScript client library for ResolveSpec REST, HeaderSpec, and WebSocket APIs",
   "type": "module",
   "main": "./dist/index.cjs",

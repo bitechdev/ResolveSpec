@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
@@ -72,6 +73,15 @@ func ResolveJSONColumnExpr(model interface{}, tableAlias, token string) (expr st
 func ApplySelectColumns(query SelectQuery, model interface{}, tableAlias string, columns []string) SelectQuery {
 	for _, col := range columns {
 		if expr, args, alias, ok := ResolveJSONColumnExpr(model, tableAlias, col); ok {
+			if !reflection.HasColumn(model, alias) {
+				// No matching scan target on the model (e.g. no
+				// `bun:"<alias>,scanonly"` field declared for this JSON
+				// path) - bun would fail to scan the row with "does not
+				// have column X". Drop the expression rather than erroring;
+				// the rest of the requested columns still get selected.
+				logger.Warn("Skipping JSON select column %q: model has no scan target for alias %q", col, alias)
+				continue
+			}
 			query = query.ColumnExpr(expr+" AS "+QuoteIdent(alias), args...)
 			continue
 		}

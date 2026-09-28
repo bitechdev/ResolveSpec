@@ -530,6 +530,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 				// JSON sub-field selection (data->>'x', data.x, data#>>'{a,b}'):
 				// emit a parameterised expression aliased to a stable name.
 				if expr, jargs, alias, ok := common.ResolveJSONColumnExpr(model, selectAlias, col); ok {
+					if !reflection.HasColumn(model, alias) {
+						logger.Warn("Skipping JSON select column %q: model has no scan target for alias %q", col, alias)
+						continue
+					}
 					query = query.ColumnExpr(expr+" AS "+common.QuoteIdent(alias), jargs...)
 					continue
 				}

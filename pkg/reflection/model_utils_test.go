@@ -411,6 +411,23 @@ func TestGetModelColumnsWithEmbedded(t *testing.T) {
 	}
 }
 
+func TestHasColumn(t *testing.T) {
+	m := ModelWithEmbedded{}
+
+	for _, col := range []string{"name", "description", "rid_base", "created_at", "cql1", "cql2"} {
+		if !HasColumn(m, col) {
+			t.Errorf("HasColumn(%q) = false, want true", col)
+		}
+	}
+
+	if HasColumn(m, "nonexistent_column") {
+		t.Error("HasColumn(nonexistent_column) = true, want false")
+	}
+	if HasColumn(m, "") {
+		t.Error("HasColumn(\"\") = true, want false")
+	}
+}
+
 func TestIsColumnWritableWithEmbedded(t *testing.T) {
 	tests := []struct {
 		name       string

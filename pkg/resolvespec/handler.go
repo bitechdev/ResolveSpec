@@ -349,6 +349,10 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			logger.Debug("Selecting columns: %v", options.Columns)
 			for _, col := range options.Columns {
 				if expr, jargs, alias, ok := common.ResolveJSONColumnExpr(model, "", col); ok {
+					if !reflection.HasColumn(model, alias) {
+						logger.Warn("Skipping JSON select column %q: model has no scan target for alias %q", col, alias)
+						continue
+					}
 					query = query.ColumnExpr(expr+" AS "+common.QuoteIdent(alias), jargs...)
 					continue
 				}

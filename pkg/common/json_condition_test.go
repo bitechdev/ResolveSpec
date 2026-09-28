@@ -2,6 +2,7 @@ package common
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/spectypes"
@@ -160,5 +161,45 @@ func TestBuildJSONFilterCondition_QualifiedAndInjectionSafe(t *testing.T) {
 	}
 	if !reflect.DeepEqual(args, []interface{}{`{"ev\"il"}`, "x"}) {
 		t.Errorf("args = %#v", args)
+	}
+}
+
+// selectCapQuery is a minimal SelectQuery that records Column/ColumnExpr calls
+// so ApplySelectColumns' behaviour can be asserted without a real DB.
+type selectCapQuery struct {
+	SelectQuery
+	columns     []string
+	columnExprs []string
+}
+
+func (m *selectCapQuery) Column(cols ...string) SelectQuery {
+	m.columns = append(m.columns, cols...)
+	return m
+}
+func (m *selectCapQuery) ColumnExpr(q string, args ...interface{}) SelectQuery {
+	m.columnExprs = append(m.columnExprs, q)
+	return m
+}
+
+// jsonSelectModel has a real JSON column (Data) but only ONE pre-declared
+// scanonly field for a computed JSON path ("data_city"); "data_age" has no
+// matching scan target.
+type jsonSelectModel struct {
+	ID       int64              `json:"id" bun:"id,pk"`
+	Data     spectypes.SqlJSONB `json:"data" bun:"data"`
+	DataCity string             `json:"-" bun:"data_city,scanonly"`
+}
+
+func TestApplySelectColumns_SkipsJSONColumnWithoutScanTarget(t *testing.T) {
+	m := jsonSelectModel{}
+	q := &selectCapQuery{}
+
+	ApplySelectColumns(q, m, "", []string{"id", "data.city", "data.age"})
+
+	if !reflect.DeepEqual(q.columns, []string{"id"}) {
+		t.Errorf("columns = %#v, want [id]", q.columns)
+	}
+	if len(q.columnExprs) != 1 || !strings.Contains(q.columnExprs[0], `AS "data_city"`) {
+		t.Errorf("columnExprs = %#v, want exactly one expr aliased data_city", q.columnExprs)
 	}
 }

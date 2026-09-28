@@ -439,6 +439,63 @@ func GetSQLModelColumns(model any) []string {
 	return columns
 }
 
+// HasColumn reports whether the model has a struct field that bun/gorm would
+// scan a column named columnName into. Unlike GetSQLModelColumns, this
+// includes scanonly fields (e.g. a `bun:"jsonvalue_product_cost,scanonly"`
+// field added specifically to receive a computed/JSON-path SELECT expression)
+// since those are legitimate scan targets even though they are not writable.
+// Matching is case-insensitive against the resolved bun/gorm/json column name
+// and against the bare Go field name.
+func HasColumn(model any, columnName string) bool {
+	if columnName == "" {
+		return false
+	}
+
+	modelType := reflect.TypeOf(model)
+	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice || modelType.Kind() == reflect.Array) {
+		modelType = modelType.Elem()
+	}
+	if modelType == nil || modelType.Kind() != reflect.Struct {
+		return false
+	}
+
+	return hasColumnInType(modelType, columnName)
+}
+
+func hasColumnInType(typ reflect.Type, columnName string) bool {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		bunTag := field.Tag.Get("bun")
+		gormTag := field.Tag.Get("gorm")
+
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Pointer {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				if hasColumnInType(fieldType, columnName) {
+					return true
+				}
+				continue
+			}
+		}
+
+		if bunTag == "-" || gormTag == "-" {
+			continue
+		}
+
+		if strings.EqualFold(getColumnNameFromField(field), columnName) || strings.EqualFold(field.Name, columnName) {
+			return true
+		}
+	}
+	return false
+}
+
 // collectSQLColumnsFromType recursively collects SQL column names from a struct type
 // scanOnlyEmbedded indicates if we're inside a scan-only embedded struct
 func collectSQLColumnsFromType(typ reflect.Type, columns *[]string, scanOnlyEmbedded bool) {

@@ -28,7 +28,7 @@ public sealed class ResolveSpecClient
         _ => Convert.ToString(id, System.Globalization.CultureInfo.InvariantCulture),
     };
 
-    static string[]? BodyId(object? id) => id is IEnumerable<string> e and not string ? e.ToArray() : null;
+    static string[]? BodyId(object? id) => id is IEnumerable<string> e ? e.ToArray() : null;
 
     string Url(string schema, string entity, string? id)
     {

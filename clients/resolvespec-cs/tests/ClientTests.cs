@@ -22,7 +22,8 @@ public class Stub : HttpMessageHandler
         Request = request;
         Body = request.Content == null ? "" : await request.Content.ReadAsStringAsync(ct);
         var r = new HttpResponseMessage(_status) { Content = new StringContent(_json, Encoding.UTF8, "application/json") };
-        foreach (var (k, v) in _headers) r.Headers.TryAddWithoutValidation(k, v);
+        foreach (var (k, v) in _headers)
+            if (!r.Headers.TryAddWithoutValidation(k, v)) r.Content.Headers.TryAddWithoutValidation(k, v);
         return r;
     }
 }

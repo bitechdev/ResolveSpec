@@ -169,7 +169,9 @@ public sealed class FuncSpecClient
         };
         if (list)
         {
-            resp.Headers.TryGetValues("Content-Range", out var cr);
+            // Content-Range is a content header in HttpClient; fall back to response headers.
+            IEnumerable<string>? cr = null;
+            if (!resp.Content.Headers.TryGetValues("Content-Range", out cr)) resp.Headers.TryGetValues("Content-Range", out cr);
             r.Metadata = MetadataFrom(cr?.FirstOrDefault(), o);
         }
         return r;

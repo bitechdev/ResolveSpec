@@ -2,7 +2,7 @@
 
 .NET 8 client for ResolveSpec (JSON body) and FunctionSpec. `System.Text.Json`, no other dependencies.
 
-> Not compiled or tested yet (no .NET SDK was available). Run `dotnet test tests/` first.
+> Tests run with `DOTNET_ROLL_FORWARD=Major` when only a newer runtime than 8.0 is installed.
 
 ## Clients
 

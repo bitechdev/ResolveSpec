@@ -132,6 +132,10 @@ type SecurityList struct {
 	lastColPrune time.Time
 	lastRowPrune time.Time
 
+	// txSettings stamps transaction-local settings at OnTxBegin (see txsettings.go).
+	txSettingsMu sync.RWMutex
+	txSettings   TxSettingsFunc
+
 	// loads collapses concurrent provider calls for the same key (cold-cache stampede).
 	loads singleflight.Group
 }

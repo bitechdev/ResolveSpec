@@ -11,6 +11,12 @@ import (
 
 // RegisterSecurityHooks registers all security-related hooks with the handler
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// OnTxBegin: stamp transaction-local settings (e.g. RLS GUCs) before any SQL.
+	// Looked up per call so SetTxSettings may come after registration.
+	handler.Hooks().Register(OnTxBegin, func(hookCtx *HookContext) error {
+		return security.StampTxSettings(newSecurityContext(hookCtx), securityList, hookCtx.Tx)
+	})
+
 	// Hook 0: BeforeHandle - enforce auth after model resolution
 	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
 		if err := security.CheckModelAuthAllowed(newSecurityContext(hookCtx), hookCtx.Operation); err != nil {

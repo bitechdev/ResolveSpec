@@ -1213,6 +1213,8 @@ The main changes:
 
 ## Documentation
 
+- [Request transactions and RLS stamping](../common/TRANSACTIONS.md)
+
 | File | Description |
 |------|-------------|
 | **QUICK_REFERENCE.md** | Quick reference guide with examples |

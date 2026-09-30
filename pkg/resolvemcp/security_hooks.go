@@ -19,6 +19,12 @@ import (
 //   - Column-level security: sensitive columns masked/hidden in read results.
 //   - Audit logging after each read.
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// OnTxBegin: stamp transaction-local settings (e.g. RLS GUCs) before any SQL.
+	// Looked up per call so SetTxSettings may come after registration.
+	handler.Hooks().Register(OnTxBegin, func(hookCtx *HookContext) error {
+		return security.StampTxSettings(newSecurityContext(hookCtx), securityList, hookCtx.Tx)
+	})
+
 	// BeforeHandle: enforce model-level operation rules (auth check).
 	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
 		if err := security.CheckModelAuthAllowed(newSecurityContext(hookCtx), hookCtx.Operation); err != nil {

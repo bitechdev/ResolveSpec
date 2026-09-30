@@ -3,7 +3,7 @@
 # Usage: scripts/testserver-smoke.sh [base_url]   (COMPOSE overrides the compose command)
 set -euo pipefail
 
-BASE="${1:-http://localhost:8080}"
+BASE="${1:-http://localhost:8123}"
 if [ -z "${COMPOSE:-}" ]; then
   if command -v podman >/dev/null 2>&1; then COMPOSE="podman compose"; else COMPOSE="docker compose"; fi
 fi
@@ -24,6 +24,8 @@ ids() { grep -o '"id":[0-9]*' "$BODY" | cut -d: -f2; }
 
 expect create 200 "$(call "{\"operation\":\"create\",\"data\":{\"name\":\"Smoke\",\"code\":\"S$TS\"}}")"
 ID="$(ids | head -1)"
+expect read 200 "$(call '{"operation":"read"}' "/$ID")"
+expect update 200 "$(call '{"operation":"update","data":{"name":"Smoke2"}}' "/$ID")"
 expect delete 200 "$(call '{"operation":"delete"}' "/$ID")"
 expect delete-again 404 "$(call '{"operation":"delete"}' "/$ID")"
 

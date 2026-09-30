@@ -12,7 +12,7 @@ servers:
     main:
       name: "main"
       host: "0.0.0.0"
-      port: 8080
+      port: 8123
       description: "Main server instance"
       gzip: true
       tags:
@@ -79,8 +79,8 @@ dbmanager:
     default:
       name: "default"
       type: "postgres"
-      host: "postgres-test"
-      port: 5432
+      host: "localhost"
+      port: 8124
       user: "postgres"
       password: "postgres"
       database: "postgres"

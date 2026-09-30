@@ -9,5 +9,5 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/testserver /usr/local/bin/testserver
 COPY docker/testserver.config.yaml /etc/resolvespec/config.yaml
-EXPOSE 8080
+EXPOSE 8123
 ENTRYPOINT ["testserver"]

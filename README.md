@@ -13,7 +13,7 @@ ResolveSpec is a flexible and powerful REST API specification and implementation
 
 All share the same core architecture and provide dynamic data querying, relationship preloading, and complex filtering.
 
-![1.00](./generated_slogan.webp)
+
 
 ## Table of Contents
 
@@ -859,3 +859,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 * Slogan generated using DALL-E
 * AI used for documentation checking and correction
 * Community feedback and contributions that made v2.0 and v2.1 possible
+
+
+![1.00](./generated_slogan.webp)

@@ -460,8 +460,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		errMsg           string
 	)
 
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-		hookCtx.Tx = tx
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 
 		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
@@ -1322,8 +1321,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 	// Process all items in a transaction
 	results := make([]interface{}, 0)
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-		hookCtx.Tx = tx
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
 			return err
@@ -1538,11 +1536,23 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Variable to store the updated record
 	var updatedRecord interface{}
 
-	// Declare hook context to be used inside and outside transaction
-	var hookCtx *HookContext
+	// Hook context used inside and outside transaction
+	hookCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		TableName: tableName,
+		Model:     model,
+		Operation: "update",
+		Options:   options,
+		ID:        id,
+		Data:      dataMap,
+		Writer:    w,
+	}
 
 	// Process nested relations if present
-	err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	err := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
@@ -1550,21 +1560,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
 		// they must run before the existence-check select so that select is
 		// also subject to RLS on this connection/transaction.
-		hookCtx = &HookContext{
-			Context:   ctx,
-			Handler:   h,
-			Schema:    schema,
-			Entity:    entity,
-			TableName: tableName,
-			Tx:        tx,
-			Model:     model,
-			Operation: "update",
-			Options:   options,
-			ID:        id,
-			Data:      dataMap,
-			Writer:    w,
-		}
-
 		if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
 		}
@@ -1733,7 +1728,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			// Array of IDs as strings
 			logger.Info("Batch delete with %d IDs ([]string)", len(v))
 			deletedCount := 0
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, itemID := range v {
 					// Execute hooks for each item
 					hookCtx := &HookContext{
@@ -1790,7 +1785,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			logger.Info("Batch delete with %d items ([]interface{})", len(v))
 			deletedCount := 0
 			pkName := reflection.GetPrimaryKeyName(model)
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, item := range v {
 					var itemID interface{}
 
@@ -1864,7 +1859,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			logger.Info("Batch delete with %d items ([]map[string]interface{})", len(v))
 			deletedCount := 0
 			pkName := reflection.GetPrimaryKeyName(model)
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, item := range v {
 					if itemID, ok := item[pkName]; ok && itemID != nil {
 						itemIDStr := fmt.Sprintf("%v", itemID)
@@ -1943,7 +1938,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	// Lookup, hooks and delete share one transaction so transaction-local
 	// state set by hooks (e.g. RLS settings) applies to every statement.
 	var failure *deleteFailure
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	txErr := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 		failure = h.deleteSingleInTx(ctx, tx, w, schema, entity, tableName, model, pkName, id, recordToDelete)
 		if failure != nil {
 			return failure
@@ -3531,4 +3526,27 @@ func (h *Handler) HandleOpenAPI(w common.ResponseWriter, r common.Request) {
 // This allows avoiding circular dependencies
 func (h *Handler) SetOpenAPIGenerator(generator func() (string, error)) {
 	h.openAPIGenerator = generator
+}
+
+// newTxHookContext builds the context OnTxBegin hooks receive for paths that
+// create their per-item hook contexts inside the transaction.
+func (h *Handler) newTxHookContext(ctx context.Context, schema, entity, tableName string, model interface{}, operation string, w common.ResponseWriter) *HookContext {
+	return &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		TableName: tableName,
+		Model:     model,
+		Operation: operation,
+		Writer:    w,
+	}
+}
+
+// runInTx runs body in a transaction with hookCtx.Tx set to it and OnTxBegin
+// fired first. Every transaction the handler opens goes through here.
+func (h *Handler) runInTx(ctx context.Context, hookCtx *HookContext, body func(tx common.Database) error) error {
+	return common.RunRequestTx(ctx, h.db, hookCtx, func() error {
+		return h.hooks.Execute(OnTxBegin, hookCtx)
+	}, body)
 }

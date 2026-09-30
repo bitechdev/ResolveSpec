@@ -313,7 +313,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		errMsg     string
 	)
 
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	txErr := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "read", options, w), func(tx common.Database) error {
 		hookCtx := &HookContext{
 			Context:   ctx,
 			Handler:   h,
@@ -734,7 +734,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if h.shouldUseNestedProcessor(v, model) {
 			logger.Info("Using nested CUD processor for create operation")
 			var nestedResult *common.ProcessResult
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				hookCtx := &HookContext{
 					Context:   ctx,
 					Handler:   h,
@@ -782,7 +782,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Standard processing without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		var responseData interface{} = v
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			hookCtx := &HookContext{
 				Context:   ctx,
 				Handler:   h,
@@ -857,7 +857,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch create with nested data")
 			results := make([]map[string]interface{}, 0, len(v))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -912,7 +912,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
 		responseItems := make([]interface{}, 0, len(v))
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			for _, item := range v {
 				hookCtx := &HookContext{
 					Context:   ctx,
@@ -989,7 +989,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch create with nested data ([]interface{})")
 			results := make([]interface{}, 0, len(v))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1046,7 +1046,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
 		responseItems := make([]interface{}, 0, len(v))
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			for _, item := range v {
 				itemMap, ok := item.(map[string]interface{})
 				if !ok {
@@ -1180,7 +1180,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			// Execute BeforeUpdate hooks inside transaction, before any queries run.
 			// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
 			// they must run before the existence-check select so that select is
@@ -1334,7 +1334,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch update with nested data")
 			results := make([]map[string]interface{}, 0, len(updates))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1368,7 +1368,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 		// Standard batch update without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
 					itemIDStr := fmt.Sprintf("%v", itemID)
@@ -1479,7 +1479,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch update with nested data ([]interface{})")
 			results := make([]interface{}, 0, len(updates))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1516,7 +1516,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		// Standard batch update without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		list := make([]interface{}, 0)
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			for _, item := range updates {
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
@@ -1657,8 +1657,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	// state set by hooks (e.g. RLS settings) applies to every statement.
 	var payload interface{}
 	var failure *deleteFailure
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-		hookCtx.Tx = tx
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		payload, failure = h.executeDelete(ctx, tx, hookCtx, schema, tableName, model, id, data)
 		if failure != nil {
 			return failure
@@ -2560,4 +2559,27 @@ func mergeWithInput(dbRecord interface{}, input map[string]interface{}) map[stri
 		result[k] = v
 	}
 	return result
+}
+
+// newTxHookContext builds the context OnTxBegin hooks receive for paths that
+// create their per-item hook contexts inside the transaction.
+func (h *Handler) newTxHookContext(ctx context.Context, schema, entity string, model interface{}, operation string, options common.RequestOptions, w common.ResponseWriter) *HookContext {
+	return &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		Model:     model,
+		Operation: operation,
+		Options:   options,
+		Writer:    w,
+	}
+}
+
+// runInTx runs body in a transaction with hookCtx.Tx set to it and OnTxBegin
+// fired first. Every transaction the handler opens goes through here.
+func (h *Handler) runInTx(ctx context.Context, hookCtx *HookContext, body func(tx common.Database) error) error {
+	return common.RunRequestTx(ctx, h.db, hookCtx, func() error {
+		return h.hooks.Execute(OnTxBegin, hookCtx)
+	}, body)
 }

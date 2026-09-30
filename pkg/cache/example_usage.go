@@ -1,3 +1,7 @@
+//go:build ignore
+
+// Examples are excluded from the build: they call log.Fatal and are not part of the API.
+
 package cache
 
 import (

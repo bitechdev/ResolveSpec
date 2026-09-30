@@ -3,15 +3,19 @@ package cache
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/redis/go-redis/v9"
 )
 
 // RedisProvider is a Redis implementation of the Provider interface.
 type RedisProvider struct {
-	client  *redis.Client
-	options *Options
+	client     *redis.Client
+	options    *Options
+	allowFlush bool
 }
 
 // RedisConfig contains Redis-specific configuration.
@@ -33,16 +37,25 @@ type RedisConfig struct {
 
 	// Options contains general cache options
 	Options *Options
+
+	// AllowFlush permits Clear() to run FLUSHDB, which wipes the entire logical Redis DB
+	// (including data that is not owned by this cache). Off by default.
+	AllowFlush bool
 }
 
 // NewRedisProvider creates a new Redis cache provider.
 func NewRedisProvider(config *RedisConfig) (*RedisProvider, error) {
-	if config == nil {
-		config = &RedisConfig{
-			Host: "localhost",
-			Port: 6379,
-			DB:   0,
-		}
+	// Work on a copy so the caller's struct is not mutated
+	var cfg RedisConfig
+	if config != nil {
+		cfg = *config
+	} else {
+		cfg = RedisConfig{Host: "localhost", Port: 6379, DB: 0}
+	}
+	config = &cfg
+	if config.Options != nil {
+		o := *config.Options
+		config.Options = &o
 	}
 
 	if config.Host == "" {
@@ -77,8 +90,9 @@ func NewRedisProvider(config *RedisConfig) (*RedisProvider, error) {
 	}
 
 	return &RedisProvider{
-		client:  client,
-		options: config.Options,
+		client:     client,
+		options:    config.Options,
+		allowFlush: config.AllowFlush,
 	}, nil
 }
 
@@ -89,6 +103,8 @@ func (r *RedisProvider) Get(ctx context.Context, key string) ([]byte, bool) {
 		return nil, false
 	}
 	if err != nil {
+		// Reported as a miss (the Provider interface cannot express errors), but not silently
+		logger.Warn("cache: redis GET failed: %v", err)
 		return nil, false
 	}
 	return val, true
@@ -194,7 +210,7 @@ func (r *RedisProvider) DeleteByTag(ctx context.Context, tag string) error {
 
 // DeleteByPattern removes all keys matching the pattern.
 func (r *RedisProvider) DeleteByPattern(ctx context.Context, pattern string) error {
-	iter := r.client.Scan(ctx, 0, pattern, 0).Iterator()
+	iter := r.client.Scan(ctx, 0, pattern, 500).Iterator()
 	pipe := r.client.Pipeline()
 
 	count := 0
@@ -225,7 +241,11 @@ func (r *RedisProvider) DeleteByPattern(ctx context.Context, pattern string) err
 }
 
 // Clear removes all items from the cache.
+// It runs FLUSHDB and therefore requires RedisConfig.AllowFlush.
 func (r *RedisProvider) Clear(ctx context.Context) error {
+	if !r.allowFlush {
+		return ErrFlushNotAllowed
+	}
 	return r.client.FlushDB(ctx).Err()
 }
 
@@ -244,8 +264,9 @@ func (r *RedisProvider) Close() error {
 }
 
 // Stats returns statistics about the cache provider.
+// Only an allowlist of numeric counters from INFO is exposed, not the raw output.
 func (r *RedisProvider) Stats(ctx context.Context) (*CacheStats, error) {
-	info, err := r.client.Info(ctx, "stats", "keyspace").Result()
+	info, err := r.client.Info(ctx, "stats").Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Redis stats: %w", err)
 	}
@@ -255,13 +276,28 @@ func (r *RedisProvider) Stats(ctx context.Context) (*CacheStats, error) {
 		return nil, fmt.Errorf("failed to get DB size: %w", err)
 	}
 
-	// Parse stats from INFO command
-	// This is a simplified version - you may want to parse more detailed stats
+	counters := map[string]int64{}
+	for _, line := range strings.Split(info, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "keyspace_hits", "keyspace_misses", "evicted_keys", "expired_keys":
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				counters[k] = n
+			}
+		}
+	}
+
 	stats := &CacheStats{
+		Hits:         counters["keyspace_hits"],
+		Misses:       counters["keyspace_misses"],
 		Keys:         dbSize,
 		ProviderType: "redis",
 		ProviderStats: map[string]any{
-			"info": info,
+			"evicted_keys": counters["evicted_keys"],
+			"expired_keys": counters["expired_keys"],
 		},
 	}
 

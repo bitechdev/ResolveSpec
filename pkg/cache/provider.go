@@ -2,8 +2,13 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrFlushNotAllowed is returned by Clear on shared-server providers (Redis, Memcache)
+// unless AllowFlush is set in their config, because Clear flushes the whole server/DB.
+var ErrFlushNotAllowed = errors.New("cache: Clear flushes the entire server; set AllowFlush in the provider config to permit it")
 
 // Provider defines the interface that all cache providers must implement.
 type Provider interface {
@@ -58,7 +63,12 @@ type Options struct {
 	DefaultTTL time.Duration
 
 	// MaxSize is the maximum number of items (for in-memory provider).
+	// 0 selects the default (10000); a negative value means unbounded.
 	MaxSize int
+
+	// CleanupInterval is how often the in-memory provider removes expired items
+	// (default: 1 minute).
+	CleanupInterval time.Duration
 
 	// EvictionPolicy determines how items are evicted (LRU, LFU, etc).
 	EvictionPolicy string

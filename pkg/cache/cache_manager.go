@@ -3,9 +3,16 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
+
+// ErrNotFound is returned when a key is not in the cache. The key is deliberately
+// not included in the error: keys may embed credentials (e.g. session tokens).
+var ErrNotFound = errors.New("cache: key not found")
 
 // Cache is the main cache manager that wraps a Provider.
 type Cache struct {
@@ -23,7 +30,7 @@ func NewCache(provider Provider) *Cache {
 func (c *Cache) Get(ctx context.Context, key string, dest interface{}) error {
 	data, exists := c.provider.Get(ctx, key)
 	if !exists {
-		return fmt.Errorf("key not found: %s", key)
+		return ErrNotFound
 	}
 
 	if err := json.Unmarshal(data, dest); err != nil {
@@ -37,7 +44,7 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) error {
 func (c *Cache) GetBytes(ctx context.Context, key string) ([]byte, error) {
 	data, exists := c.provider.Get(ctx, key)
 	if !exists {
-		return nil, fmt.Errorf("key not found: %s", key)
+		return nil, ErrNotFound
 	}
 	return data, nil
 }
@@ -122,9 +129,10 @@ func (c *Cache) GetOrSet(ctx context.Context, key string, dest interface{}, ttl 
 		return fmt.Errorf("loader failed: %w", err)
 	}
 
-	// Store in cache
+	// Store in cache. A cache-write failure must not fail the call: the authoritative
+	// value has already been loaded, and the cache is only an optimisation.
 	if err := c.Set(ctx, key, value, ttl); err != nil {
-		return fmt.Errorf("failed to cache value: %w", err)
+		logger.Warn("cache: failed to store loaded value, continuing uncached: %v", err)
 	}
 
 	// Populate dest with the loaded value
@@ -142,6 +150,11 @@ func (c *Cache) GetOrSet(ctx context.Context, key string, dest interface{}, ttl 
 
 // Remember is a convenience function that caches the result of a function call.
 // It's similar to GetOrSet but returns the value directly.
+//
+// WARNING: the returned type differs between a hit and a miss. On a hit the value is
+// generic decoded JSON (map[string]interface{}, []interface{}, float64, string, ...);
+// on a miss it is exactly what loader returned. Do not type-assert the result to a
+// concrete type; prefer GetOrSet, which decodes into a typed destination.
 func (c *Cache) Remember(ctx context.Context, key string, ttl time.Duration, loader func() (interface{}, error)) (interface{}, error) {
 	// Try to get from cache first as bytes
 	data, err := c.GetBytes(ctx, key)
@@ -158,9 +171,9 @@ func (c *Cache) Remember(ctx context.Context, key string, ttl time.Duration, loa
 		return nil, fmt.Errorf("loader failed: %w", err)
 	}
 
-	// Store in cache
+	// Cache-write failures are non-fatal (see GetOrSet)
 	if err := c.Set(ctx, key, value, ttl); err != nil {
-		return nil, fmt.Errorf("failed to cache value: %w", err)
+		logger.Warn("cache: failed to store loaded value, continuing uncached: %v", err)
 	}
 
 	return value, nil

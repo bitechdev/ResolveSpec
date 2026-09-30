@@ -3,23 +3,29 @@ package cache
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
-var (
-	defaultCache *Cache
-)
+var defaultCache atomic.Pointer[Cache]
+
+// swapOwned installs c as the default and closes the displaced cache, which this
+// package created and therefore owns.
+func swapOwned(c *Cache) {
+	if old := defaultCache.Swap(c); old != nil && old != c {
+		_ = old.Close() // best-effort: the displaced provider is being discarded
+	}
+}
 
 // Initialize initializes the cache with a provider.
 // If not called, the package will use an in-memory provider by default.
 func Initialize(provider Provider) {
-	defaultCache = NewCache(provider)
+	swapOwned(NewCache(provider))
 }
 
 // UseMemory configures the cache to use in-memory storage.
 func UseMemory(opts *Options) error {
-	provider := NewMemoryProvider(opts)
-	defaultCache = NewCache(provider)
+	swapOwned(NewCache(NewMemoryProvider(opts)))
 	return nil
 }
 
@@ -29,7 +35,7 @@ func UseRedis(config *RedisConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize Redis provider: %w", err)
 	}
-	defaultCache = NewCache(provider)
+	swapOwned(NewCache(provider))
 	return nil
 }
 
@@ -39,26 +45,33 @@ func UseMemcache(config *MemcacheConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize Memcache provider: %w", err)
 	}
-	defaultCache = NewCache(provider)
+	swapOwned(NewCache(provider))
 	return nil
 }
 
 // GetDefaultCache returns the default cache instance.
 // Initializes with in-memory provider if not already initialized.
+// Safe for concurrent use.
 func GetDefaultCache() *Cache {
-	if defaultCache == nil {
-		_ = UseMemory(&Options{
-			DefaultTTL: 5 * time.Minute,
-			MaxSize:    10000,
-		})
+	if c := defaultCache.Load(); c != nil {
+		return c
 	}
-	return defaultCache
+	fresh := NewCache(NewMemoryProvider(&Options{
+		DefaultTTL: 5 * time.Minute,
+		MaxSize:    10000,
+	}))
+	if defaultCache.CompareAndSwap(nil, fresh) {
+		return fresh
+	}
+	_ = fresh.Close() // lost the race; discard our provider
+	return defaultCache.Load()
 }
 
 // SetDefaultCache sets a custom cache instance as the default cache.
 // This is useful for testing or when you want to use a pre-configured cache instance.
+// The caller keeps ownership of both the new and the displaced cache; neither is closed.
 func SetDefaultCache(cache *Cache) {
-	defaultCache = cache
+	defaultCache.Store(cache)
 }
 
 // GetStats returns cache statistics.
@@ -69,8 +82,8 @@ func GetStats(ctx context.Context) (*CacheStats, error) {
 
 // Close closes the cache and releases resources.
 func Close() error {
-	if defaultCache != nil {
-		return defaultCache.Close()
+	if c := defaultCache.Load(); c != nil {
+		return c.Close()
 	}
 	return nil
 }

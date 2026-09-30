@@ -64,6 +64,35 @@ Every error is either returned to the caller or discarded with `_ =`.
 | 24 | **Low** | correctness | No defensive copy of `[]byte` on `Set`/`Get` in the memory provider |
 | 25 | **Low** | hygiene | `example_usage.go` ships `log.Fatal` calls in a library package |
 
+## Resolution status (2026-09-30)
+
+- **#1** — Fixed: cache-write failure is logged and ignored in `GetOrSet`/`Remember`
+- **#2** — Not fixed here: needs `pkg/security` changes (tag-based revocation); memcache `DeleteByPattern` still errors (now documented)
+- **#3** — Fixed: `atomic.Pointer` + CAS lazy init; displaced provider closed on `Initialize`/`Use*` (not on `SetDefaultCache`, where the caller owns it)
+- **#4** — Fixed: single `removeLocked` used by every removal path; `Clear` resets the index
+- **#5** — Fixed: `Get` runs under `RLock`; access counters are atomics
+- **#6** — Deferred (pattern language is an API decision). Memory now compiles the regexp before locking; Redis `SCAN COUNT` is 500
+- **#7** — Fixed: `ErrNotFound` sentinel, no key in the error. `pkg/security` still keys on the raw token (out of scope)
+- **#8** — Deferred (needs singleflight dependency)
+- **#9** — Fixed in the memcache provider: keys are namespaced (`k:`) and hashed when over 200 bytes or illegal
+- **#10** — Fixed: re-check under the write lock before deleting
+- **#11** — Fixed: `Close` sets a closed flag; writes return `ErrClosed`
+- **#12** — Fixed: CAS retry loop, bounded tag list (5000), errors returned, 30-day expiry rule, user keys namespaced. Failed tag indexing rolls back the value
+- **#13** — Fixed: `Clear` on Redis/Memcache returns `ErrFlushNotAllowed` unless `AllowFlush` is set (behaviour change)
+- **#14** — Fixed: `Close` calls `client.Close()`
+- **#15** — Deferred (new TLS config fields)
+- **#16** — Documented only: warning on `Remember`; signature unchanged
+- **#17** — Partly fixed: Redis/Memcache `Get` now log backend errors; the `Provider` interface is unchanged so it is still reported as a miss
+- **#18** — Not fixed: still an O(n) scan (comment fixed in `Stats`)
+- **#19** — Fixed: janitor goroutine, `Options.CleanupInterval` (default 1m), stopped by `Close`
+- **#20** — Fixed: only allowlisted counters are exposed; `Hits`/`Misses` populated
+- **#21** — Partly fixed: memcache methods check `ctx.Err()` first; in-flight calls are still bounded only by `Timeout`
+- **#22** — Fixed: `MaxSize` 0 means 10000; negative means unbounded
+- **#23** — Fixed: constructors copy config and `Options`
+- **#24** — Fixed: memory provider copies on `Set` and `Get`
+- **#25** — Fixed: `example_usage.go` excluded from the build with `//go:build ignore`
+- Tests: `pkg/cache/hardening_test.go` (run with `-race`).
+
 ---
 
 ### 1. Critical — a cache-write failure is an authentication failure

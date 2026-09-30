@@ -18,6 +18,23 @@ services:
     networks:
       - resolvespec-test
 
+  testserver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.testserver
+    container_name: resolvespec-testserver
+    environment:
+      RESOLVESPEC_DB_TRACE_ENABLED: "true"
+      RESOLVESPEC_DB_TRACE_MIN_CALLS: "1"
+      RESOLVESPEC_DB_TRACE_POOL_LOG: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks:
+      - resolvespec-test
+
 volumes:
   postgres-test-data:
     driver: local

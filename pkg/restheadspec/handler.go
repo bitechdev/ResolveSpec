@@ -1576,7 +1576,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Now read the existing record from the database
 		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery := h.db.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return fmt.Errorf("record not found with ID: %v", targetID)
@@ -1934,24 +1934,62 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Get primary key name
 	pkName := reflection.GetPrimaryKeyName(model)
 
-	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
 	modelType = reflection.GetPointerElement(modelType)
 	recordToDelete := reflect.New(modelType).Interface()
 
-	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	// Lookup, hooks and delete share one transaction so transaction-local
+	// state set by hooks (e.g. RLS settings) applies to every statement.
+	var failure *deleteFailure
+	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		failure = h.deleteSingleInTx(ctx, tx, w, schema, entity, tableName, model, pkName, id, recordToDelete)
+		if failure != nil {
+			return failure
+		}
+		return nil
+	})
+	if failure != nil {
+		h.sendError(w, failure.status, failure.code, failure.message, failure.err)
+		return
+	}
+	if txErr != nil {
+		logger.Error("Error in delete transaction: %v", txErr)
+		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting record", txErr)
+		return
+	}
+
+	// Invalidate cache for this table after commit
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
+	h.sendResponse(w, recordToDelete, nil)
+}
+
+// deleteFailure describes an error response for a delete; returning it from the
+// transaction closure rolls the transaction back.
+type deleteFailure struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+func (f *deleteFailure) Error() string { return f.message }
+
+// deleteSingleInTx fetches the record, runs the delete hooks and deletes it, all on tx.
+func (h *Handler) deleteSingleInTx(ctx context.Context, tx common.Database, w common.ResponseWriter, schema, entity, tableName string, model interface{}, pkName, id string, recordToDelete interface{}) *deleteFailure {
+	// First, fetch the record that will be deleted
+	selectQuery := tx.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 	if err := selectQuery.ScanModel(ctx); err != nil {
 		if err == sql.ErrNoRows {
 			logger.Warn("Record not found for delete: %s = %s", pkName, id)
-			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
-			return
+			return &deleteFailure{http.StatusNotFound, "not_found", "Record not found", err}
 		}
 		logger.Error("Error fetching record for delete: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "fetch_error", "Error fetching record", err}
 	}
 
 	// Execute BeforeDelete hooks with the record data
@@ -1965,25 +2003,23 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Operation: "delete",
 		ID:        id,
 		Writer:    w,
-		Tx:        h.db,
+		Tx:        tx,
 		Data:      recordToDelete,
 	}
 
 	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusBadRequest, "hook_error", "Hook execution failed", err}
 	}
 
-	query := h.db.NewDelete().Table(tableName)
+	query := tx.NewDelete().Table(tableName)
 	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	// Execute BeforeScan hooks - pass query chain so hooks can modify it
 	hookCtx.Query = query
 	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 		logger.Error("BeforeScan hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusBadRequest, "hook_error", "Hook execution failed", err}
 	}
 
 	// Use potentially modified query from hook context
@@ -1994,15 +2030,13 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	result, err := query.Exec(ctx)
 	if err != nil {
 		logger.Error("Error deleting record: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting record", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "delete_error", "Error deleting record", err}
 	}
 
 	// Check if the record was actually deleted
 	if result.RowsAffected() == 0 {
 		logger.Warn("No rows deleted for ID: %s", id)
-		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
-		return
+		return &deleteFailure{http.StatusNotFound, "not_found", "Record not found or already deleted", nil}
 	}
 
 	// Execute AfterDelete hooks with the deleted record data
@@ -2011,17 +2045,9 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
 		logger.Error("AfterDelete hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "hook_error", "Hook execution failed", err}
 	}
-
-	// Return the deleted record data
-	// Invalidate cache for this table
-	cacheTags := buildCacheTags(schema, tableName)
-	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-	}
-	h.sendResponse(w, recordToDelete, nil)
+	return nil
 }
 
 // mergeRecordWithRequest merges a database record with the original request data

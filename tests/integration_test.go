@@ -2,12 +2,39 @@ package test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// Database-assigned (serial) ids, captured on create; later tests build on earlier ones.
+var deptID, emp1ID, emp2ID, mgrID, projID, task1ID int64
+
+// createdIDs returns the ids of the records in a create response (single object or array).
+func createdIDs(resp *http.Response) []int64 {
+	var result struct {
+		Data interface{} `json:"data"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	items, ok := result.Data.([]interface{})
+	if !ok {
+		items = []interface{}{result.Data}
+	}
+	ids := make([]int64, 0, len(items))
+	for _, item := range items {
+		if m, ok := item.(map[string]interface{}); ok {
+			if id, ok := m["id"].(float64); ok {
+				ids = append(ids, int64(id))
+				continue
+			}
+		}
+		ids = append(ids, 0)
+	}
+	return ids
+}
 
 // TestMain sets up the test environment
 func TestMain(m *testing.M) {
@@ -19,7 +46,6 @@ func TestDepartmentEmployees(t *testing.T) {
 	deptPayload := map[string]interface{}{
 		"operation": "create",
 		"data": map[string]interface{}{
-			"id":          "dept1",
 			"name":        "Engineering",
 			"code":        "ENG",
 			"description": "Engineering Department",
@@ -28,25 +54,24 @@ func TestDepartmentEmployees(t *testing.T) {
 
 	resp := makeRequest(t, "/departments", deptPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	deptID = createdIDs(resp)[0]
 
 	// Create employees in department
 	empPayload := map[string]interface{}{
 		"operation": "create",
 		"data": []map[string]interface{}{
 			{
-				"id":            "emp1",
 				"first_name":    "John",
 				"last_name":     "Doe",
 				"email":         "john@example.com",
-				"department_id": "dept1",
+				"department_id": deptID,
 				"title":         "Senior Engineer",
 			},
 			{
-				"id":            "emp2",
 				"first_name":    "Jane",
 				"last_name":     "Smith",
 				"email":         "jane@example.com",
-				"department_id": "dept1",
+				"department_id": deptID,
 				"title":         "Engineer",
 			},
 		},
@@ -54,6 +79,8 @@ func TestDepartmentEmployees(t *testing.T) {
 
 	resp = makeRequest(t, "/employees", empPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	emps := createdIDs(resp)
+	emp1ID, emp2ID = emps[0], emps[1]
 
 	// Read department with employees
 	readPayload := map[string]interface{}{
@@ -68,7 +95,7 @@ func TestDepartmentEmployees(t *testing.T) {
 		},
 	}
 
-	resp = makeRequest(t, "/departments/dept1", readPayload)
+	resp = makeRequest(t, fmt.Sprintf("/departments/%d", deptID), readPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]interface{}
@@ -83,29 +110,29 @@ func TestEmployeeHierarchy(t *testing.T) {
 	mgrPayload := map[string]interface{}{
 		"operation": "create",
 		"data": map[string]interface{}{
-			"id":            "mgr1",
 			"first_name":    "Alice",
 			"last_name":     "Manager",
 			"email":         "alice@example.com",
 			"title":         "Engineering Manager",
-			"department_id": "dept1",
+			"department_id": deptID,
 		},
 	}
 
 	resp := makeRequest(t, "/employees", mgrPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	mgrID = createdIDs(resp)[0]
 
 	// Update employees to set manager
 	updatePayload := map[string]interface{}{
 		"operation": "update",
 		"data": map[string]interface{}{
-			"manager_id": "mgr1",
+			"manager_id": mgrID,
 		},
 	}
 
-	resp = makeRequest(t, "/employees/emp1", updatePayload)
+	resp = makeRequest(t, fmt.Sprintf("/employees/%d", emp1ID), updatePayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp = makeRequest(t, "/employees/emp2", updatePayload)
+	resp = makeRequest(t, fmt.Sprintf("/employees/%d", emp2ID), updatePayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Read manager with reports
@@ -121,7 +148,7 @@ func TestEmployeeHierarchy(t *testing.T) {
 		},
 	}
 
-	resp = makeRequest(t, "/employees/mgr1", readPayload)
+	resp = makeRequest(t, fmt.Sprintf("/employees/%d", mgrID), readPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]interface{}
@@ -136,7 +163,6 @@ func TestProjectStructure(t *testing.T) {
 	projectPayload := map[string]interface{}{
 		"operation": "create",
 		"data": map[string]interface{}{
-			"id":          "proj1",
 			"name":        "New Website",
 			"code":        "WEB",
 			"description": "Company website redesign",
@@ -149,15 +175,15 @@ func TestProjectStructure(t *testing.T) {
 
 	resp := makeRequest(t, "/projects", projectPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	projID = createdIDs(resp)[0]
 
 	// Create project tasks
 	taskPayload := map[string]interface{}{
 		"operation": "create",
 		"data": []map[string]interface{}{
 			{
-				"id":          "task1",
-				"project_id":  "proj1",
-				"assignee_id": "emp1",
+				"project_id":  projID,
+				"assignee_id": emp1ID,
 				"title":       "Design Homepage",
 				"description": "Create homepage design",
 				"status":      "in_progress",
@@ -165,9 +191,8 @@ func TestProjectStructure(t *testing.T) {
 				"due_date":    time.Now().AddDate(0, 1, 0).Format(time.RFC3339),
 			},
 			{
-				"id":          "task2",
-				"project_id":  "proj1",
-				"assignee_id": "emp2",
+				"project_id":  projID,
+				"assignee_id": emp2ID,
 				"title":       "Implement Backend",
 				"description": "Implement backend APIs",
 				"status":      "planned",
@@ -179,14 +204,14 @@ func TestProjectStructure(t *testing.T) {
 
 	resp = makeRequest(t, "/project_tasks", taskPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	task1ID = createdIDs(resp)[0]
 
 	// Create task comments
 	commentPayload := map[string]interface{}{
 		"operation": "create",
 		"data": map[string]interface{}{
-			"id":        "comment1",
-			"task_id":   "task1",
-			"author_id": "mgr1",
+			"task_id":   task1ID,
+			"author_id": mgrID,
 			"content":   "Looking good! Please add more animations.",
 		},
 	}
@@ -223,7 +248,7 @@ func TestProjectStructure(t *testing.T) {
 		},
 	}
 
-	resp = makeRequest(t, "/projects/proj1", readPayload)
+	resp = makeRequest(t, fmt.Sprintf("/projects/%d", projID), readPayload)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]interface{}

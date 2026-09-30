@@ -579,7 +579,7 @@ Centralized management of multiple database connections with support for Postgre
 - Background health checks (report status; they never close the pool)
 - Prometheus metrics for monitoring
 - Configuration-driven via YAML
-- Per-connection statistics and management
+- Per-connection statistics and management, including pool limit (`max`) and total connections ever opened (`dbmanager_connection_pool_size{state="max"}`, `dbmanager_connections_opened_total`)
 
 **How to use it correctly**:
 
@@ -618,7 +618,15 @@ For documentation, see [pkg/security/README.md](pkg/security/README.md) (see "Di
 
 #### Middleware
 
-HTTP middleware collection for common tasks (CORS, logging, metrics, etc.).
+HTTP middleware collection for common tasks (CORS, logging, metrics, rate limiting, etc.).
+
+**Client request queue** (`middleware.ClientQueue`): limits how many requests each client runs concurrently and queues the rest first-in-first-out, smoothing bursts such as a page load that fires ~15 requests at once. Clients are identified by `X-Client-Id`, then `Authorization`, then the built-in session, then IP, so no client changes are required. Exposes burst, wait and queue-depth Prometheus metrics. Add it through the middleware slot of `SetupMuxRoutes` / `SetupBunRouterRoutes`:
+
+```go
+q := middleware.NewClientQueue(middleware.ClientQueueConfig{MaxConcurrent: 10})
+defer q.Close()
+restheadspec.SetupMuxRoutes(router, handler, middleware.Chain(authMiddleware, q.Middleware))
+```
 
 For documentation, see [pkg/middleware/README.md](pkg/middleware/README.md).
 
@@ -657,7 +665,7 @@ For documentation, see [pkg/config/README.md](pkg/config/README.md).
 * Implement proper authentication and authorization
 * Validate all input parameters
 * Use prepared statements (handled by GORM/Bun/your ORM)
-* Implement rate limiting
+* Implement rate limiting (`middleware.RateLimiter`) and per-client request queueing (`middleware.ClientQueue`)
 * Control access at schema/entity level
 * **New**: Database abstraction layer provides additional security through interface boundaries
 

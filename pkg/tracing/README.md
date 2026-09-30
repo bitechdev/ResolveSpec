@@ -33,6 +33,10 @@ type Config struct {
     ServiceVersion string  // Version for tracking deployments
     Endpoint       string  // OTLP collector endpoint (e.g., "localhost:4317")
     Enabled        bool    // Enable/disable tracing
+    Insecure       bool    // Plaintext gRPC export (default: TLS)
+    TLSConfig      *tls.Config      // Optional TLS customisation
+    Headers        map[string]string // OTLP auth headers
+    SampleRate     float64 // Root-trace sampling fraction (default 0.1)
 }
 ```
 
@@ -429,8 +433,10 @@ if err != nil {
 For high-traffic services, configure sampling:
 
 ```go
-// In production: sample 10% of traces
-// Currently using AlwaysSample() - update in tracing.go if needed
+// Default is ParentBased(TraceIDRatioBased(0.1)); set Config.SampleRate (0-1) to change.
+// Query strings are never exported; span names use the matched route pattern
+// (Request.Pattern, or MiddlewareWithRoute for other routers). Install the
+// middleware inside the panic-recovery middleware.
 ```
 
 ### 5. Context Propagation

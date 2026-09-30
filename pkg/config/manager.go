@@ -250,6 +250,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tracing.service_name", "resolvespec")
 	v.SetDefault("tracing.service_version", "1.0.0")
 	v.SetDefault("tracing.endpoint", "")
+	v.SetDefault("tracing.insecure", false)
+	v.SetDefault("tracing.sample_rate", 0.1)
 
 	// Cache defaults
 	v.SetDefault("cache.provider", "memory")

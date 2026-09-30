@@ -91,6 +91,12 @@ type TracingConfig struct {
 	ServiceName    string `mapstructure:"service_name"`
 	ServiceVersion string `mapstructure:"service_version"`
 	Endpoint       string `mapstructure:"endpoint"`
+	// Insecure exports traces over plaintext gRPC (default false: TLS).
+	Insecure bool `mapstructure:"insecure"`
+	// SampleRate is the fraction of root traces sampled; 0 selects the default (0.1).
+	SampleRate float64 `mapstructure:"sample_rate"`
+	// Headers are sent with every OTLP export request (e.g. auth tokens).
+	Headers map[string]string `mapstructure:"headers"`
 }
 
 // CacheConfig holds cache provider configuration

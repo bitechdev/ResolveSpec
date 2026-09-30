@@ -36,6 +36,27 @@ by configuration alone.
 | 9 | Low | Maintenance | `semconv/v1.4.0` (2021) — deprecated attribute names modern collectors no longer index |
 | 10 | Low | Security | `SetAttributes`/`AddEvent` pass caller data through with no size or cardinality limit |
 
+## Resolution (2026-09-30)
+
+Fixed in `pkg/tracing/tracing.go`, `pkg/config` (`TracingConfig`, defaults), the package README, and new
+`pkg/tracing/tracing_test.go` (passes).
+
+| # | Status | What changed |
+|---|--------|--------------|
+| 1 | **Fixed** | TLS is the default. `Config` gains `Insecure`, `TLSConfig` and `Headers` (OTLP auth). `tracing.insecure` added to `pkg/config`. **Breaking:** plaintext collectors now need `Insecure: true`. |
+| 2 | **Fixed** | Query string and `Host` are no longer exported; attributes are method, `url.path`, scheme, `http.route`, status. `TLSConfig` has no config-file key (code only). |
+| 3 | **Fixed** | `ParentBased(TraceIDRatioBased(rate))`; `SampleRate` defaults to 0.1, validated to [0,1]; `tracing.sample_rate` added to `pkg/config`. |
+| 4 | **Fixed** | Span name is `METHOD <route template>` from `Request.Pattern`, `<unmatched>` otherwise. `MiddlewareWithRoute(fn)` supports other routers. |
+| 5 | **Fixed** | `tracer` is an `atomic.Pointer`; a second `InitTracer` returns an error; the shutdown func resets state. |
+| 6 | **Fixed** | Response writer wrapped; `http.response.status_code` recorded, 5xx sets Error status. Preserves `Flush`/`Unwrap`. |
+| 7 | **Fixed** | Panics are recorded (`RecordError`, Error status) and re-raised so the panic middleware still responds. Must be installed inside the panic middleware; actual order in `pkg/server` not verified. |
+| 8 | **Fixed** | `InitTracerContext(ctx, cfg)` with `InitTimeout` (default 10s); `InitTracer` retained as a wrapper. Exporter is shut down if resource creation fails. |
+| 9 | **Fixed** | Moved to `semconv/v1.26.0`. |
+| 10 | **Fixed** | `AttributeValueLengthLimit` set via `WithRawSpanLimits` (`AttributeValueLimit`, default 1024). |
+
+Tests added: query redaction and route naming, unmatched route, 5xx status, panic recorded and re-raised,
+double-init and invalid sample rate.
+
 ---
 
 ## Findings

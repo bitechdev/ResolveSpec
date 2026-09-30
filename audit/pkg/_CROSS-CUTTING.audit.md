@@ -68,7 +68,7 @@ every one of them on the first run:
 | `pkg/config` | `*viper.Viper` has no internal lock; `configInstance` singleton | `config.audit.md` findings 1, 2 |
 | `pkg/logger` | `Logger`, `errorTracker` globals | `logger.audit.md` finding 1 |
 | `pkg/modelregistry` | `defaultRegistry` read by 6 functions without the lock | `modelregistry.audit.md` findings 2, 8 *(fixed 2026-09-30)* |
-| `pkg/tracing` | `tracer` global | `tracing.audit.md` finding 5 |
+| `pkg/tracing` | `tracer` global | `tracing.audit.md` finding 5 *(fixed 2026-09-30)* |
 | `pkg/errortracking` | `sentry.Init` mutates process globals | `errortracking.audit.md` finding 2 |
 
 **Failure scenario.** `pkg/config` finding 1 is the sharpest illustration. A
@@ -162,7 +162,7 @@ The test bodies that exist but are never executed by CI:
 | `logger` | 0 | 0 | — |
 | `modelregistry` | 1 | ~150 | yes (`-race`) *(added 2026-09-30)* |
 | `testmodels` | 0 | 0 | — |
-| `tracing` | 0 | 0 | — |
+| `tracing` | 1 | ~90 | yes *(added 2026-09-30)* |
 
 **Failure scenario.** `pkg/security` has 6 359 lines of tests — the largest test
 body in the repository — and **not one of them runs in CI**. A change that breaks
@@ -307,7 +307,7 @@ package-level variables, and most guard it with nothing:
 | `pkg/logger` | `Logger *zap.SugaredLogger` (`logger.go:15`), `errorTracker` (`:16`) | **no** — and `Logger` is exported |
 | `pkg/cache` | `defaultCache *Cache` (`cache.go:10`) | **no** |
 | `pkg/config` | `configInstance *Manager` (`manager.go:15`) | **no** |
-| `pkg/tracing` | `tracer` (`tracing.go:19`) | **no** |
+| `pkg/tracing` | `tracer` | **yes** *(fixed 2026-09-30)* — `atomic.Pointer` |
 | `pkg/modelregistry` | `defaultRegistry` | **yes** *(fixed 2026-09-30)* — guarded by `registriesMutex`; all access via `GetDefaultRegistry()` |
 | `pkg/metrics` | `globalProvider` (`interfaces.go:50-51`) | **yes** — `globalProviderMu sync.RWMutex` |
 
@@ -369,7 +369,7 @@ to configure otherwise:
 | Component | Default | Configurable? | Reference |
 |---|---|---|---|
 | PostgreSQL | `sslmode: disable` (`config/manager.go:242`) | yes, via config | `config.audit.md` finding 3 |
-| OTLP traces | `otlptracegrpc.WithInsecure()` hardcoded (`tracing/tracing.go:41`) | **no** — `Config` has no field for it | `tracing.audit.md` finding 1 |
+| OTLP traces | `otlptracegrpc.WithInsecure()` hardcoded (`tracing/tracing.go:41`) *(fixed 2026-09-30: TLS default, `Insecure` opt-in)* | **yes** | `tracing.audit.md` finding 1 |
 | Redis (cache) | no `TLSConfig` set | **no** — `RedisConfig` has no TLS field | `cache.audit.md` finding 15 |
 | Memcache | no TLS | **no** | `cache.audit.md` finding 15 |
 | CORS | `allowed_origins: ["*"]`, `allowed_headers: ["*"]` (`config/manager.go:214-216`) | yes | `config.audit.md` finding 3 |

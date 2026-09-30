@@ -5,12 +5,14 @@ import 'package:http/testing.dart';
 import 'package:resolvespec/resolvespec.dart';
 import 'package:test/test.dart';
 
-(http.Client, List<http.Request>) stub(int status, Object body, {Map<String, String> headers = const {}}) {
+(http.Client, List<http.Request>) stub(int status, Object body,
+    {Map<String, String> headers = const {}}) {
   final seen = <http.Request>[];
   final client = MockClient((req) async {
     seen.add(req);
     final text = body is String ? body : jsonEncode(body);
-    return http.Response(text, status, headers: {'content-type': 'application/json', ...headers});
+    return http.Response(text, status,
+        headers: {'content-type': 'application/json', ...headers});
   });
   return (client, seen);
 }
@@ -18,13 +20,19 @@ import 'package:test/test.dart';
 void main() {
   group('resolvespec', () {
     test('read posts body with headers', () async {
-      final (c, seen) = stub(200, {'success': true, 'data': [{'id': 1}]});
+      final (c, seen) = stub(200, {
+        'success': true,
+        'data': [
+          {'id': 1}
+        ]
+      });
       final client = ResolveSpecClient(
         'http://localhost:3000/',
         ClientOptions(token: 'tok', headers: {'X-Tenant': 'a'}, httpClient: c),
       );
       final r = await client.read('public', 'users',
-          options: const Options(limit: 5, filters: [FilterOption('a', 'eq', 1)]));
+          options:
+              const Options(limit: 5, filters: [FilterOption('a', 'eq', 1)]));
       final req = seen.single;
       expect(req.method, 'POST');
       expect(req.url.path, '/public/users');
@@ -39,7 +47,8 @@ void main() {
 
     test('id placement', () async {
       final (c, seen) = stub(200, {'success': true, 'data': {}});
-      final client = ResolveSpecClient('http://x', ClientOptions(httpClient: c));
+      final client =
+          ResolveSpecClient('http://x', ClientOptions(httpClient: c));
       await client.read('s', 'e', id: 7);
       expect(seen.last.url.path, '/s/e/7');
       await client.update('s', 'e', {'a': 1}, id: ['1', '2']);
@@ -69,10 +78,12 @@ void main() {
             .having((e) => e.message, 'message', 'bad')
             .having((e) => e.error.detail, 'detail', 'why')),
       );
-      final plain = ResolveSpecClient('http://x', ClientOptions(httpClient: stub(502, 'bad gateway').$1));
+      final plain = ResolveSpecClient(
+          'http://x', ClientOptions(httpClient: stub(502, 'bad gateway').$1));
       await expectLater(
         plain.read('s', 'e'),
-        throwsA(isA<ResolveSpecException>().having((e) => e.message, 'message', 'bad gateway')),
+        throwsA(isA<ResolveSpecException>()
+            .having((e) => e.message, 'message', 'bad gateway')),
       );
       final soft = ResolveSpecClient(
         'http://x',
@@ -82,7 +93,10 @@ void main() {
           'error': {'code': 'c', 'message': 'nope'}
         }).$1),
       );
-      await expectLater(soft.read('s', 'e'), throwsA(isA<ResolveSpecException>().having((e) => e.message, 'message', 'nope')));
+      await expectLater(
+          soft.read('s', 'e'),
+          throwsA(isA<ResolveSpecException>()
+              .having((e) => e.message, 'message', 'nope')));
     });
   });
 
@@ -135,27 +149,45 @@ void main() {
     });
 
     test('query building', () {
-      expect(buildQuery({'a': true, 'b': ['x', 'y'], 'c': null, 'd': 3}), {
-        'a': ['true'],
-        'b': ['x', 'y'],
-        'd': ['3'],
-      });
+      expect(
+          buildQuery({
+            'a': true,
+            'b': ['x', 'y'],
+            'c': null,
+            'd': 3
+          }),
+          {
+            'a': ['true'],
+            'b': ['x', 'y'],
+            'd': ['3'],
+          });
     });
 
     test('queryList metadata', () async {
-      final (c, seen) = stub(206, [{'id': 1}, {'id': 2}], headers: {'Content-Range': 'items 10-12/50'});
-      final client = FuncSpecClient('http://x', ClientOptions(token: 'tok', httpClient: c));
-      final r = await client.queryList('/api/users', params: {'org': 1}, options: const FuncSpecOptions(limit: 2));
+      final (c, seen) = stub(206, [
+        {'id': 1},
+        {'id': 2}
+      ], headers: {
+        'Content-Range': 'items 10-12/50'
+      });
+      final client = FuncSpecClient(
+          'http://x', ClientOptions(token: 'tok', httpClient: c));
+      final r = await client.queryList('/api/users',
+          params: {'org': 1}, options: const FuncSpecOptions(limit: 2));
       expect(seen.single.method, 'GET');
       expect(seen.single.url.path, '/api/users');
       expect(seen.single.url.query, 'org=1');
       expect(seen.single.headers['x-limit'], '2');
-      expect(r.metadata, const Metadata(total: 50, count: 2, filtered: 50, limit: 2, offset: 10));
+      expect(
+          r.metadata,
+          const Metadata(
+              total: 50, count: 2, filtered: 50, limit: 2, offset: 10));
       expect((r.data as List).length, 2);
     });
 
     test('query single and error', () async {
-      final ok = FuncSpecClient('http://x', ClientOptions(httpClient: stub(200, {'id': 1}).$1));
+      final ok = FuncSpecClient(
+          'http://x', ClientOptions(httpClient: stub(200, {'id': 1}).$1));
       final r = await ok.query('api/u');
       expect(r.metadata, isNull);
       expect((r.data as Map)['id'], 1);
@@ -165,14 +197,19 @@ void main() {
         ClientOptions(
             httpClient: stub(400, {
           'success': false,
-          'error': {'code': 'hook_error', 'message': 'Hook execution failed', 'detail': 'authentication required'}
+          'error': {
+            'code': 'hook_error',
+            'message': 'Hook execution failed',
+            'detail': 'authentication required'
+          }
         }).$1),
       );
       await expectLater(
         bad.query('api/u'),
         throwsA(isA<ResolveSpecException>()
             .having((e) => e.error.code, 'code', 'hook_error')
-            .having((e) => e.error.detail, 'detail', 'authentication required')),
+            .having(
+                (e) => e.error.detail, 'detail', 'authentication required')),
       );
     });
   });

@@ -62,7 +62,8 @@ const _operatorMap = {
 
 String _scalar(Object? v) => v == null ? '' : v.toString();
 
-String _filterValue(Object? v) => v is Iterable ? v.map(_scalar).join(',') : _scalar(v);
+String _filterValue(Object? v) =>
+    v is Iterable ? v.map(_scalar).join(',') : _scalar(v);
 
 /// Base64 (UTF-8) with the `ZIP_` prefix.
 String encodeHeaderValue(String v) => 'ZIP_${base64.encode(utf8.encode(v))}';
@@ -85,7 +86,8 @@ String decodeHeaderValue(String v) {
 
 /// Encode values that are unsafe as raw header/query text (non-ASCII, control chars, edge spaces).
 String _safe(String v) {
-  final unsafe = v != v.trim() || v.runes.any((c) => c > 127 || c < 32 || c == 127);
+  final unsafe =
+      v != v.trim() || v.runes.any((c) => c > 127 || c < 32 || c == 127);
   return unsafe ? encodeHeaderValue(v) : v;
 }
 
@@ -104,12 +106,20 @@ Map<String, String> buildHeaders(FuncSpecOptions? o) {
       h['$kind-${_operatorMap[f.operator] ?? f.operator}-${f.column}'] = v;
     }
   }
-  o.searchFilters?.forEach((col, text) => h['X-SearchFilter-$col'] = _safe(text));
-  if (o.customSqlWhere != null && o.customSqlWhere!.isNotEmpty) h['X-Custom-SQL-W'] = _safe(o.customSqlWhere!);
-  if (o.customSqlOr != null && o.customSqlOr!.isNotEmpty) h['X-Custom-SQL-Or'] = _safe(o.customSqlOr!);
+  o.searchFilters
+      ?.forEach((col, text) => h['X-SearchFilter-$col'] = _safe(text));
+  if (o.customSqlWhere != null && o.customSqlWhere!.isNotEmpty) {
+    h['X-Custom-SQL-W'] = _safe(o.customSqlWhere!);
+  }
+  if (o.customSqlOr != null && o.customSqlOr!.isNotEmpty) {
+    h['X-Custom-SQL-Or'] = _safe(o.customSqlOr!);
+  }
   if (o.sort != null && o.sort!.isNotEmpty) {
     // funcspec puts this verbatim into ORDER BY
-    h['X-Sort'] = _safe(o.sort!.map((s) => '${s.column} ${s.direction.toLowerCase() == 'desc' ? 'DESC' : 'ASC'}').join(','));
+    h['X-Sort'] = _safe(o.sort!
+        .map((s) =>
+            '${s.column} ${s.direction.toLowerCase() == 'desc' ? 'DESC' : 'ASC'}')
+        .join(','));
   }
   if (o.limit != null) h['X-Limit'] = '${o.limit}';
   if (o.offset != null) h['X-Offset'] = '${o.offset}';
@@ -132,9 +142,18 @@ Map<String, List<String>> buildQuery(Map<String, Object?>? params) {
   final out = <String, List<String>>{};
   params?.forEach((k, v) {
     if (v == null) return;
-    out[k] = v is Iterable ? v.map((e) => _safe(_scalar(e))).toList() : [_safe(_scalar(v))];
+    out[k] = v is Iterable
+        ? v.map((e) => _safe(_scalar(e))).toList()
+        : [_safe(_scalar(v))];
   });
   return out;
+}
+
+String? _header(Map<String, String> headers, String name) {
+  for (final e in headers.entries) {
+    if (e.key.toLowerCase() == name) return e.value;
+  }
+  return null;
 }
 
 final _contentRange = RegExp(r'(\d+)-(\d+)/(\d+)');
@@ -145,42 +164,60 @@ Metadata _metadata(String? contentRange, FuncSpecOptions? o) {
   final start = int.parse(m.group(1)!);
   final end = int.parse(m.group(2)!);
   final total = int.parse(m.group(3)!);
-  return Metadata(total: total, count: end - start, filtered: total, limit: o?.limit ?? 0, offset: start);
+  return Metadata(
+      total: total,
+      count: end - start,
+      filtered: total,
+      limit: o?.limit ?? 0,
+      offset: start);
 }
 
 /// Client for user-defined SQL endpoints. Routes are defined by the server application.
 class FuncSpecClient {
   final Transport _t;
 
-  FuncSpecClient(String baseUrl, [ClientOptions? options]) : _t = Transport(baseUrl, options);
+  FuncSpecClient(String baseUrl, [ClientOptions? options])
+      : _t = Transport(baseUrl, options);
 
   void close() => _t.close();
 
-  Future<Response> _call(String method, String path, Map<String, Object?>? params, FuncSpecOptions? o, bool list) async {
-    final base = Uri.parse('${_t.baseUrl}/${path.replaceAll(RegExp(r'^/+'), '')}');
+  Future<Response> _call(String method, String path,
+      Map<String, Object?>? params, FuncSpecOptions? o, bool list) async {
+    final base =
+        Uri.parse('${_t.baseUrl}/${path.replaceAll(RegExp(r'^/+'), '')}');
     final pairs = <String>[];
     buildQuery(params).forEach((k, vs) {
       for (final v in vs) {
-        pairs.add('${Uri.encodeQueryComponent(k)}=${Uri.encodeQueryComponent(v)}');
+        pairs.add(
+            '${Uri.encodeQueryComponent(k)}=${Uri.encodeQueryComponent(v)}');
       }
     });
     final uri = pairs.isEmpty ? base : base.replace(query: pairs.join('&'));
 
     final resp = await _t.send(method, uri, extra: buildHeaders(o));
-    if (resp.statusCode < 200 || resp.statusCode > 299) throw Transport.errorFrom(resp); // 206 is success
+    if (resp.statusCode < 200 || resp.statusCode > 299) {
+      throw Transport.errorFrom(resp); // 206 is success
+    }
     final text = utf8.decode(resp.bodyBytes);
     return Response(
       success: true,
       data: text.trim().isEmpty ? null : jsonDecode(text),
-      metadata: list ? _metadata(resp.headers['content-range'], o) : null,
+      metadata:
+          list ? _metadata(_header(resp.headers, 'content-range'), o) : null,
     );
   }
 
   /// Single-record endpoint (SqlQuery). `data` is the row object.
-  Future<Response> query(String path, {Map<String, Object?>? params, FuncSpecOptions? options, String method = 'GET'}) =>
+  Future<Response> query(String path,
+          {Map<String, Object?>? params,
+          FuncSpecOptions? options,
+          String method = 'GET'}) =>
       _call(method.toUpperCase(), path, params, options, false);
 
   /// List endpoint (SqlQueryList). Metadata comes from Content-Range.
-  Future<Response> queryList(String path, {Map<String, Object?>? params, FuncSpecOptions? options, String method = 'GET'}) =>
+  Future<Response> queryList(String path,
+          {Map<String, Object?>? params,
+          FuncSpecOptions? options,
+          String method = 'GET'}) =>
       _call(method.toUpperCase(), path, params, options, true);
 }

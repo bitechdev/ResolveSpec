@@ -2,8 +2,6 @@
 
 Dart / Flutter client for ResolveSpec (JSON body) and FunctionSpec. Depends on `package:http`. Dart >= 3.3.
 
-> Not compiled or tested yet (no Dart SDK was available). Run `dart pub get && dart test` first.
-
 ## Clients
 
 | Type | Constructor | Methods |

@@ -16,7 +16,8 @@ class FilterOption {
   /// AND | OR
   final String? logicOperator;
 
-  const FilterOption(this.column, this.operator, [this.value, this.logicOperator]);
+  const FilterOption(this.column, this.operator,
+      [this.value, this.logicOperator]);
 
   Map<String, dynamic> toJson() => _compact({
         'column': column,
@@ -44,7 +45,8 @@ class Parameter {
 
   const Parameter(this.name, this.value, [this.sequence]);
 
-  Map<String, dynamic> toJson() => _compact({'name': name, 'value': value, 'sequence': sequence});
+  Map<String, dynamic> toJson() =>
+      _compact({'name': name, 'value': value, 'sequence': sequence});
 }
 
 class CustomOperator {
@@ -139,10 +141,16 @@ class VectorSearchOption {
   final String? as;
   final String? direction;
 
-  const VectorSearchOption(this.column, this.vector, {this.metric, this.as, this.direction});
+  const VectorSearchOption(this.column, this.vector,
+      {this.metric, this.as, this.direction});
 
-  Map<String, dynamic> toJson() =>
-      _compact({'column': column, 'vector': vector, 'metric': metric, 'as': as, 'direction': direction});
+  Map<String, dynamic> toJson() => _compact({
+        'column': column,
+        'vector': vector,
+        'metric': metric,
+        'as': as,
+        'direction': direction
+      });
 }
 
 /// ResolveSpec request options object.
@@ -204,7 +212,12 @@ class Metadata {
   final int limit;
   final int offset;
 
-  const Metadata({this.total = 0, this.count = 0, this.filtered = 0, this.limit = 0, this.offset = 0});
+  const Metadata(
+      {this.total = 0,
+      this.count = 0,
+      this.filtered = 0,
+      this.limit = 0,
+      this.offset = 0});
 
   factory Metadata.fromJson(Map<String, dynamic> j) => Metadata(
         total: (j['total'] as num?)?.toInt() ?? 0,
@@ -227,7 +240,8 @@ class Metadata {
   int get hashCode => Object.hash(total, count, filtered, limit, offset);
 
   @override
-  String toString() => 'Metadata(total: $total, count: $count, filtered: $filtered, limit: $limit, offset: $offset)';
+  String toString() =>
+      'Metadata(total: $total, count: $count, filtered: $filtered, limit: $limit, offset: $offset)';
 }
 
 class ApiError {
@@ -239,7 +253,8 @@ class ApiError {
   final String? detail;
   final String? sql;
 
-  const ApiError({this.code = '', this.message = '', this.details, this.detail, this.sql});
+  const ApiError(
+      {this.code = '', this.message = '', this.details, this.detail, this.sql});
 
   factory ApiError.fromJson(Map<String, dynamic> j) => ApiError(
         code: (j['code'] as String?) ?? '',
@@ -262,7 +277,11 @@ class Response {
   factory Response.fromJson(Map<String, dynamic> j) => Response(
         success: j['success'] == true,
         data: j['data'],
-        metadata: j['metadata'] is Map<String, dynamic> ? Metadata.fromJson(j['metadata'] as Map<String, dynamic>) : null,
-        error: j['error'] is Map<String, dynamic> ? ApiError.fromJson(j['error'] as Map<String, dynamic>) : null,
+        metadata: j['metadata'] is Map<String, dynamic>
+            ? Metadata.fromJson(j['metadata'] as Map<String, dynamic>)
+            : null,
+        error: j['error'] is Map<String, dynamic>
+            ? ApiError.fromJson(j['error'] as Map<String, dynamic>)
+            : null,
       );
 }

@@ -293,6 +293,10 @@ func TestOnTxBeginErrorRollsBackEveryOperation(t *testing.T) {
 
 type stubProvider struct{ security.SecurityProvider }
 
+func (stubProvider) GetColumnSecurity(context.Context, int, string, string) ([]security.ColumnSecurity, error) {
+	return nil, nil
+}
+
 func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
 	h, mock, ctx := newTxHarness(t)
 	list, err := security.NewSecurityList(stubProvider{})
@@ -304,6 +308,7 @@ func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
 	})
 	RegisterSecurityHooks(h, list)
 	ctx = context.WithValue(ctx, security.UserContextKey, &security.UserContext{UserID: 7, UserName: "u"})
+	ctx = context.WithValue(ctx, security.UserIDKey, 7)
 
 	// Update opens two transactions; each must be stamped before any other SQL.
 	cols := []string{"id", "name"}

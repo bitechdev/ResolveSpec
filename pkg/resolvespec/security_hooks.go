@@ -34,6 +34,15 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return security.PreloadSecurityRules(newSecurityContext(hookCtx), securityList, hookCtx.Operation)
 	})
 
+	// BeforeCreate/BeforeUpdate: drop columns hidden or masked for the user from the
+	// write payload, so they cannot be inserted or updated.
+	handler.Hooks().Register(BeforeCreate, func(hookCtx *HookContext) error {
+		return security.ApplyWriteColumnSecurity(newSecurityContext(hookCtx), securityList)
+	})
+	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
+		return security.ApplyWriteColumnSecurity(newSecurityContext(hookCtx), securityList)
+	})
+
 	// Hook 1: BeforeRead - Load security rules
 	handler.Hooks().Register(BeforeRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)
@@ -131,6 +140,14 @@ func (s *securityContext) SetQuery(query interface{}) {
 	if q, ok := query.(common.SelectQuery); ok {
 		s.ctx.Query = q
 	}
+}
+
+func (s *securityContext) GetData() interface{} {
+	return s.ctx.Data
+}
+
+func (s *securityContext) SetData(data interface{}) {
+	s.ctx.Data = data
 }
 
 func (s *securityContext) GetResult() interface{} {

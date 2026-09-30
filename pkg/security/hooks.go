@@ -245,13 +245,26 @@ func LoadSecurityRules(secCtx SecurityContext, securityList *SecurityList) error
 // cache for read operations. Call it from a BeforeHandle hook, i.e. before the
 // handler opens its transaction, so the provider queries do not need a second
 // pooled connection while the transaction holds one. Later LoadSecurityRules
-// calls in the same request are then cache hits. Non-read operations and
-// models with security disabled are skipped.
+// calls in the same request are then cache hits. Reads load column and row
+// rules; create/update load the column rules that ApplyWriteColumnSecurity
+// reads. Other operations and models with security disabled are skipped.
 func PreloadSecurityRules(secCtx SecurityContext, securityList *SecurityList, operation string) error {
-	if operation != "read" || IsModelSecurityDisabled(secCtx) {
+	if IsModelSecurityDisabled(secCtx) {
 		return nil
 	}
-	return loadSecurityRules(secCtx, securityList)
+	switch {
+	case operation == "read":
+		return loadSecurityRules(secCtx, securityList)
+	case isWriteOperation(operation):
+		userID, ok := secCtx.GetUserID()
+		if !ok {
+			return nil
+		}
+		if err := securityList.LoadColumnSecurity(secCtx.GetContext(), userID, secCtx.GetSchema(), secCtx.GetEntity(), false); err != nil {
+			logger.Warn("Failed to load column security: %v", err)
+		}
+	}
+	return nil
 }
 
 // ApplyRowSecurity is a public wrapper for applyRowSecurity that accepts a SecurityContext

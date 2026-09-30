@@ -119,3 +119,4 @@
 - RLS GUC set in `OnTxBegin` is visible to read, create, update, delete queries and hooks.
 - No `Tx: h.db` / `hookCtx.Tx = h.db` left in spec handlers.
 - OPEN: websocketspec `BeforeDisconnect`/`AfterDisconnect` are defined but never executed (connection lifecycle, not DB). Allowlisted in `TestEveryDefinedHookHasACallSite`; wire them to remove the entry.
+- DONE: column-level hide/mask columns are dropped from create/update payloads (`security.ApplyWriteColumnSecurity`); rules preloaded in `BeforeHandle` for create/update. resolvemcp update now runs `BeforeHandle`.

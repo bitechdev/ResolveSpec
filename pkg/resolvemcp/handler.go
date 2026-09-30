@@ -596,6 +596,9 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 		Data:      updates,
 		Tx:        h.db,
 	}
+	if err := h.hooks.Execute(BeforeHandle, hookCtx); err != nil {
+		return nil, err
+	}
 
 	var updateResult interface{}
 	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {

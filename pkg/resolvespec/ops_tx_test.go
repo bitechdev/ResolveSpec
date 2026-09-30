@@ -421,3 +421,65 @@ func TestAfterDeleteErrorRollsBackDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Columns hidden or masked for the user cannot be written. Handlers are called
+// directly here, so the BeforeHandle preload is done by hand.
+func TestColumnSecurityDropsHiddenColumnOnWrite(t *testing.T) {
+	setup := func(t *testing.T) (*Handler, sqlmock.Sqlmock, context.Context, common.ResponseWriter, *httptest.ResponseRecorder) {
+		h, mock, _ := newDeleteHarness(t)
+		list, err := security.NewSecurityList(columnSecProvider{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		RegisterSecurityHooks(h, list)
+
+		ctx, w, rec := opCtx(t)
+		ctx = context.WithValue(ctx, security.UserContextKey, &security.UserContext{UserID: 7, UserName: "u"})
+		ctx = context.WithValue(ctx, security.UserIDKey, 7)
+		pre := newSecurityContext(&HookContext{Context: ctx, Schema: "public", Entity: "items", Model: &delItem{}})
+		for _, op := range []string{"create", "update"} {
+			if err := security.PreloadSecurityRules(pre, list, op); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return h, mock, ctx, w, rec
+	}
+
+	t.Run("create", func(t *testing.T) {
+		h, mock, ctx, w, rec := setup(t)
+		mock.ExpectBegin()
+		mock.ExpectQuery(`INSERT`).WithArgs(7).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+		mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, ""))
+		mock.ExpectCommit()
+
+		payload := map[string]interface{}{"id": 7, "name": "secret"}
+		h.handleCreate(ctx, w, payload, common.RequestOptions{})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body)
+		}
+		if _, ok := payload["name"]; ok {
+			t.Fatalf("hidden column must be dropped from the insert payload: %v", payload)
+		}
+	})
+
+	t.Run("update", func(t *testing.T) {
+		h, mock, ctx, w, rec := setup(t)
+		cols := []string{"id", "name"}
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a"))
+		mock.ExpectExec(`UPDATE`).WithArgs(float64(7), "a", "7").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a"))
+		mock.ExpectCommit()
+
+		payload := map[string]interface{}{"name": "secret"}
+		h.handleUpdate(ctx, w, "7", nil, payload, common.RequestOptions{})
+		if _, ok := payload["name"]; ok {
+			t.Fatalf("hidden column must be dropped from the update payload: %v (status %d %s)", payload, rec.Code, rec.Body)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("update must keep the stored value: %v", err)
+		}
+	})
+}

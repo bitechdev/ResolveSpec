@@ -226,6 +226,12 @@ type ColumnSecurityProvider interface {
 }
 ```
 
+Write side (`RegisterSecurityHooks`, all specs except funcspec):
+- Columns with a `hide` or `mask` rule (single-element `Path`) are removed from create/update payloads in `BeforeCreate`/`BeforeUpdate`; the write is not rejected.
+- Match is case-insensitive on the rule path vs payload key, model field/JSON name or `gorm` column.
+- Rules are preloaded in `BeforeHandle` (outside the tx); the hook only reads the cache and fails closed if rules were not loaded.
+- Not covered: nested child records, nested `Path` (JSON sub-values), funcspec.
+
 #### 3. RowSecurityProvider
 Manages row-level security (WHERE clause filtering):
 

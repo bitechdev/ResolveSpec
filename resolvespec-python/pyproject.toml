@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "resolvespec"
+version = "1.0.0"
+description = "Python client for ResolveSpec REST, HeaderSpec and WebSocket APIs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hein (Warkanum) Puth" }]
+keywords = ["resolvespec", "headerspec", "websocket", "rest-client", "api-client"]
+dependencies = ["httpx>=0.27", "websockets>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/resolvespec"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

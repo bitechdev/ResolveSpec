@@ -771,3 +771,65 @@ func TestHandler_HandleIncomingMessage_ValidMessage(t *testing.T) {
 	// Should not panic or error
 	handler.handleIncomingMessage("spec/test-client/request", payload)
 }
+
+func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
+	newHook := func(id string, data map[string]interface{}) *HookContext {
+		return &HookContext{
+			Context:   context.Background(),
+			TableName: "users",
+			Model:     &TestUser{},
+			ModelPtr:  &TestUser{},
+			Schema:    "public",
+			Entity:    "users",
+			ID:        id,
+			Data:      data,
+			Options:   &common.RequestOptions{},
+		}
+	}
+	seed := func(t *testing.T, db *gorm.DB) {
+		require.NoError(t, db.Create(&TestUser{ID: 1, Name: "Original", Email: "orig@example.com", Status: "active"}).Error)
+	}
+
+	t.Run("empty string clears only that field", func(t *testing.T) {
+		handler, db := setupTestHandler(t)
+		seed(t, db)
+
+		_, err := handler.update(newHook("1", map[string]interface{}{"name": ""}))
+		require.NoError(t, err)
+
+		var got TestUser
+		require.NoError(t, db.First(&got, 1).Error)
+		assert.Equal(t, "", got.Name)
+		assert.Equal(t, "orig@example.com", got.Email)
+		assert.Equal(t, "active", got.Status)
+	})
+
+	t.Run("absent keys are untouched", func(t *testing.T) {
+		handler, db := setupTestHandler(t)
+		seed(t, db)
+
+		_, err := handler.update(newHook("1", map[string]interface{}{"status": "inactive"}))
+		require.NoError(t, err)
+
+		var got TestUser
+		require.NoError(t, db.First(&got, 1).Error)
+		assert.Equal(t, "Original", got.Name)
+		assert.Equal(t, "orig@example.com", got.Email)
+		assert.Equal(t, "inactive", got.Status)
+	})
+
+	t.Run("disallowNulls skips null but applies empty string", func(t *testing.T) {
+		handler, db := setupTestHandler(t)
+		handler.SetDisallowNulls(true)
+		seed(t, db)
+
+		_, err := handler.update(newHook("1", map[string]interface{}{"name": nil, "status": ""}))
+		require.NoError(t, err)
+
+		var got TestUser
+		require.NoError(t, db.First(&got, 1).Error)
+		assert.Equal(t, "Original", got.Name)
+		assert.Equal(t, "", got.Status)
+		assert.Equal(t, "orig@example.com", got.Email)
+	})
+}

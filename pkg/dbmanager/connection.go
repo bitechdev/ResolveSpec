@@ -55,13 +55,15 @@ type ConnectionStats struct {
 	HealthCheckStatus string
 
 	// SQL connection pool stats
-	OpenConnections   int
-	InUse             int
-	Idle              int
-	WaitCount         int64
-	WaitDuration      time.Duration
-	MaxIdleClosed     int64
-	MaxLifetimeClosed int64
+	OpenConnections    int
+	MaxOpenConnections int
+	TotalOpened        int64 // physical connections ever opened
+	InUse              int
+	Idle               int
+	WaitCount          int64
+	WaitDuration       time.Duration
+	MaxIdleClosed      int64
+	MaxLifetimeClosed  int64
 }
 
 // sqlConnection implements Connection for SQL databases (PostgreSQL, SQLite, MSSQL)
@@ -415,6 +417,8 @@ func (c *sqlConnection) Stats() *ConnectionStats {
 	if c.connected && c.provider != nil {
 		if providerStats := c.provider.Stats(); providerStats != nil {
 			stats.OpenConnections = providerStats.OpenConnections
+			stats.MaxOpenConnections = providerStats.MaxOpenConnections
+			stats.TotalOpened = providerStats.TotalOpened
 			stats.InUse = providerStats.InUse
 			stats.Idle = providerStats.Idle
 			stats.WaitCount = providerStats.WaitCount

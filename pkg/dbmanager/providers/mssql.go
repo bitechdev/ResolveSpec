@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb" // MSSQL driver
@@ -16,6 +17,7 @@ import (
 type MSSQLProvider struct {
 	db     *sql.DB
 	config ConnectionConfig
+	opened atomic.Int64
 }
 
 // NewMSSQLProvider creates a new MSSQL provider
@@ -52,7 +54,7 @@ func (p *MSSQLProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 		}
 
 		// Open database connection
-		db, err = sql.Open("sqlserver", dsn)
+		db, err = openCounted("sqlserver", dsn, &p.opened)
 		if err != nil {
 			lastErr = err
 			if cfg.GetEnableLogging() {
@@ -169,15 +171,17 @@ func (p *MSSQLProvider) Stats() *ConnectionStats {
 	stats := p.db.Stats()
 
 	return &ConnectionStats{
-		Name:              p.config.GetName(),
-		Type:              "mssql",
-		Connected:         true,
-		OpenConnections:   stats.OpenConnections,
-		InUse:             stats.InUse,
-		Idle:              stats.Idle,
-		WaitCount:         stats.WaitCount,
-		WaitDuration:      stats.WaitDuration,
-		MaxIdleClosed:     stats.MaxIdleClosed,
-		MaxLifetimeClosed: stats.MaxLifetimeClosed,
+		Name:               p.config.GetName(),
+		Type:               "mssql",
+		Connected:          true,
+		OpenConnections:    stats.OpenConnections,
+		MaxOpenConnections: stats.MaxOpenConnections,
+		TotalOpened:        p.opened.Load(),
+		InUse:              stats.InUse,
+		Idle:               stats.Idle,
+		WaitCount:          stats.WaitCount,
+		WaitDuration:       stats.WaitDuration,
+		MaxIdleClosed:      stats.MaxIdleClosed,
+		MaxLifetimeClosed:  stats.MaxLifetimeClosed,
 	}
 }

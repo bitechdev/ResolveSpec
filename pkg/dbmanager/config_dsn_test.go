@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestPostgresDSNEscapesCredentials(t *testing.T) {
@@ -82,6 +84,18 @@ func TestSQLiteMemoryPoolPinned(t *testing.T) {
 	db, _ := conn.Native()
 	if got := db.Stats().MaxOpenConnections; got != 1 {
 		t.Fatalf("MaxOpenConnections = %d, want 1 for :memory:", got)
+	}
+	if got := conn.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("ConnectionStats.MaxOpenConnections = %d, want 1", got)
+	}
+	mgr.(*connectionManager).PublishMetrics()
+	name := conn.Name()
+	var m dto.Metric
+	if err := connectionPoolSize.WithLabelValues(name, string(conn.Stats().Type), "max").Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.GetGauge().GetValue(); got != 1 {
+		t.Fatalf("pool_size{state=max} = %v, want 1", got)
 	}
 	if _, err := db.Exec("CREATE TABLE t(a int)"); err != nil {
 		t.Fatal(err)

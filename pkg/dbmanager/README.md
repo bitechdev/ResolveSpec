@@ -319,9 +319,10 @@ fmt.Printf("Healthy: %d, Unhealthy: %d\n", stats.HealthyCount, stats.UnhealthyCo
 
 // Per-connection stats
 for name, connStats := range stats.ConnectionStats {
-    fmt.Printf("%s: %d open, %d in use, %d idle\n",
+    fmt.Printf("%s: %d open (max %d, 0 = unlimited), %d in use, %d idle\n",
         name,
         connStats.OpenConnections,
+        connStats.MaxOpenConnections,
         connStats.InUse,
         connStats.Idle)
 }
@@ -340,7 +341,8 @@ The package automatically exports Prometheus metrics:
 
 - `dbmanager_connections_total` - Total configured connections by type
 - `dbmanager_connection_status` - Connection health status (1=healthy, 0=unhealthy)
-- `dbmanager_connection_pool_size` - Connection pool statistics by state
+- `dbmanager_connections_opened_total` - Physical connections ever opened (counter; for a pool wrapped via `existing_db` this is derived from open + closed counts and can undercount)
+- `dbmanager_connection_pool_size` - Connection pool statistics by state (`open`, `idle`, `in_use`, `max`; `max` 0 = unlimited)
 - `dbmanager_connection_wait_count` - Times connections waited for availability
 - `dbmanager_connection_wait_duration_seconds` - Total wait duration
 - `dbmanager_health_check_duration_seconds` - Health check execution time

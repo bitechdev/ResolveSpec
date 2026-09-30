@@ -112,6 +112,12 @@ func (p *ExistingDBProvider) Stats() *ConnectionStats {
 	if p.db != nil {
 		dbStats := p.db.Stats()
 		stats.OpenConnections = dbStats.OpenConnections
+		stats.MaxOpenConnections = dbStats.MaxOpenConnections
+		// The pool was opened outside dbmanager so dials cannot be counted.
+		// Open plus every connection database/sql retired for idle or
+		// lifetime limits is a close lower bound (it misses connections
+		// dropped as broken).
+		stats.TotalOpened = int64(dbStats.OpenConnections) + dbStats.MaxIdleClosed + dbStats.MaxIdleTimeClosed + dbStats.MaxLifetimeClosed
 		stats.InUse = dbStats.InUse
 		stats.Idle = dbStats.Idle
 		stats.WaitCount = dbStats.WaitCount

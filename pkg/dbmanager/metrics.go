@@ -32,7 +32,7 @@ var (
 			Name: "dbmanager_connection_pool_size",
 			Help: "Current connection pool size",
 		},
-		[]string{"name", "type", "state"}, // state: open, idle, in_use
+		[]string{"name", "type", "state"}, // state: open, idle, in_use, max
 	)
 
 	// connectionWaitCount tracks how many times connections had to wait for availability
@@ -67,6 +67,15 @@ var (
 		prometheus.CounterOpts{
 			Name: "dbmanager_connection_lifetime_closed_total",
 			Help: "Total connections closed due to exceeding max lifetime",
+		},
+		[]string{"name", "type"},
+	)
+
+	// connectionOpened tracks physical connections ever opened
+	connectionOpened = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dbmanager_connections_opened_total",
+			Help: "Total physical connections opened by the pool",
 		},
 		[]string{"name", "type"},
 	)
@@ -115,6 +124,7 @@ func (m *connectionManager) PublishMetrics() {
 			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "open").Set(float64(connStats.OpenConnections))
 			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "idle").Set(float64(connStats.Idle))
 			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "in_use").Set(float64(connStats.InUse))
+			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "max").Set(float64(connStats.MaxOpenConnections))
 
 			// sql.DBStats values are cumulative, so add only the growth since
 			// the last publish to keep these true counters.
@@ -122,6 +132,7 @@ func (m *connectionManager) PublishMetrics() {
 			connectionWaitCount.With(labels).Add(float64(connStats.WaitCount - prev.WaitCount))
 			connectionWaitDuration.With(labels).Add((connStats.WaitDuration - prev.WaitDuration).Seconds())
 			connectionLifetimeClosed.With(labels).Add(float64(connStats.MaxLifetimeClosed - prev.MaxLifetimeClosed))
+			connectionOpened.With(labels).Add(float64(connStats.TotalOpened - prev.TotalOpened))
 			connectionIdleClosed.With(labels).Add(float64(connStats.MaxIdleClosed - prev.MaxIdleClosed))
 		}
 	}
@@ -152,7 +163,7 @@ func (p *publishedStats) swap(name string, cur *ConnectionStats) ConnectionStats
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	prev := p.last[name]
-	if cur.WaitCount < prev.WaitCount || cur.MaxIdleClosed < prev.MaxIdleClosed || cur.MaxLifetimeClosed < prev.MaxLifetimeClosed {
+	if cur.WaitCount < prev.WaitCount || cur.MaxIdleClosed < prev.MaxIdleClosed || cur.MaxLifetimeClosed < prev.MaxLifetimeClosed || cur.TotalOpened < prev.TotalOpened {
 		prev = ConnectionStats{}
 	}
 	p.last[name] = *cur

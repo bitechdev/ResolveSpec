@@ -3,9 +3,11 @@ package providers
 import (
 	"context"
 	"database/sql"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	_ "github.com/glebarez/sqlite"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -159,6 +161,10 @@ func TestExistingDBProvider_Stats(t *testing.T) {
 		t.Errorf("Expected stats.Type to be 'sql', got '%s'", stats.Type)
 	}
 
+	if stats.MaxOpenConnections != 10 {
+		t.Errorf("Expected stats.MaxOpenConnections to be 10, got %d", stats.MaxOpenConnections)
+	}
+
 	if !stats.Connected {
 		t.Error("Expected stats.Connected to be true")
 	}
@@ -190,5 +196,37 @@ func TestExistingDBProvider_Close_NilDB(t *testing.T) {
 	err := provider.Close()
 	if err != nil {
 		t.Errorf("Expected Close to succeed with nil database, got error: %v", err)
+	}
+}
+
+func TestOpenCountedCountsDials(t *testing.T) {
+	var opened atomic.Int64
+	db, err := openCounted("sqlite", ":memory:", &opened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Load(); got != 1 {
+		t.Fatalf("opened = %d after first ping, want 1", got)
+	}
+	// Reusing the pooled connection must not count as a new dial.
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Load(); got != 1 {
+		t.Fatalf("opened = %d after reuse, want 1", got)
+	}
+	// Dropping idle connections forces a fresh dial.
+	db.SetMaxIdleConns(0)
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Load(); got != 2 {
+		t.Fatalf("opened = %d after redial, want 2", got)
 	}
 }

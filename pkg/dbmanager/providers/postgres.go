@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -21,6 +22,7 @@ type PostgresProvider struct {
 	config    ConnectionConfig
 	listener  *PostgresListener
 	mu        sync.Mutex
+	opened    atomic.Int64
 }
 
 // NewPostgresProvider creates a new PostgreSQL provider
@@ -38,7 +40,7 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 	// The connector and *sql.DB are created once; the pool is never closed to
 	// recover from errors (see Refresh).
 	connector := newPGConnector(connCfg)
-	db := sql.OpenDB(connector)
+	db := sql.OpenDB(&countingConnector{Connector: connector, opened: &p.opened})
 
 	// Connect with retry logic
 	var lastErr error
@@ -201,16 +203,18 @@ func (p *PostgresProvider) Stats() *ConnectionStats {
 	stats := p.db.Stats()
 
 	return &ConnectionStats{
-		Name:              p.config.GetName(),
-		Type:              "postgres",
-		Connected:         true,
-		OpenConnections:   stats.OpenConnections,
-		InUse:             stats.InUse,
-		Idle:              stats.Idle,
-		WaitCount:         stats.WaitCount,
-		WaitDuration:      stats.WaitDuration,
-		MaxIdleClosed:     stats.MaxIdleClosed,
-		MaxLifetimeClosed: stats.MaxLifetimeClosed,
+		Name:               p.config.GetName(),
+		Type:               "postgres",
+		Connected:          true,
+		OpenConnections:    stats.OpenConnections,
+		MaxOpenConnections: stats.MaxOpenConnections,
+		TotalOpened:        p.opened.Load(),
+		InUse:              stats.InUse,
+		Idle:               stats.Idle,
+		WaitCount:          stats.WaitCount,
+		WaitDuration:       stats.WaitDuration,
+		MaxIdleClosed:      stats.MaxIdleClosed,
+		MaxLifetimeClosed:  stats.MaxLifetimeClosed,
 	}
 }
 

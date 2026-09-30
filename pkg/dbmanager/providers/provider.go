@@ -27,13 +27,15 @@ type ConnectionStats struct {
 	HealthCheckStatus string
 
 	// SQL connection pool stats
-	OpenConnections   int
-	InUse             int
-	Idle              int
-	WaitCount         int64
-	WaitDuration      time.Duration
-	MaxIdleClosed     int64
-	MaxLifetimeClosed int64
+	OpenConnections    int
+	MaxOpenConnections int
+	TotalOpened        int64 // physical connections ever dialled (0 when unknown)
+	InUse              int
+	Idle               int
+	WaitCount          int64
+	WaitDuration       time.Duration
+	MaxIdleClosed      int64
+	MaxLifetimeClosed  int64
 }
 
 // ConnectionConfig is a minimal interface for configuration

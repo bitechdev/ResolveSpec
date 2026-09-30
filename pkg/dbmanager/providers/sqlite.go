@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/glebarez/sqlite" // Pure Go SQLite driver
@@ -19,6 +20,7 @@ type SQLiteProvider struct {
 	db     *sql.DB
 	dbMu   sync.RWMutex
 	config ConnectionConfig
+	opened atomic.Int64
 }
 
 // NewSQLiteProvider creates a new SQLite provider
@@ -51,7 +53,7 @@ func (p *SQLiteProvider) Connect(ctx context.Context, cfg ConnectionConfig) erro
 	}
 
 	// Open database connection
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openCounted("sqlite", dsn, &p.opened)
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite connection: %w", err)
 	}
@@ -178,15 +180,17 @@ func (p *SQLiteProvider) Stats() *ConnectionStats {
 	stats := p.db.Stats()
 
 	return &ConnectionStats{
-		Name:              p.config.GetName(),
-		Type:              "sqlite",
-		Connected:         true,
-		OpenConnections:   stats.OpenConnections,
-		InUse:             stats.InUse,
-		Idle:              stats.Idle,
-		WaitCount:         stats.WaitCount,
-		WaitDuration:      stats.WaitDuration,
-		MaxIdleClosed:     stats.MaxIdleClosed,
-		MaxLifetimeClosed: stats.MaxLifetimeClosed,
+		Name:               p.config.GetName(),
+		Type:               "sqlite",
+		Connected:          true,
+		OpenConnections:    stats.OpenConnections,
+		MaxOpenConnections: stats.MaxOpenConnections,
+		TotalOpened:        p.opened.Load(),
+		InUse:              stats.InUse,
+		Idle:               stats.Idle,
+		WaitCount:          stats.WaitCount,
+		WaitDuration:       stats.WaitDuration,
+		MaxIdleClosed:      stats.MaxIdleClosed,
+		MaxLifetimeClosed:  stats.MaxLifetimeClosed,
 	}
 }

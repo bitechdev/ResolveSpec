@@ -1000,12 +1000,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		logger.Debug("FetchRowNumber: Row number %d set in metadata", *fetchedRowNumber)
 	}
 
-	// Execute AfterRead hooks (runs after the transaction commits, against the pooled db)
-	hookCtx.Tx = h.db
+	// Execute AfterRead hooks in a second short transaction: the read tx has
+	// already committed, and hooks must never get the pooled connection.
 	hookCtx.Result = modelPtr
 	hookCtx.Error = nil
 
-	if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
+	if err := h.runInTx(ctx, hookCtx, func(common.Database) error {
+		return h.hooks.Execute(AfterRead, hookCtx)
+	}); err != nil {
 		logger.Error("AfterRead hook failed: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
 		return

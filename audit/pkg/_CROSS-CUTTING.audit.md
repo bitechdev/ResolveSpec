@@ -23,7 +23,7 @@ per-package audits reference this file rather than restating them.
 | X5 | **Medium** | locking | Unsynchronized package-level mutable globals are the dominant concurrency pattern |
 | X6 | **Medium** | security | Insecure-by-default transport across the board: `sslmode: disable`, `WithInsecure()`, no TLS in cache configs |
 | X7 | **Medium** | panic handling | Panic handling is inconsistent and, where it exists, tends to fail open |
-| X8 | **Medium** | security | `logger.Warn`/`Error` forward every message to Sentry unscrubbed, and error strings routinely embed attacker data |
+| X8 | **Medium** | security | `logger.Warn`/`Error` forward every message to Sentry unscrubbed, and error strings routinely embed attacker data *(partly fixed 2026-09-30: redaction and rate limiting added in `pkg/logger`; call sites still embed attacker data)* |
 | X9 | **Low** | testing | Test coverage is extremely uneven: 5 packages have no test file at all |
 
 The table is ordered by severity; the sections below are in ID order, since other
@@ -67,7 +67,7 @@ every one of them on the first run:
 | `pkg/cache` | `defaultCache` read/written by concurrent request handlers | `cache.audit.md` finding 3 |
 | `pkg/config` | `*viper.Viper` has no internal lock; `configInstance` singleton | `config.audit.md` findings 1, 2 |
 | `pkg/logger` | `Logger`, `errorTracker` globals | `logger.audit.md` finding 1 |
-| `pkg/modelregistry` | `defaultRegistry` read by 6 functions without the lock | `modelregistry.audit.md` findings 2, 8 |
+| `pkg/modelregistry` | `defaultRegistry` read by 6 functions without the lock | `modelregistry.audit.md` findings 2, 8 *(fixed 2026-09-30)* |
 | `pkg/tracing` | `tracer` global | `tracing.audit.md` finding 5 |
 | `pkg/errortracking` | `sentry.Init` mutates process globals | `errortracking.audit.md` finding 2 |
 
@@ -160,7 +160,7 @@ The test bodies that exist but are never executed by CI:
 | `metrics` | 1 | 64 | no |
 | `resolvemcp` | 1 | 34 | no |
 | `logger` | 0 | 0 | — |
-| `modelregistry` | 0 | 0 | — |
+| `modelregistry` | 1 | ~150 | yes (`-race`) *(added 2026-09-30)* |
 | `testmodels` | 0 | 0 | — |
 | `tracing` | 0 | 0 | — |
 
@@ -308,7 +308,7 @@ package-level variables, and most guard it with nothing:
 | `pkg/cache` | `defaultCache *Cache` (`cache.go:10`) | **no** |
 | `pkg/config` | `configInstance *Manager` (`manager.go:15`) | **no** |
 | `pkg/tracing` | `tracer` (`tracing.go:19`) | **no** |
-| `pkg/modelregistry` | `defaultRegistry` | partially — `TryLock` with a retry/`time.Sleep` loop, and 6 functions read it unlocked |
+| `pkg/modelregistry` | `defaultRegistry` | **yes** *(fixed 2026-09-30)* — guarded by `registriesMutex`; all access via `GetDefaultRegistry()` |
 | `pkg/metrics` | `globalProvider` (`interfaces.go:50-51`) | **yes** — `globalProviderMu sync.RWMutex` |
 
 `pkg/metrics` is the model the others should follow:
@@ -524,7 +524,7 @@ codebase invites it by logging the header contents as the diagnostic.
 only **Critical** authorization finding: `GetModel` returns a "registry locked"
 error under write-lock contention, which `security/hooks.go:274-294` converts
 into `return nil // model not registered, allow by default`
-(`modelregistry.audit.md` finding 1). A twenty-line test that registers a model
+(`modelregistry.audit.md` finding 1; *fixed 2026-09-30, regression tests added*). A twenty-line test that registers a model
 from one goroutine while reading it from another would demonstrate the fail-open
 immediately. The package guards a security boundary and has never been tested.
 

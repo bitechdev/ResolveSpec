@@ -1787,7 +1787,7 @@ func checkModelUpdateAllowed(secCtx SecurityContext) error {
 `checkModelDeleteAllowed` is identical (`:298-318`, fail-open at `:311`). A model
 served by the spec handler but absent from the registry — or present under a name
 the two lookups do not produce — is fully writable. This is the consuming side of
-`modelregistry.audit.md` finding 1: the registry's lookup failure and this
+`modelregistry.audit.md` finding 1 (*registry side fixed 2026-09-30: `checkModelUpdateAllowed`/`checkModelDeleteAllowed` now allow only on `ErrModelNotFound`*): the registry's lookup failure and this
 `return nil` combine into "unknown model ⇒ permitted".
 
 **Any authenticated user may perform any operation.** `CheckModelAuthAllowed` is

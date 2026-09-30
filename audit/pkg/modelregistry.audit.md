@@ -38,6 +38,34 @@ There are **no tests** in this package and no `-race` coverage of it anywhere.
 | 12 | Low | Panic | Package has no `recover` anywhere, and calls a caller-supplied callback under a lock (see 6) |
 | 13 | Low | Security | `DefaultModelRules()` grants `CanRead/Update/Create/Delete: true` — registration without explicit rules is fully mutable |
 
+## Resolution (2026-09-30)
+
+Fixed in `pkg/modelregistry/model_registry.go`, `pkg/security/hooks.go`, and new
+`pkg/modelregistry/model_registry_test.go` (passes under `-race`).
+
+| # | Status | What changed |
+|---|--------|--------------|
+| 1 | **Fixed** | Added sentinels `ErrModelNotFound`, `ErrModelExists`, `ErrInvalidModel` (wrapped, `errors.Is`-friendly). `checkModelUpdateAllowed`/`checkModelDeleteAllowed` now allow-by-default **only** on `ErrModelNotFound`; any other error denies. Lookups can no longer return a "locked" error at all. |
+| 2 | **Fixed** | `GetDefaultRegistry` uses a plain `RLock`; no unsynchronised fallback. |
+| 3 | **Fixed** | `SetDefaultRegistry` uses a blocking `Lock` (cannot silently no-op); a nil registry is ignored. |
+| 4 | **Fixed** | `RegisterModelWithRules` and `RegisterModel` share `registerLocked`, which writes model + rules under one lock acquisition. |
+| 5 | **Fixed** | `GetAllModels`/`GetModels` use blocking locks and can no longer return empty/partial results due to contention. Signatures unchanged (`GetAllModels` is used through interfaces by resolvespec/restheadspec/openapi). |
+| 6 | **Fixed** | `IterateModels` iterates a snapshot; the callback runs with no lock held (regression test re-enters the registry). |
+| 7 | **Fixed** | Try-lock/sleep helpers and `lockRetry*` constants removed. |
+| 8 | **Fixed** | All package-level functions go through `GetDefaultRegistry()` / `registriesSnapshot()`; `defaultRegistry` is only touched under `registriesMutex`. |
+| 9 | **Fixed** | One discipline: blocking locks, snapshot-and-release, documented lock order (`registriesMutex` before a registry's mutex). |
+| 10 | **Fixed** | Reflection/validation (`validateModel`) runs before the write lock is taken. |
+| 11 | **Fixed** | Unwrap loop capped at 16 levels; `type T *T` now returns `ErrInvalidModel` (tested). |
+| 12 | **Fixed** | Sentinel errors added. `IterateModels` recovers a callback panic per model, logs it via `logger.HandlePanic` with the model name, and continues; `validateModel` recovers reflection panics and returns `ErrInvalidModel` so registration fails closed. No lock is held during either, so the registry cannot be wedged. |
+| 13 | **Accepted (decision)** | Allow-by-default retained deliberately: `DefaultModelRules()` still grants read/update/create/delete. Callers wanting restrictions must use `RegisterModelWithRules`/`SetModelRules`. |
+
+Tests added: sentinel errors, recursive pointer type, pointer normalisation, atomic
+`RegisterModelWithRules` (concurrent reader never sees permissive rules), re-entrant `IterateModels`,
+cross-registry `GetModelRulesByName`, and a concurrent `-race` stress test.
+
+Not changed: the `pkg/security` middleware-wiring question (context fast-path) remains tracked in
+`audit/pkg/security.audit.md`.
+
 ---
 
 ## Findings

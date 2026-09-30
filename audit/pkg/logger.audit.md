@@ -32,6 +32,22 @@ There are **zero tests** in this package.
 | 11 | Low | Slowness | `os.Getpid()` called on every log line |
 | 12 | Low | Observability | `UpdateLogger` build failure degrades silently to stdlib `log` |
 
+## Resolution status (2026-09-30)
+
+- **#1** — Fixed (earlier race work): `stateMu` RWMutex with `getLogger`/`swapLogger`/`getErrorTracker`; the exported `Logger` var is kept for compatibility
+- **#2** — Fixed: messages are scrubbed before `CaptureMessage` (URL credentials, `password=`/`token=`/`secret=`/`api_key=` values, `Bearer`/`Basic` tokens). Local logs are unchanged. Sentry `BeforeSend` and structured-field allowlisting are not done
+- **#3** — Partly fixed: global token bucket (burst 50, 20/s) plus per-severity/template dedup (1s, 1024 keys). Panics are not limited. The `error_tracking.sample_rate` default (Sentry maps 0 to 1.0) is still unset in `config/manager.go`
+- **#4** — Partly fixed: `CatchPanicRethrow` added. `pkg/security/provider.go:302` and `:443` still use the swallowing `CatchPanic`; left for the security audit pass
+- **#5** — Fixed: stack captured with `runtime.Stack` into a 16 KiB buffer. Per-fingerprint panic rate limiting not done
+- **#6** — Fixed: `Info`/`Debug` format first and fall back with `log.Printf("%s", ...)`. `gosec` was enabled separately
+- **#7** — Fixed: CR/LF and other control characters are escaped on the stdlib fallback path
+- **#8** — Fixed: `Info`/`Debug` strip `context.Context` args
+- **#9** — Fixed: the replaced logger is synced on `UpdateLogger`
+- **#10** — Fixed: `logger.Sync()` added. Not yet called from the server shutdown path
+- **#11** — Fixed: PID cached in a package var
+- **#12** — Partly fixed: `UpdateLoggerE` returns the build error and a failed build keeps the previous logger. `Init` still returns nothing
+- Tests: `pkg/logger/logger_test.go` (run with `-race`).
+
 ---
 
 ## Findings

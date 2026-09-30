@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -284,7 +285,10 @@ func checkModelUpdateAllowed(secCtx SecurityContext) error {
 			rules, err = modelregistry.GetModelRulesByName(entity)
 		}
 		if err != nil {
-			return nil // model not registered, allow by default
+			if errors.Is(err, modelregistry.ErrModelNotFound) {
+				return nil // model not registered, allow by default
+			}
+			return err
 		}
 	}
 	if !rules.CanUpdate {
@@ -308,7 +312,10 @@ func checkModelDeleteAllowed(secCtx SecurityContext) error {
 			rules, err = modelregistry.GetModelRulesByName(entity)
 		}
 		if err != nil {
-			return nil // model not registered, allow by default
+			if errors.Is(err, modelregistry.ErrModelNotFound) {
+				return nil // model not registered, allow by default
+			}
+			return err
 		}
 	}
 	if !rules.CanDelete {

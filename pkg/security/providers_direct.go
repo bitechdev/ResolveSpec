@@ -218,7 +218,7 @@ func (a *DatabaseAuthenticator) sessionDirect(ctx context.Context, token string)
 			 FROM %s s JOIN %s u ON s.user_id = u.id
 			 WHERE s.session_token = ? AND s.expires_at > ? AND u.is_active = ?`,
 			a.tableNames.UserSessions, a.tableNames.Users))
-		return db.QueryRowContext(ctx, query, token, time.Now(), true).Scan(&userID, &username, &email, &userLevel, &roles, &programUserID, &programUserTable)
+		return db.QueryRowContext(ctx, query, token, time.Now(), true).Scan(&userID, &username, &email, &userLevel, &roles, &programUserID, &programUserTable) //nolint:gosec // G701: identifier comes from trusted config, values are bound parameters
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -242,7 +242,7 @@ func (a *DatabaseAuthenticator) sessionDirect(ctx context.Context, token string)
 func (a *DatabaseAuthenticator) updateSessionActivityDirect(ctx context.Context, sessionToken string) error {
 	return a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := rewritePlaceholders(db, fmt.Sprintf(`UPDATE %s SET last_activity_at = ? WHERE session_token = ? AND expires_at > ?`, a.tableNames.UserSessions))
-		_, err := db.ExecContext(ctx, query, time.Now(), sessionToken, time.Now())
+		_, err := db.ExecContext(ctx, query, time.Now(), sessionToken, time.Now()) //nolint:gosec // G701: identifier comes from trusted config, values are bound parameters
 		return err
 	})
 }

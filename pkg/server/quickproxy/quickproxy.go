@@ -217,7 +217,7 @@ func (s *Service) Handler(fallback http.Handler) http.Handler {
 		// attempt fails; see ErrorHandler above.
 		if r.Body != nil && r.Body != http.NoBody {
 			bodyBytes, err := io.ReadAll(r.Body)
-			r.Body.Close()
+			r.Body.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 			if err != nil {
 				http.Error(w, "failed to read request body", http.StatusInternalServerError)
 				return

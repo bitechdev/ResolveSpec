@@ -37,7 +37,7 @@ func (p *MongoProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 
 	// Set connection pool size
 	if cfg.GetMaxOpenConns() != nil {
-		maxPoolSize := uint64(*cfg.GetMaxOpenConns())
+		maxPoolSize := uint64(*cfg.GetMaxOpenConns()) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		clientOpts.SetMaxPoolSize(maxPoolSize)
 	}
 

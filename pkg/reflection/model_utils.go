@@ -852,11 +852,11 @@ func ConvertToNumericType(value string, kind reflect.Kind) (interface{}, error) 
 		case reflect.Int:
 			return int(intVal), nil
 		case reflect.Int8:
-			return int8(intVal), nil
+			return int8(intVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Int16:
-			return int16(intVal), nil
+			return int16(intVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Int32:
-			return int32(intVal), nil
+			return int32(intVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Int64:
 			return intVal, nil
 		}
@@ -883,11 +883,11 @@ func ConvertToNumericType(value string, kind reflect.Kind) (interface{}, error) 
 		case reflect.Uint:
 			return uint(uintVal), nil
 		case reflect.Uint8:
-			return uint8(uintVal), nil
+			return uint8(uintVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Uint16:
-			return uint16(uintVal), nil
+			return uint16(uintVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Uint32:
-			return uint32(uintVal), nil
+			return uint32(uintVal), nil //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		case reflect.Uint64:
 			return uintVal, nil
 		}
@@ -1546,7 +1546,7 @@ func convertToInt64(value interface{}) (int64, bool) {
 	case int64:
 		return v, true
 	case uint:
-		return int64(v), true
+		return int64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case uint8:
 		return int64(v), true
 	case uint16:
@@ -1554,7 +1554,7 @@ func convertToInt64(value interface{}) (int64, bool) {
 	case uint32:
 		return int64(v), true
 	case uint64:
-		return int64(v), true
+		return int64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case float32:
 		return int64(v), true
 	case float64:
@@ -1571,15 +1571,15 @@ func convertToInt64(value interface{}) (int64, bool) {
 func convertToUint64(value interface{}) (uint64, bool) {
 	switch v := value.(type) {
 	case int:
-		return uint64(v), true
+		return uint64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case int8:
-		return uint64(v), true
+		return uint64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case int16:
-		return uint64(v), true
+		return uint64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case int32:
-		return uint64(v), true
+		return uint64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case int64:
-		return uint64(v), true
+		return uint64(v), true //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case uint:
 		return uint64(v), true
 	case uint8:

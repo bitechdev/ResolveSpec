@@ -686,7 +686,7 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 		i++
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", //nolint:gosec // G201: table identifier is internal/validated; values use placeholders
 		p.tableName,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
@@ -736,7 +736,7 @@ func (p *PgSQLInsertQuery) Scan(ctx context.Context, dest interface{}) (err erro
 		i++
 	}
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", //nolint:gosec // G201: table identifier is internal/validated; values use placeholders
 		p.tableName,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
@@ -886,7 +886,7 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 		i++
 	}
 
-	query := fmt.Sprintf("UPDATE %s SET %s",
+	query := fmt.Sprintf("UPDATE %s SET %s", //nolint:gosec // G201: table identifier is internal/validated; values use placeholders
 		p.tableName,
 		strings.Join(setClauses, ", "))
 
@@ -997,7 +997,7 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 		recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
 
-	query := fmt.Sprintf("DELETE FROM %s", p.tableName)
+	query := fmt.Sprintf("DELETE FROM %s", p.tableName) //nolint:gosec // G201: table identifier is internal/validated; values use placeholders
 
 	if len(p.whereClauses) > 0 {
 		query += " WHERE " + strings.Join(p.whereClauses, " AND ")

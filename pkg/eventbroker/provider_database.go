@@ -584,7 +584,7 @@ func (dp *DatabaseProvider) pollEvents() {
 					dp.stats.EventsConsumed.Add(1)
 					sub.lastSeenID = event.ID
 				case <-sub.ctx.Done():
-					rows.Close()
+					rows.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 					return
 				default:
 					// Channel full, skip
@@ -595,7 +595,7 @@ func (dp *DatabaseProvider) pollEvents() {
 			sub.lastSeenID = event.ID
 		}
 
-		rows.Close()
+		rows.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 	}
 }
 

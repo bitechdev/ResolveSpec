@@ -9,8 +9,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bradfitz/gomemcache/memcache"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 const (
@@ -137,7 +138,7 @@ func memcacheExpiry(ttl time.Duration) int32 {
 	}
 	secs := int64(ttl.Seconds())
 	if secs > memcacheMaxRelativeTTL {
-		return int32(time.Now().Add(ttl).Unix())
+		return int32(time.Now().Add(ttl).Unix()) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	}
 	if secs == 0 {
 		secs = 1

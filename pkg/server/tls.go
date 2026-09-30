@@ -116,7 +116,7 @@ func getCertDirectory() (string, error) {
 // isCertificateValid checks if a certificate file exists and is not expired.
 func isCertificateValid(certFile string) bool {
 	// Check if file exists
-	certData, err := os.ReadFile(certFile)
+	certData, err := os.ReadFile(certFile) //nolint:gosec // G304: path from trusted server config
 	if err != nil {
 		return false
 	}

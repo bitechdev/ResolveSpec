@@ -117,7 +117,7 @@ func (a *DatabaseAuthenticator) OAuthSaveCode(ctx context.Context, code *OAuthCo
 		return a.oauthSaveCodeDirect(ctx, code)
 	}
 
-	input, err := json.Marshal(code)
+	input, err := json.Marshal(code) //nolint:gosec // G117: intentional: field must be serialized
 	if err != nil {
 		return fmt.Errorf("failed to marshal code: %w", err)
 	}

@@ -304,7 +304,7 @@ func (c *Connection) Close() {
 			c.cancel()
 		}
 		if c.ws != nil {
-			c.ws.Close()
+			c.ws.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		}
 
 		// Clean up subscriptions

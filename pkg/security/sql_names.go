@@ -69,7 +69,7 @@ type SQLNames struct {
 
 // DefaultSQLNames returns an SQLNames with all default resolvespec_* values.
 func DefaultSQLNames() *SQLNames {
-	return &SQLNames{
+	return &SQLNames{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		Login:         "resolvespec_login",
 		Register:      "resolvespec_register",
 		Logout:        "resolvespec_logout",

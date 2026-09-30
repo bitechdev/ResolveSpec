@@ -62,7 +62,7 @@ func (p *SQLiteProvider) Connect(ctx context.Context, cfg ConnectionConfig) erro
 	cancel()
 
 	if err != nil {
-		db.Close()
+		db.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		return fmt.Errorf("failed to ping SQLite database: %w", err)
 	}
 

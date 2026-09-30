@@ -55,7 +55,7 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				db.Close()
+				db.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 				return ctx.Err()
 			}
 		}
@@ -78,7 +78,7 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 	}
 
 	if !connected {
-		db.Close()
+		db.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		return fmt.Errorf("failed to connect after %d attempts: %w", retryAttempts, lastErr)
 	}
 

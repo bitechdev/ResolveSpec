@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // RedisProvider is a Redis implementation of the Provider interface.

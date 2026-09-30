@@ -213,7 +213,7 @@ func OAuth2CallbackHandler(auth *security.DatabaseAuthenticator, providerName, a
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(loginResp) //nolint:errcheck
+		json.NewEncoder(w).Encode(loginResp) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 	}
 }
 

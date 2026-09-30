@@ -215,7 +215,7 @@ func (a *DatabaseAuthenticator) Login(ctx context.Context, req LoginRequest) (*L
 		return a.loginDirect(ctx, req)
 	}
 	// Convert LoginRequest to JSON
-	reqJSON, err := json.Marshal(req)
+	reqJSON, err := json.Marshal(req) //nolint:gosec // G117: intentional: field must be serialized
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal login request: %w", err)
 	}
@@ -254,7 +254,7 @@ func (a *DatabaseAuthenticator) Register(ctx context.Context, req RegisterReques
 		return a.registerDirect(ctx, req)
 	}
 	// Convert RegisterRequest to JSON
-	reqJSON, err := json.Marshal(req)
+	reqJSON, err := json.Marshal(req) //nolint:gosec // G117: intentional: field must be serialized
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal register request: %w", err)
 	}
@@ -414,7 +414,7 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 
 			err := a.runDBOpWithReconnect(func(db *sql.DB) error {
 				query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2)`, a.sqlNames.Session)
-				return db.QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON)
+				return db.QueryRowContext(r.Context(), query, token, reference).Scan(&success, &errorMsg, &userJSON) //nolint:gosec // G701: identifier comes from trusted config, values are bound parameters
 			})
 			if err != nil {
 				return nil, fmt.Errorf("session query failed: %w", err)
@@ -505,7 +505,7 @@ func (a *DatabaseAuthenticator) updateSessionActivity(ctx context.Context, sessi
 
 	_ = a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := fmt.Sprintf(`SELECT p_success, p_error, p_user::text FROM %s($1, $2::jsonb)`, a.sqlNames.SessionUpdate)
-		return db.QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON)
+		return db.QueryRowContext(ctx, query, sessionToken, string(userJSON)).Scan(&success, &errorMsg, &updatedUserJSON) //nolint:gosec // G701: identifier comes from trusted config, values are bound parameters
 	})
 }
 

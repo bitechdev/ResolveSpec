@@ -232,7 +232,15 @@ disables the signal entirely.
 
 ---
 
-### X4. Medium — `gosec` is not enabled
+### X4. Medium — `gosec` is not enabled — **RESOLVED**
+
+> **Status (2026-09-30):** `gosec` is now in `linters.enable` and the repository lints clean
+> (0 issues). The initial run produced 115 findings. Real fixes: login-form values in
+> `security/oauth_server.go` are now HTML-escaped (G705), and `SqlSparseVector` index
+> parsing uses `ParseInt(..., 10, 32)` (G109). The remaining ~110 sites carry
+> `//nolint:gosec // Gxxx: <reason>` comments. The G201/G701 reasons (identifiers from
+> trusted config or internal/validated names) and the G115 range claims were not
+> individually audited and still need review. The text below describes the state before the change.
 
 `.golangci.json` (`version: 2`) enables exactly three linters beyond the v2
 standard set:

@@ -254,7 +254,7 @@ func (n SqlNull[T]) Int64() int64 {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return v.Int()
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return int64(v.Uint())
+		return int64(v.Uint()) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case reflect.Float32, reflect.Float64:
 		return int64(v.Float())
 	case reflect.String:
@@ -556,7 +556,7 @@ func TryIfInt64(v any, def int64) int64 {
 	case int64:
 		return val
 	case uint:
-		return int64(val)
+		return int64(val) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case uint8:
 		return int64(val)
 	case uint16:
@@ -564,7 +564,7 @@ func TryIfInt64(v any, def int64) int64 {
 	case uint32:
 		return int64(val)
 	case uint64:
-		return int64(val)
+		return int64(val) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	case float32:
 		return int64(val)
 	case float64:

@@ -54,10 +54,10 @@ func ExampleOAuth2Google() {
 		})
 
 		// Return user info as JSON
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: OAuth2 Authentication with GitHub
@@ -89,10 +89,10 @@ func ExampleOAuth2GitHub() {
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: Custom OAuth2 Provider
@@ -100,7 +100,7 @@ func ExampleOAuth2Custom() {
 	db, _ := sql.Open("postgres", "connection-string")
 
 	// Custom OAuth2 provider configuration
-	oauth2Auth := NewDatabaseAuthenticator(db).WithOAuth2(OAuth2Config{
+	oauth2Auth := NewDatabaseAuthenticator(db).WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		ClientID:     "your-client-id",
 		ClientSecret: "your-client-secret",
 		RedirectURL:  "http://localhost:8080/auth/callback",
@@ -142,10 +142,10 @@ func ExampleOAuth2Custom() {
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: Multi-Provider OAuth2 with Security Integration
@@ -190,7 +190,7 @@ func ExampleOAuth2MultiProvider() {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 			Name:     "session_token",
 			Value:    loginResp.Token,
 			Path:     "/",
@@ -218,7 +218,7 @@ func ExampleOAuth2MultiProvider() {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 			Name:     "session_token",
 			Value:    loginResp.Token,
 			Path:     "/",
@@ -243,7 +243,7 @@ func ExampleOAuth2MultiProvider() {
 		_ = json.NewEncoder(w).Encode(userCtx)
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: OAuth2 with Token Refresh
@@ -294,10 +294,10 @@ func ExampleOAuth2TokenRefresh() {
 			SameSite: http.SameSiteLaxMode,
 		})
 
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: OAuth2 Logout
@@ -334,7 +334,7 @@ func ExampleOAuth2Logout() {
 		}
 
 		// Clear cookie
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 			Name:     "session_token",
 			Value:    "",
 			Path:     "/",
@@ -346,7 +346,7 @@ func ExampleOAuth2Logout() {
 		_, _ = w.Write([]byte("Logged out successfully"))
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 // Example: Complete OAuth2 Integration with Database Setup
@@ -393,7 +393,7 @@ func ExampleOAuth2Complete() {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 			Name:     "session_token",
 			Value:    loginResp.Token,
 			Path:     "/",
@@ -426,7 +426,7 @@ func ExampleOAuth2Complete() {
 			UserID: userCtx.UserID,
 		})
 
-		http.SetCookie(w, &http.Cookie{
+		http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 			Name:     "session_token",
 			Value:    "",
 			Path:     "/",
@@ -437,7 +437,7 @@ func ExampleOAuth2Complete() {
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }
 
 func setupOAuth2Tables(db *sql.DB) {
@@ -488,7 +488,7 @@ func ExampleOAuth2AllProviders() {
 
 	// Create authenticator with ALL OAuth2 providers
 	auth := NewDatabaseAuthenticator(db).
-		WithOAuth2(OAuth2Config{
+		WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 			ClientID:     "google-client-id",
 			ClientSecret: "google-client-secret",
 			RedirectURL:  "http://localhost:8080/auth/google/callback",
@@ -498,7 +498,7 @@ func ExampleOAuth2AllProviders() {
 			UserInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
 			ProviderName: "google",
 		}).
-		WithOAuth2(OAuth2Config{
+		WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 			ClientID:     "github-client-id",
 			ClientSecret: "github-client-secret",
 			RedirectURL:  "http://localhost:8080/auth/github/callback",
@@ -508,7 +508,7 @@ func ExampleOAuth2AllProviders() {
 			UserInfoURL:  "https://api.github.com/user",
 			ProviderName: "github",
 		}).
-		WithOAuth2(OAuth2Config{
+		WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 			ClientID:     "microsoft-client-id",
 			ClientSecret: "microsoft-client-secret",
 			RedirectURL:  "http://localhost:8080/auth/microsoft/callback",
@@ -518,7 +518,7 @@ func ExampleOAuth2AllProviders() {
 			UserInfoURL:  "https://graph.microsoft.com/v1.0/me",
 			ProviderName: "microsoft",
 		}).
-		WithOAuth2(OAuth2Config{
+		WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 			ClientID:     "facebook-client-id",
 			ClientSecret: "facebook-client-secret",
 			RedirectURL:  "http://localhost:8080/auth/facebook/callback",
@@ -547,7 +547,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
 	// GitHub routes
@@ -562,7 +562,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
 	// Microsoft routes
@@ -577,7 +577,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
 	// Facebook routes
@@ -592,7 +592,7 @@ func ExampleOAuth2AllProviders() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(loginResp)
+		_ = json.NewEncoder(w).Encode(loginResp) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
 	// Create security list for protected routes
@@ -611,5 +611,5 @@ func ExampleOAuth2AllProviders() {
 		_ = json.NewEncoder(w).Encode(userCtx)
 	})
 
-	_ = http.ListenAndServe(":8080", router)
+	_ = http.ListenAndServe(":8080", router) //nolint:gosec // G114: example code only
 }

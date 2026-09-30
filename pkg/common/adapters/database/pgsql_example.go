@@ -13,7 +13,7 @@ import (
 // Example demonstrates how to use the PgSQL adapter
 func ExamplePgSQLAdapter() error {
 	// Connect to PostgreSQL database
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
@@ -155,7 +155,7 @@ func (u User) TableName() string {
 
 // ExampleWithModel demonstrates using models with the PgSQL adapter
 func ExampleWithModel() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err

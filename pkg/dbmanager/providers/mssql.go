@@ -68,7 +68,7 @@ func (p *MSSQLProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 
 		if err != nil {
 			lastErr = err
-			db.Close()
+			db.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 			if cfg.GetEnableLogging() {
 				logger.Warn("Failed to ping MSSQL database: %v", err)
 			}

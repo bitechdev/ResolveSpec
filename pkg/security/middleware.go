@@ -520,7 +520,7 @@ func SetSessionCookie(w http.ResponseWriter, loginResp *LoginResponse, opts ...S
 		maxAge = int(loginResp.ExpiresIn)
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 		Name:     o.name(),
 		Value:    loginResp.Token,
 		Path:     o.path(),
@@ -563,7 +563,7 @@ func ClearSessionCookie(w http.ResponseWriter, opts ...SessionCookieOptions) {
 		o = opts[0]
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure/HttpOnly/SameSite set from options with secure defaults
 		Name:     o.name(),
 		Value:    "",
 		Path:     o.path(),

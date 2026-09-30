@@ -239,7 +239,7 @@ func PasskeyHTTPHandlersExample(auth *DatabaseAuthenticator) {
 		})
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(loginResponse)
+		_ = json.NewEncoder(w).Encode(loginResponse) //nolint:gosec // G117: intentional: field must be serialized
 	})
 
 	// List credentials endpoint

@@ -110,7 +110,7 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.hooks.Execute(BeforeConnect, hookCtx); err != nil {
 		logger.Error("[WebSocketSpec] BeforeConnect hook failed: %v", err)
-		ws.Close()
+		ws.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		return
 	}
 

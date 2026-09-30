@@ -3,7 +3,7 @@ package security
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // G505: SHA-1 is required by RFC 6238/4226 HMAC-TOTP
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base32"
@@ -117,7 +117,7 @@ func (t *TOTPGenerator) GenerateCode(secret string, timestamp time.Time) (string
 	}
 
 	// Calculate counter (time steps since Unix epoch)
-	counter := uint64(timestamp.Unix()) / uint64(t.config.Period)
+	counter := uint64(timestamp.Unix()) / uint64(t.config.Period) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 
 	// Generate HMAC
 	h := t.getHashFunc()

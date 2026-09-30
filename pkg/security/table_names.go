@@ -31,7 +31,7 @@ type TableNames struct {
 
 // DefaultTableNames returns a TableNames with all default table names.
 func DefaultTableNames() *TableNames {
-	return &TableNames{
+	return &TableNames{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		Users:                  "users",
 		UserSessions:           "user_sessions",
 		TokenBlacklist:         "token_blacklist",

@@ -51,7 +51,7 @@ func (c Comment) TableName() string {
 
 // ExamplePreload demonstrates the Preload functionality
 func ExamplePreload() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func ExamplePreload() error {
 
 // ExamplePreloadRelation demonstrates smart PreloadRelation with auto-detection
 func ExamplePreloadRelation() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err
@@ -148,7 +148,7 @@ func ExamplePreloadRelation() error {
 
 // ExampleJoinRelation demonstrates explicit JOIN loading
 func ExampleJoinRelation() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err
@@ -185,7 +185,7 @@ func ExampleJoinRelation() error {
 
 // ExampleScanModel demonstrates ScanModel with struct destinations
 func ExampleScanModel() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err
@@ -221,7 +221,7 @@ func ExampleScanModel() error {
 
 // ExampleCompleteWorkflow demonstrates a complete workflow with preloading
 func ExampleCompleteWorkflow() error {
-	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable"
+	dsn := "postgres://username:password@localhost:5432/dbname?sslmode=disable" //nolint:gosec // G101: false positive: identifier/example, not a credential
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return err

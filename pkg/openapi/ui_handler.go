@@ -149,7 +149,7 @@ func generateSwaggerUI(config UIConfig) (string, error) {
 
 	data := templateData{
 		UIConfig:      config,
-		SafeCustomCSS: template.CSS(config.CustomCSS),
+		SafeCustomCSS: template.CSS(config.CustomCSS), //nolint:gosec // G203: CSS from trusted server config
 	}
 
 	var buf strings.Builder
@@ -200,7 +200,7 @@ func generateRapiDoc(config UIConfig) (string, error) {
 
 	data := templateData{
 		UIConfig:      config,
-		SafeCustomCSS: template.CSS(config.CustomCSS),
+		SafeCustomCSS: template.CSS(config.CustomCSS), //nolint:gosec // G203: CSS from trusted server config
 	}
 
 	var buf strings.Builder
@@ -238,7 +238,7 @@ func generateRedoc(config UIConfig) (string, error) {
 
 	data := templateData{
 		UIConfig:      config,
-		SafeCustomCSS: template.CSS(config.CustomCSS),
+		SafeCustomCSS: template.CSS(config.CustomCSS), //nolint:gosec // G203: CSS from trusted server config
 	}
 
 	var buf strings.Builder
@@ -276,7 +276,7 @@ func generateScalar(config UIConfig) (string, error) {
 
 	data := templateData{
 		UIConfig:      config,
-		SafeCustomCSS: template.CSS(config.CustomCSS),
+		SafeCustomCSS: template.CSS(config.CustomCSS), //nolint:gosec // G203: CSS from trusted server config
 	}
 
 	var buf strings.Builder

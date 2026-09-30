@@ -305,7 +305,7 @@ func (s *OAuthServer) serverMetadata() map[string]interface{} {
 
 func (s *OAuthServer) metadataHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.serverMetadata()) //nolint:errcheck
+	json.NewEncoder(w).Encode(s.serverMetadata()) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -318,7 +318,7 @@ func (s *OAuthServer) openIDConfigurationHandler(w http.ResponseWriter, r *http.
 	meta["id_token_signing_alg_values_supported"] = []string{"RS256"}
 	meta["claims_supported"] = []string{"sub", "iss", "aud", "exp", "iat", "email", "preferred_username"}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(meta) //nolint:errcheck
+	json.NewEncoder(w).Encode(meta) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -333,7 +333,7 @@ func (s *OAuthServer) protectedResourceHandler(w http.ResponseWriter, r *http.Re
 		"bearer_methods_supported": []string{"header"},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(meta) //nolint:errcheck
+	json.NewEncoder(w).Encode(meta) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -343,7 +343,7 @@ func (s *OAuthServer) protectedResourceHandler(w http.ResponseWriter, r *http.Re
 func (s *OAuthServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if s.signingKey == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{}}) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		return
 	}
 	pub := s.signingKey.PublicKey
@@ -355,7 +355,7 @@ func (s *OAuthServer) jwksHandler(w http.ResponseWriter, r *http.Request) {
 		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
 		"e":   base64.RawURLEncoding.EncodeToString(bigEndianBytes(pub.E)),
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{jwk}}) //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]interface{}{"keys": []interface{}{jwk}}) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -392,7 +392,7 @@ func (s *OAuthServer) userinfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		"sub":                info.Sub,
 		"preferred_username": info.Username,
 		"email":              info.Email,
@@ -507,7 +507,7 @@ func (s *OAuthServer) registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -995,7 +995,7 @@ func (s *OAuthServer) revokeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.auth != nil {
-		s.auth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck
+		s.auth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 	} else {
 		// In external-provider-only mode, attempt revocation via the first provider's auth.
 		s.mu.RLock()
@@ -1005,7 +1005,7 @@ func (s *OAuthServer) revokeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.RUnlock()
 		if providerAuth != nil {
-			providerAuth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck
+			providerAuth.OAuthRevokeToken(r.Context(), token) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		}
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1022,14 +1022,14 @@ func (s *OAuthServer) introspectHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := r.ParseForm(); err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"active":false}`)) //nolint:errcheck
+		w.Write([]byte(`{"active":false}`)) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		return
 	}
 	token := r.FormValue("token")
 	w.Header().Set("Content-Type", "application/json")
 
 	if token == "" {
-		w.Write([]byte(`{"active":false}`)) //nolint:errcheck
+		w.Write([]byte(`{"active":false}`)) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		return
 	}
 
@@ -1043,16 +1043,16 @@ func (s *OAuthServer) introspectHandler(w http.ResponseWriter, r *http.Request) 
 		s.mu.RUnlock()
 	}
 	if authToUse == nil {
-		w.Write([]byte(`{"active":false}`)) //nolint:errcheck
+		w.Write([]byte(`{"active":false}`)) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		return
 	}
 
 	info, err := authToUse.OAuthIntrospectToken(r.Context(), token)
 	if err != nil {
-		w.Write([]byte(`{"active":false}`)) //nolint:errcheck
+		w.Write([]byte(`{"active":false}`)) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 		return
 	}
-	json.NewEncoder(w).Encode(info) //nolint:errcheck
+	json.NewEncoder(w).Encode(info) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // --------------------------------------------------------------------------
@@ -1063,13 +1063,13 @@ func (s *OAuthServer) renderLoginForm(w http.ResponseWriter, r *http.Request, cl
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	errHTML := ""
 	if errMsg != "" {
-		errHTML = `<p style="color:red">` + errMsg + `</p>`
+		errHTML = `<p style="color:red">` + htmlEscape(errMsg) + `</p>`
 	}
-	fmt.Fprintf(w, loginFormHTML,
-		s.cfg.LoginTitle,
-		s.cfg.LoginTitle,
+	fmt.Fprintf(w, loginFormHTML, //nolint:gosec // G705: output is HTML-escaped
+		htmlEscape(s.cfg.LoginTitle),
+		htmlEscape(s.cfg.LoginTitle),
 		errHTML,
-		clientID,
+		htmlEscape(clientID),
 		htmlEscape(redirectURI),
 		htmlEscape(clientState),
 		htmlEscape(codeChallenge),
@@ -1195,7 +1195,7 @@ func (s *OAuthServer) writeOAuthToken(w http.ResponseWriter, r *http.Request, ac
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 // buildIDToken issues an OIDC id_token for the just-issued access token by reusing the
@@ -1294,7 +1294,7 @@ func writeOAuthError(w http.ResponseWriter, errCode, description string, status 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck,gosec // G104: best-effort write, error intentionally ignored
 }
 
 func htmlEscape(s string) string {

@@ -60,7 +60,7 @@ func (f *ZipFile) Read(b []byte) (int, error) {
 	n, err := f.rc.Read(b)
 	f.offset += int64(n)
 	if err == io.EOF {
-		f.rc.Close()
+		f.rc.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		f.rc = nil
 	}
 	return n, err
@@ -68,7 +68,7 @@ func (f *ZipFile) Read(b []byte) (int, error) {
 }
 func (f *ZipFile) Seek(offset int64, whence int) (int64, error) {
 	if f.rc != nil {
-		f.rc.Close()
+		f.rc.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		f.rc = nil
 	}
 	switch whence {
@@ -83,7 +83,7 @@ func (f *ZipFile) Seek(offset int64, whence int) (int64, error) {
 		}
 		f.offset += offset
 	case io.SeekEnd:
-		size := int64(f.UncompressedSize64)
+		size := int64(f.UncompressedSize64) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 		if size+offset < 0 {
 			return 0, &fs.PathError{Op: "seek", Path: f.Name, Err: fmt.Errorf("negative position")}
 		}

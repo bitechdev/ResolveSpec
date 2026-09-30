@@ -493,9 +493,9 @@ func newInstance(cfg Config) (*serverInstance, error) {
 	if cfg.HTTP2 {
 		if existing := os.Getenv("GODEBUG"); !strings.Contains(existing, "http2xconnect=1") {
 			if existing == "" {
-				os.Setenv("GODEBUG", "http2xconnect=1")
+				os.Setenv("GODEBUG", "http2xconnect=1") //nolint:gosec // G104: best-effort call, error intentionally ignored
 			} else {
-				os.Setenv("GODEBUG", existing+",http2xconnect=1")
+				os.Setenv("GODEBUG", existing+",http2xconnect=1") //nolint:gosec // G104: best-effort call, error intentionally ignored
 			}
 		}
 		if httpServer.HTTP2 == nil {

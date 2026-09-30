@@ -529,7 +529,7 @@ func ExampleBunRouterWithBunDB(bunDB *bun.DB) {
 	SetupBunRouterRoutes(bunRouter, handler, nil)
 
 	// Start server
-	if err := http.ListenAndServe(":8080", bunRouter); err != nil {
+	if err := http.ListenAndServe(":8080", bunRouter); err != nil { //nolint:gosec // G114: example code only
 		logger.Error("Server failed to start: %v", err)
 	}
 }
@@ -549,7 +549,7 @@ func ExampleBunRouterWithGroup(bunDB *bun.DB) {
 	SetupBunRouterRoutes(apiGroup, handler, nil)
 
 	// Start server
-	if err := http.ListenAndServe(":8080", bunRouter); err != nil {
+	if err := http.ListenAndServe(":8080", bunRouter); err != nil { //nolint:gosec // G114: example code only
 		logger.Error("Server failed to start: %v", err)
 	}
 }

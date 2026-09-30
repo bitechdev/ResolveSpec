@@ -152,7 +152,7 @@ func (v *SqlSparseVector) Scan(value any) error {
 			if len(kv) != 2 {
 				return fmt.Errorf("SqlSparseVector: bad pair %q", pair)
 			}
-			k, err := strconv.Atoi(strings.TrimSpace(kv[0]))
+			k, err := strconv.ParseInt(strings.TrimSpace(kv[0]), 10, 32)
 			if err != nil {
 				return fmt.Errorf("SqlSparseVector: bad index %q: %w", kv[0], err)
 			}

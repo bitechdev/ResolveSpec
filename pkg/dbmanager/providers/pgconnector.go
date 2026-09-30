@@ -59,7 +59,7 @@ func (c *pgConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	}
 	sc, ok := conn.(*stdlib.Conn)
 	if !ok {
-		conn.Close()
+		conn.Close() //nolint:gosec // G104: best-effort call, error intentionally ignored
 		return nil, fmt.Errorf("unexpected pgx driver connection type %T", conn)
 	}
 	return &pgConn{Conn: sc, owner: c, gen: st.gen}, nil

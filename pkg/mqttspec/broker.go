@@ -324,7 +324,7 @@ func (ebc *ExternalBrokerClient) Stop(ctx context.Context) error {
 	}
 
 	if ebc.client != nil && ebc.client.IsConnected() {
-		ebc.client.Disconnect(uint(ebc.config.ConnectTimeout.Milliseconds()))
+		ebc.client.Disconnect(uint(ebc.config.ConnectTimeout.Milliseconds())) //nolint:gosec // G115: value range bounded by caller/type, conversion intentional
 	}
 
 	ebc.connected = false

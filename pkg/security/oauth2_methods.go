@@ -441,7 +441,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 // NewGoogleAuthenticator creates a DatabaseAuthenticator configured for Google OAuth2
 func NewGoogleAuthenticator(clientID, clientSecret, redirectURL string, db *sql.DB) *DatabaseAuthenticator {
 	auth := NewDatabaseAuthenticator(db)
-	return auth.WithOAuth2(OAuth2Config{
+	return auth.WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,
@@ -456,7 +456,7 @@ func NewGoogleAuthenticator(clientID, clientSecret, redirectURL string, db *sql.
 // NewGitHubAuthenticator creates a DatabaseAuthenticator configured for GitHub OAuth2
 func NewGitHubAuthenticator(clientID, clientSecret, redirectURL string, db *sql.DB) *DatabaseAuthenticator {
 	auth := NewDatabaseAuthenticator(db)
-	return auth.WithOAuth2(OAuth2Config{
+	return auth.WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,
@@ -471,7 +471,7 @@ func NewGitHubAuthenticator(clientID, clientSecret, redirectURL string, db *sql.
 // NewMicrosoftAuthenticator creates a DatabaseAuthenticator configured for Microsoft OAuth2
 func NewMicrosoftAuthenticator(clientID, clientSecret, redirectURL string, db *sql.DB) *DatabaseAuthenticator {
 	auth := NewDatabaseAuthenticator(db)
-	return auth.WithOAuth2(OAuth2Config{
+	return auth.WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,
@@ -486,7 +486,7 @@ func NewMicrosoftAuthenticator(clientID, clientSecret, redirectURL string, db *s
 // NewFacebookAuthenticator creates a DatabaseAuthenticator configured for Facebook OAuth2
 func NewFacebookAuthenticator(clientID, clientSecret, redirectURL string, db *sql.DB) *DatabaseAuthenticator {
 	auth := NewDatabaseAuthenticator(db)
-	return auth.WithOAuth2(OAuth2Config{
+	return auth.WithOAuth2(OAuth2Config{ //nolint:gosec // G101: false positive: identifier/example, not a credential
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,

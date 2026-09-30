@@ -70,6 +70,11 @@ var (
 		Help: "Requests currently waiting for a slot",
 	})
 
+	queueWaitingClients = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "clientqueue_waiting_clients",
+		Help: "Clients currently with at least one request waiting for a slot",
+	})
+
 	queueClients = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "clientqueue_clients",
 		Help: "Clients currently tracked by the queue",
@@ -275,6 +280,9 @@ func (q *ClientQueue) acquire(ctx context.Context, key string) error {
 	}
 	w := &queueWaiter{ready: make(chan struct{})}
 	w.elem = c.waiters.PushBack(w)
+	if c.waiters.Len() == 1 {
+		queueWaitingClients.Inc()
+	}
 	c.enter()
 	q.mu.Unlock()
 	queueDepth.Inc()
@@ -302,6 +310,9 @@ func (q *ClientQueue) acquire(ctx context.Context, key string) error {
 		q.releaseLocked(key)
 	} else {
 		c.waiters.Remove(w.elem)
+		if c.waiters.Len() == 0 {
+			queueWaitingClients.Dec()
+		}
 		c.leave()
 		queueDepth.Dec()
 	}
@@ -331,6 +342,9 @@ func (q *ClientQueue) releaseLocked(key string) {
 	queueActive.Dec()
 	if front := c.waiters.Front(); front != nil {
 		w := c.waiters.Remove(front).(*queueWaiter)
+		if c.waiters.Len() == 0 {
+			queueWaitingClients.Dec()
+		}
 		w.granted = true
 		queueDepth.Dec()
 		queueActive.Inc()

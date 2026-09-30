@@ -454,6 +454,7 @@ no per-client labels so cardinality stays bounded.
 | `clientqueue_burst_size` | histogram | peak outstanding requests per client busy period |
 | `clientqueue_burst_max` | gauge | largest burst since process start |
 | `clientqueue_active` / `clientqueue_queue_depth` | gauge | running / waiting now |
+| `clientqueue_waiting_clients` | gauge | clients with at least one request waiting (`queue_depth` counts requests, this counts clients) |
 | `clientqueue_clients` | gauge | clients currently tracked |
 
 A **burst** is one client's busy period: the peak number of its requests running plus waiting between

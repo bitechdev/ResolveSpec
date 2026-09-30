@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -330,4 +331,76 @@ func TestClientQueueMetrics(t *testing.T) {
 	if got := gaugeVal(t, queueBurstMax); got < 5 {
 		t.Errorf("burst max = %v, want >= 5", got)
 	}
+}
+
+func TestClientQueueWaitingClientsGauge(t *testing.T) {
+	q := newTestQueue(t, ClientQueueConfig{MaxConcurrent: 1, MaxWait: 100 * time.Millisecond})
+	base := gaugeVal(t, queueWaitingClients)
+	waiting := func() float64 { return gaugeVal(t, queueWaitingClients) - base }
+	waitFor := func(want float64) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for waiting() != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("waiting clients = %v, want %v", waiting(), want)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	// Two clients each hold their only slot.
+	for _, k := range []string{"a", "b"} {
+		if err := q.acquire(t.Context(), k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if waiting() != 0 {
+		t.Fatalf("waiting = %v with nobody queued", waiting())
+	}
+
+	// Two waiters for "a" count as one waiting client, not two.
+	bg := func(ctx context.Context, k string) chan error {
+		ch := make(chan error, 1)
+		go func() { ch <- q.acquire(ctx, k) }()
+		return ch
+	}
+	a1 := bg(t.Context(), "a")
+	waitFor(1)
+	a2 := bg(t.Context(), "a")
+	time.Sleep(10 * time.Millisecond)
+	waitFor(1)
+
+	// A waiter for "b" adds a second waiting client, and cancelling it drops it.
+	cctx, cancel := context.WithCancel(t.Context())
+	b1 := bg(cctx, "b")
+	waitFor(2)
+	cancel()
+	if err := <-b1; err == nil {
+		t.Fatal("expected cancellation")
+	}
+	waitFor(1)
+
+	// Draining "a": the first release hands over to a1 (one still waits),
+	// the second hands over to a2 and "a" stops waiting.
+	q.release("a")
+	if err := <-a1; err != nil {
+		t.Fatal(err)
+	}
+	waitFor(1)
+	q.release("a")
+	if err := <-a2; err != nil {
+		t.Fatal(err)
+	}
+	waitFor(0)
+	q.release("a")
+	q.release("a")
+
+	// Timeout: "b" still holds its slot, so a new waiter times out.
+	b2 := bg(t.Context(), "b")
+	waitFor(1)
+	if err := <-b2; !errors.Is(err, errQueueWait) {
+		t.Fatalf("err = %v, want timeout", err)
+	}
+	waitFor(0)
+	q.release("b")
 }

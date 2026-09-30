@@ -171,7 +171,7 @@ func TestBrokerPublishAsync(t *testing.T) {
 	// Publish multiple events
 	for i := 0; i < 5; i++ {
 		event := NewEvent(EventSourceSystem, "test.event")
-	event.InstanceID = "test-instance"
+		event.InstanceID = "test-instance"
 		if err := broker.PublishAsync(context.Background(), event); err != nil {
 			t.Fatalf("PublishAsync failed: %v", err)
 		}
@@ -346,7 +346,7 @@ func TestBrokerStats(t *testing.T) {
 	// Publish events
 	for i := 0; i < 3; i++ {
 		event := NewEvent(EventSourceSystem, "test.event")
-	event.InstanceID = "test-instance"
+		event.InstanceID = "test-instance"
 		broker.PublishSync(context.Background(), event)
 	}
 
@@ -413,7 +413,7 @@ func TestBrokerConcurrentPublish(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			event := NewEvent(EventSourceSystem, "test.event")
-	event.InstanceID = "test-instance"
+			event.InstanceID = "test-instance"
 			broker.PublishAsync(context.Background(), event)
 		}()
 	}
@@ -450,7 +450,7 @@ func TestBrokerGracefulShutdown(t *testing.T) {
 	// Publish events
 	for i := 0; i < 5; i++ {
 		event := NewEvent(EventSourceSystem, "test.event")
-	event.InstanceID = "test-instance"
+		event.InstanceID = "test-instance"
 		broker.PublishAsync(context.Background(), event)
 	}
 
@@ -502,21 +502,21 @@ func TestBrokerProcessingModes(t *testing.T) {
 			broker.Start(context.Background())
 			defer broker.Stop(context.Background())
 
-			called := false
+			var called atomic.Bool
 			broker.Subscribe("test.*", EventHandlerFunc(func(ctx context.Context, event *Event) error {
-				called = true
+				called.Store(true)
 				return nil
 			}))
 
 			event := NewEvent(EventSourceSystem, "test.event")
-	event.InstanceID = "test-instance"
+			event.InstanceID = "test-instance"
 			broker.Publish(context.Background(), event)
 
 			if tt.mode == ProcessingModeAsync {
 				time.Sleep(50 * time.Millisecond)
 			}
 
-			if !called {
+			if !called.Load() {
 				t.Error("Expected handler to be called")
 			}
 		})

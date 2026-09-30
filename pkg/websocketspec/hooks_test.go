@@ -3,6 +3,7 @@ package websocketspec
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
@@ -519,9 +520,9 @@ func TestHookRegistry_ConcurrentExecution(t *testing.T) {
 	// This test verifies that concurrent hook executions don't cause race conditions
 	// Run with: go test -race
 
-	counter := 0
+	var counter atomic.Int64
 	hook := func(ctx *HookContext) error {
-		counter++
+		counter.Add(1)
 		return nil
 	}
 
@@ -543,5 +544,5 @@ func TestHookRegistry_ConcurrentExecution(t *testing.T) {
 		<-done
 	}
 
-	assert.Equal(t, 10, counter)
+	assert.Equal(t, int64(10), counter.Load())
 }

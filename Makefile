@@ -1,11 +1,18 @@
-.PHONY: test test-unit test-integration docker-up docker-down clean
+.PHONY: test test-unit test-race test-integration docker-up docker-down clean
 
 GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
 
 # Run all unit tests
 test-unit:
 	@echo "Running unit tests..."
-	@go test ./pkg/resolvespec ./pkg/restheadspec -v -cover
+	@go test ./pkg/... -v -cover
+
+# Run all unit tests under the race detector (kept separate from coverage:
+# race builds are 2-10x slower). Only races on executed paths are reported,
+# so this covers every package rather than a subset.
+test-race:
+	@echo "Running unit tests with the race detector..."
+	@go test -race -count=1 ./pkg/...
 
 # Run all integration tests (requires PostgreSQL)
 test-integration:
@@ -13,7 +20,7 @@ test-integration:
 	@go test -tags=integration ./pkg/resolvespec ./pkg/restheadspec -v
 
 # Run all tests (unit + integration)
-test: test-unit test-integration
+test: test-unit test-race test-integration
 
 release-version: ## Create and push a release with specific version (use: make release-version VERSION=v1.2.3 or make release-version to auto-increment)
 	@if [ -z "$(VERSION)" ]; then \
@@ -113,7 +120,8 @@ coverage-integration:
 
 help:
 	@echo "Available targets:"
-	@echo "  test-unit              - Run unit tests"
+	@echo "  test-unit              - Run unit tests for all packages (./pkg/...)"
+	@echo "  test-race              - Run unit tests for all packages with -race"
 	@echo "  test-integration       - Run integration tests (requires PostgreSQL)"
 	@echo "  test                   - Run all tests"
 	@echo "  docker-up              - Start PostgreSQL container"

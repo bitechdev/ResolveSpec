@@ -81,6 +81,9 @@ type DatabaseAuthenticator struct {
 	queryMode  QueryMode
 	capability *dbCapability
 
+	// activityWG tracks in-flight asynchronous session activity updates
+	activityWG sync.WaitGroup
+
 	// Cookie session support (optional, gated by enableCookieSession)
 	enableCookieSession bool
 	cookieOptions       SessionCookieOptions
@@ -444,7 +447,12 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 
 		// Authentication succeeded with this token
 		// Update last activity timestamp asynchronously
-		go a.updateSessionActivity(r.Context(), token, &userCtx)
+		activityCtx := userCtx
+		a.activityWG.Add(1)
+		go func(ctx context.Context, token string) {
+			defer a.activityWG.Done()
+			a.updateSessionActivity(ctx, token, &activityCtx)
+		}(r.Context(), token)
 
 		return &userCtx, nil
 	}

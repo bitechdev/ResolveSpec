@@ -105,6 +105,29 @@ that the race detector only reports races that **actually execute**, so X1 and X
 have to be fixed together: a race detector pointed at packages with no tests
 finds nothing.
 
+**Status (2026-09-30) — partially resolved.** `make test-race` now exists
+(`go test -race -count=1 ./pkg/...`), `test-unit` covers `./pkg/...`, and `test`
+depends on both. The CI workflow (`.github/workflows/tests.yml`) still has no
+race job, so nothing enforces it yet. The first full run was not clean:
+
+| Package | Race | Kind |
+|---|---|---|
+| `pkg/logger` | `Logger` / `errorTracker` reassigned while other goroutines log (hit via `pkg/server` tests) | **production** — now guarded by an `RWMutex` (`getLogger`, `setLogger`, `getErrorTracker`); the exported `Logger` var is kept for compatibility |
+| `pkg/security` | `DatabaseAuthenticator.Authenticate` passed `&userCtx` to the async session-activity goroutine while also returning it to the caller | **production** — the goroutine now gets a copy and is tracked by a `WaitGroup` so tests can wait for it |
+| `pkg/security` tests | async activity update used sqlmock concurrently with the test adding expectations | test — tests wait via `authenticateSync` |
+| `pkg/eventbroker`, `pkg/websocketspec` tests | handler/hook closures mutated a plain `bool`/`int` from worker goroutines | test — now `atomic` |
+| `pkg/mqttspec` tests | not a race: hand-built `HookContext` lacked `TableName`/`Model`/`ModelPtr`, the unsubscribe test set `Data` instead of `SubscriptionID`, and `:memory:` SQLite gave each pooled connection its own empty database | test — fixed; these were failing without `-race` too |
+
+`pkg/cache`, `pkg/config`, `pkg/modelregistry`, `pkg/tracing` and
+`pkg/errortracking` are listed above but did **not** trip the detector: their
+racing paths are not exercised by the current tests, which is the point made in
+the paragraph above about X1 and X2 needing to be fixed together. Adding
+concurrent tests for those globals is still outstanding.
+
+Known limitation: `pkg/security` tests are not repeatable with `-count>1` (a
+package-level capability cache carries over between runs), so the race target
+keeps `-count=1`.
+
 ---
 
 ### X2. High — `go test` runs against 2 of 23 packages

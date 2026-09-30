@@ -194,7 +194,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("cached-token-123", "authenticate").
 			WillReturnRows(rows)
 
-		userCtx1, err := auth.Authenticate(req)
+		userCtx1, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("first authenticate failed: %v", err)
 		}
@@ -203,7 +203,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 		}
 
 		// Second call - should use cache, no database call expected
-		userCtx2, err := auth.Authenticate(req)
+		userCtx2, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("second authenticate failed: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("expire-token-456", "authenticate").
 			WillReturnRows(rows1)
 
-		_, err := auth.Authenticate(req)
+		_, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("first authenticate failed: %v", err)
 		}
@@ -245,7 +245,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("expire-token-456", "authenticate").
 			WillReturnRows(rows2)
 
-		_, err = auth.Authenticate(req)
+		_, err = authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("second authenticate after expiration failed: %v", err)
 		}
@@ -267,7 +267,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("logout-token-789", "authenticate").
 			WillReturnRows(rows1)
 
-		_, err := auth.Authenticate(req)
+		_, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("authenticate failed: %v", err)
 		}
@@ -296,7 +296,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("logout-token-789", "authenticate").
 			WillReturnRows(rows2)
 
-		_, err = auth.Authenticate(req)
+		_, err = authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("authenticate after logout failed: %v", err)
 		}
@@ -318,7 +318,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("manual-clear-token", "authenticate").
 			WillReturnRows(rows)
 
-		_, err := auth.Authenticate(req)
+		_, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("authenticate failed: %v", err)
 		}
@@ -334,7 +334,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("manual-clear-token", "authenticate").
 			WillReturnRows(rows2)
 
-		_, err = auth.Authenticate(req)
+		_, err = authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("authenticate after cache clear failed: %v", err)
 		}
@@ -356,7 +356,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("user-token-1", "authenticate").
 			WillReturnRows(rows1)
 
-		_, err := auth.Authenticate(req1)
+		_, err := authenticateSync(auth, req1)
 		if err != nil {
 			t.Fatalf("first authenticate failed: %v", err)
 		}
@@ -371,7 +371,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("user-token-2", "authenticate").
 			WillReturnRows(rows2)
 
-		_, err = auth.Authenticate(req2)
+		_, err = authenticateSync(auth, req2)
 		if err != nil {
 			t.Fatalf("second authenticate failed: %v", err)
 		}
@@ -387,7 +387,7 @@ func TestDatabaseAuthenticatorCaching(t *testing.T) {
 			WithArgs("user-token-1", "authenticate").
 			WillReturnRows(rows3)
 
-		_, err = auth.Authenticate(req1)
+		_, err = authenticateSync(auth, req1)
 		if err != nil {
 			t.Fatalf("authenticate after user cache clear failed: %v", err)
 		}
@@ -496,7 +496,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("test-token-123", "authenticate").
 			WillReturnRows(rows)
 
-		userCtx, err := auth.Authenticate(req)
+		userCtx, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -528,7 +528,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("cookie-token-456", "cookie").
 			WillReturnRows(rows)
 
-		userCtx, err := cookieAuth.Authenticate(req)
+		userCtx, err := authenticateSync(cookieAuth, req)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -545,7 +545,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 	t.Run("authenticate missing token", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/test", nil)
 
-		_, err := auth.Authenticate(req)
+		_, err := authenticateSync(auth, req)
 		if err == nil {
 			t.Fatal("expected error when token is missing")
 		}
@@ -571,7 +571,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("valid-token-123", "authenticate").
 			WillReturnRows(rows2)
 
-		userCtx, err := auth.Authenticate(req)
+		userCtx, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -597,7 +597,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("968CA5AE-4F83-4D55-A3C6-51AE4410E03A", "authenticate").
 			WillReturnRows(rows)
 
-		userCtx, err := auth.Authenticate(req)
+		userCtx, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -631,7 +631,7 @@ func TestDatabaseAuthenticator(t *testing.T) {
 			WithArgs("bad-token-2", "authenticate").
 			WillReturnRows(rows2)
 
-		_, err := auth.Authenticate(req)
+		_, err := authenticateSync(auth, req)
 		if err == nil {
 			t.Fatal("expected error when all tokens fail")
 		}
@@ -891,7 +891,7 @@ func TestDatabaseAuthenticatorReconnectsClosedDBPaths(t *testing.T) {
 			WithArgs("reconnect-auth-token", "authenticate").
 			WillReturnRows(reconnectRows)
 
-		userCtx, err := auth.Authenticate(req)
+		userCtx, err := authenticateSync(auth, req)
 		if err != nil {
 			t.Fatalf("expected authenticate to reconnect, got %v", err)
 		}
@@ -1327,4 +1327,12 @@ func TestConfigRowSecurityProvider(t *testing.T) {
 			t.Error("expected HasBlock to be false")
 		}
 	})
+}
+
+// authenticateSync authenticates and waits for the asynchronous session
+// activity update so sqlmock expectations are never touched concurrently.
+func authenticateSync(auth *DatabaseAuthenticator, req *http.Request) (*UserContext, error) {
+	userCtx, err := auth.Authenticate(req)
+	auth.activityWG.Wait()
+	return userCtx, err
 }

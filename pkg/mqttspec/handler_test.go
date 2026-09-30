@@ -41,6 +41,12 @@ func setupTestHandler(t *testing.T) (*Handler, *gorm.DB) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
+	// Each connection to ":memory:" gets its own database; pin to one so
+	// concurrent requests all see the migrated schema.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
 	// Auto-migrate test model
 	err = db.AutoMigrate(&TestUser{})
 	require.NoError(t, err)
@@ -93,9 +99,9 @@ func TestHandler_HandleRead_Single(t *testing.T) {
 
 	// Insert test data
 	user := &TestUser{
-		ID:    1,
-		Name:  "John Doe",
-		Email: "john@example.com",
+		ID:     1,
+		Name:   "John Doe",
+		Email:  "john@example.com",
 		Status: "active",
 	}
 	db.Create(user)
@@ -115,13 +121,16 @@ func TestHandler_HandleRead_Single(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		ID:       "1",
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		ID:        "1",
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle read
@@ -164,12 +173,15 @@ func TestHandler_HandleRead_Multiple(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle read
@@ -208,13 +220,16 @@ func TestHandler_HandleCreate(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		Data:     newUser,
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		Data:      newUser,
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle create
@@ -266,14 +281,17 @@ func TestHandler_HandleUpdate(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		ID:       "1",
-		Data:     updateData,
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		ID:        "1",
+		Data:      updateData,
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle update
@@ -318,13 +336,16 @@ func TestHandler_HandleDelete(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		ID:       "1",
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		ID:        "1",
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle delete
@@ -388,13 +409,13 @@ func TestHandler_HandleUnsubscribe(t *testing.T) {
 	sub := handler.subscriptionManager.Subscribe("sub-1", client.ID, "public", "users", &common.RequestOptions{})
 	client.AddSubscription(sub)
 
-	// Create unsubscribe message with subscription ID in Data
+	// Create unsubscribe message with the subscription ID
 	msg := &Message{
-		ID:        "msg-7",
-		Type:      MessageTypeSubscription,
-		Operation: OperationUnsubscribe,
-		Data:      map[string]interface{}{"subscription_id": "sub-1"},
-		Options:   &common.RequestOptions{},
+		ID:             "msg-7",
+		Type:           MessageTypeSubscription,
+		Operation:      OperationUnsubscribe,
+		SubscriptionID: "sub-1",
+		Options:        &common.RequestOptions{},
 	}
 
 	// Handle unsubscribe
@@ -490,12 +511,15 @@ func TestHandler_Hooks_BeforeRead(t *testing.T) {
 
 	// Create hook context
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle read
@@ -544,13 +568,16 @@ func TestHandler_Hooks_BeforeCreate(t *testing.T) {
 	}
 
 	hookCtx := &HookContext{
-		Context:  context.Background(),
-		Handler:  nil,
-		Schema:   "public",
-		Entity:   "users",
-		Data:     newUser,
-		Options:  msg.Options,
-		Metadata: map[string]interface{}{"mqtt_client": client},
+		Context:   context.Background(),
+		TableName: "users",
+		Model:     &TestUser{},
+		ModelPtr:  &TestUser{},
+		Handler:   nil,
+		Schema:    "public",
+		Entity:    "users",
+		Data:      newUser,
+		Options:   msg.Options,
+		Metadata:  map[string]interface{}{"mqtt_client": client},
 	}
 
 	// Handle create
@@ -600,13 +627,16 @@ func TestHandler_ConcurrentRequests(t *testing.T) {
 			}
 
 			hookCtx := &HookContext{
-				Context:  context.Background(),
-				Handler:  nil,
-				Schema:   "public",
-				Entity:   "users",
-				Data:     newUser,
-				Options:  msg.Options,
-				Metadata: map[string]interface{}{"mqtt_client": client},
+				Context:   context.Background(),
+				TableName: "users",
+				Model:     &TestUser{},
+				ModelPtr:  &TestUser{},
+				Handler:   nil,
+				Schema:    "public",
+				Entity:    "users",
+				Data:      newUser,
+				Options:   msg.Options,
+				Metadata:  map[string]interface{}{"mqtt_client": client},
 			}
 
 			handler.handleCreate(client, msg, hookCtx)

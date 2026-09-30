@@ -89,3 +89,54 @@ func TestHandler_UpdateRunsAfterHookOnSecondTransaction(t *testing.T) {
 	assert.NotEqual(t, begins[0], begins[1])
 	assert.Equal(t, begins[1], afterTx)
 }
+
+func TestHandler_ReadRunsHooksOnOneTransaction(t *testing.T) {
+	handler, db := setupTestHandler(t)
+	require.NoError(t, db.Create(&TestUser{ID: 1, Name: "a", Email: "a@example.com", Status: "active"}).Error)
+
+	var begins []common.Database
+	var beforeTx, afterTx common.Database
+	handler.hooks.Register(OnTxBegin, func(c *HookContext) error { begins = append(begins, c.Tx); return nil })
+	handler.hooks.Register(BeforeRead, func(c *HookContext) error { beforeTx = c.Tx; return nil })
+	handler.hooks.Register(AfterRead, func(c *HookContext) error { afterTx = c.Tx; return nil })
+
+	handler.handleRead(&Client{ID: "c1"}, &Message{ID: "m1"}, newTxHook(handler, nil))
+
+	require.Len(t, begins, 1)
+	assert.NotEqual(t, handler.db, begins[0])
+	assert.Equal(t, begins[0], beforeTx)
+	assert.Equal(t, begins[0], afterTx)
+}
+
+func TestHandler_CreateRunsHooksOnTwoTransactions(t *testing.T) {
+	handler, db := setupTestHandler(t)
+
+	var begins []common.Database
+	var beforeTx, afterTx common.Database
+	handler.hooks.Register(OnTxBegin, func(c *HookContext) error { begins = append(begins, c.Tx); return nil })
+	handler.hooks.Register(BeforeCreate, func(c *HookContext) error { beforeTx = c.Tx; return nil })
+	handler.hooks.Register(AfterCreate, func(c *HookContext) error { afterTx = c.Tx; return nil })
+
+	hook := newTxHook(handler, map[string]interface{}{"id": 5, "name": "n", "email": "n@example.com", "status": "active"})
+	hook.ID = ""
+	handler.handleCreate(&Client{ID: "c1"}, &Message{ID: "m1"}, hook)
+
+	var got TestUser
+	require.NoError(t, db.First(&got, 5).Error)
+	require.Len(t, begins, 2)
+	assert.NotEqual(t, begins[0], begins[1])
+	assert.Equal(t, begins[0], beforeTx)
+	assert.Equal(t, begins[1], afterTx)
+}
+
+func TestHandler_BeforeHookErrorAbortsUpdateWithoutWriting(t *testing.T) {
+	handler, db := setupTestHandler(t)
+	require.NoError(t, db.Create(&TestUser{ID: 1, Name: "a", Email: "a@example.com", Status: "active"}).Error)
+	handler.hooks.Register(BeforeUpdate, func(c *HookContext) error { return errors.New("denied") })
+
+	handler.handleUpdate(&Client{ID: "c1"}, &Message{ID: "m1"}, newTxHook(handler, map[string]interface{}{"name": "b"}))
+
+	var got TestUser
+	require.NoError(t, db.First(&got, 1).Error)
+	assert.Equal(t, "a", got.Name)
+}

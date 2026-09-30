@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
@@ -169,5 +171,81 @@ func TestOnTxBeginErrorRollsBackWithoutDetail(t *testing.T) {
 	resp := response(t, conn)
 	if resp.Success || resp.Error == nil || resp.Error.Code != "transaction_error" || resp.Error.Message != "Transaction failed" {
 		t.Fatalf("unexpected response %+v", resp)
+	}
+}
+
+func TestCreateRunsHooksOnTwoTransactions(t *testing.T) {
+	// The bun adapter builds model-based inserts; the pgsql adapter does not.
+	h, mock, conn, hookCtx := newTxHarness(t)
+	sqlDB, bunMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	h.db = database.NewBunAdapter(bun.NewDB(sqlDB, pgdialect.New()))
+	conn = NewConnection("c2", nil, h)
+	mock = bunMock
+	hookCtx.ID = ""
+	hookCtx.Data = map[string]interface{}{"id": 7, "name": "a"}
+	var begins []common.Database
+	var beforeTx, afterTx common.Database
+	h.Hooks().Register(OnTxBegin, func(c *HookContext) error { begins = append(begins, c.Tx); return nil })
+	h.Hooks().Register(BeforeCreate, func(c *HookContext) error { beforeTx = c.Tx; return nil })
+	h.Hooks().Register(AfterCreate, func(c *HookContext) error { afterTx = c.Tx; return nil })
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT`).WillReturnResult(sqlmock.NewResult(7, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, "a"))
+	mock.ExpectCommit()
+
+	h.handleCreate(conn, &Message{ID: "m1"}, hookCtx)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if !response(t, conn).Success {
+		t.Fatal("expected success")
+	}
+	if len(begins) != 2 || begins[0] == begins[1] || beforeTx != begins[0] || afterTx != begins[1] {
+		t.Fatalf("BeforeCreate must run on tx 1 and AfterCreate on tx 2, begins=%d", len(begins))
+	}
+}
+
+func TestBeforeHookErrorRollsBackWithoutWriting(t *testing.T) {
+	h, mock, conn, hookCtx := newTxHarness(t)
+	hookCtx.Data = map[string]interface{}{"name": "b"}
+	h.Hooks().Register(BeforeUpdate, func(*HookContext) error { return errors.New("denied") })
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	h.handleUpdate(conn, &Message{ID: "m1"}, hookCtx)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if resp := response(t, conn); resp.Success || resp.Error == nil || resp.Error.Code != "hook_error" {
+		t.Fatalf("unexpected response %+v", resp)
+	}
+}
+
+func TestAfterDeleteErrorRollsBackDelete(t *testing.T) {
+	h, mock, conn, hookCtx := newTxHarness(t)
+	h.Hooks().Register(AfterDelete, func(*HookContext) error { return errors.New("audit failed") })
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	h.handleDelete(conn, &Message{ID: "m1"}, hookCtx)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if response(t, conn).Success {
+		t.Fatal("a failing AfterDelete must fail the request")
 	}
 }

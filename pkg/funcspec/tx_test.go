@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
 // txFactory returns a pool whose every transaction is a distinct MockDatabase.
@@ -98,5 +99,47 @@ func TestOnTxBeginErrorAnswersTransactionError(t *testing.T) {
 	}
 	if queries != 0 {
 		t.Fatalf("no query may run after a failed OnTxBegin, ran %d", queries)
+	}
+}
+
+type stubProvider struct{ security.SecurityProvider }
+
+func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
+	var execs []string
+	h := NewHandler(&MockDatabase{
+		RunInTransactionFunc: func(ctx context.Context, fn func(common.Database) error) error {
+			return fn(&MockDatabase{
+				ExecFunc: func(ctx context.Context, query string, args ...interface{}) (common.Result, error) {
+					execs = append(execs, query)
+					return &MockResult{}, nil
+				},
+				QueryFunc: func(ctx context.Context, dest interface{}, query string, args ...interface{}) error {
+					execs = append(execs, "QUERY")
+					if rows, ok := dest.(*[]map[string]interface{}); ok {
+						*rows = []map[string]interface{}{{"id": float64(1)}}
+					}
+					return nil
+				},
+			})
+		},
+	})
+	list, err := security.NewSecurityList(stubProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.SetTxSettings(func(security.SecurityContext) (map[string]string, error) {
+		return map[string]string{"app.user_id": "1"}, nil
+	})
+	RegisterSecurityHooks(h, list)
+
+	w := httptest.NewRecorder()
+	h.SqlQuery("SELECT * FROM users WHERE id = 1", SqlQueryOptions{})(w, createTestRequest("GET", "/t", nil, nil, nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	// tx 1: stamp, then the query; tx 2 (BeforeResponse): stamp again.
+	if len(execs) != 3 || !strings.Contains(execs[0], "set_config('app.user_id'") || execs[1] != "QUERY" || !strings.Contains(execs[2], "set_config('app.user_id'") {
+		t.Fatalf("each transaction must be stamped before any other SQL, got %v", execs)
 	}
 }

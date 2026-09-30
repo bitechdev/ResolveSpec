@@ -96,7 +96,10 @@
 - DONE (AfterRead, decided by user): restheadspec `AfterRead` now runs in a second short tx. Test: `pkg/restheadspec/read_tx_test.go`.
 - DONE P7: `pkg/security/txsettings.go`: `SecurityList.SetTxSettings(fn)`, `StampTxSettings`, `ApplyTxSettings` (configurable map, decided by user; `set_config(name, value, true)`, value hex-encoded, name validated, Postgres only, fail closed). Every spec's `RegisterSecurityHooks` registers it on `OnTxBegin`. Tests: `pkg/security/txsettings_test.go`, `pkg/resolvespec/tx_settings_test.go`. Docs: `pkg/common/TRANSACTIONS.md`.
 - DONE real-Postgres check (resolvespec, testserver via compose): create `tx=1 pooled=0`, read `tx=1 pooled=0`, update `tx=2 pooled=0` (was `pooled=1`), single delete `tx=1 pooled=0`, batch create/delete `tx=1 pooled=0`. Compose now uses host networking (bridge fails here): testserver on 8123, Postgres on 8124 (was 8080/5434); integration test DSNs updated. Smoke script covers read and update. websocketspec/mqttspec/resolvemcp/restheadspec/funcspec not measured on real Postgres.
-- NEXT: extra per-spec create/update tests (optional).
+- DONE regression tests: per-spec read/create/update/delete hook-on-tx, failure-rollback (Before*/After*/`OnTxBegin`) and second-tx tests in all six specs (`ops_tx_test.go`, `tx_test.go`, `read_tx_test.go`); stamping tests for resolvespec, resolvemcp, funcspec; pgsql adapter preload tests (same connection, error returned); source guard `pkg/common/tx_guard_test.go` (no direct `RunInTransaction`/`BeginTx`, no `Tx = h.db` beyond the allowlisted BeforeHandle placeholders, no pool statements in spec handlers).
+- NOTE: resolvespec never fires `AfterRead`/`AfterCreate` (hook types exist, no call site); not tested, pre-existing.
+- NOTE: restheadspec total-count cache is process-wide and ignores the record id; read tests call `resetTotalCache`.
+- NOTE: `pkg/security` `TestDatabaseAuthenticator` fails with `-count=2` (also on `cd96404`, before this work); use `-count=1`.
 
 ## Tests
 - Existing: per-spec `handler_test.go`, `hooks_test.go`, `integration_test.go`; models in `pkg/testmodels/business.go`; `dbtrace` unit tests.

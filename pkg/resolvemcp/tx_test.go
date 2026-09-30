@@ -11,6 +11,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
 type txItem struct {
@@ -203,5 +204,123 @@ func TestUpdateRefetchRunsInSecondTransaction(t *testing.T) {
 		if tr.txs[ht][0] != tr.txs["on_tx_begin"][0] {
 			t.Fatalf("%s must run on the first transaction", ht)
 		}
+	}
+}
+
+func TestAfterDeleteErrorRollsBackDelete(t *testing.T) {
+	h, mock, ctx := newTxHarness(t)
+	h.Hooks().Register(AfterDelete, func(*HookContext) error { return sql.ErrConnDone })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, "a"))
+	mock.ExpectExec(`DELETE`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectRollback()
+
+	if _, err := h.executeDelete(ctx, "public", "items", "7"); err == nil {
+		t.Fatal("a failing AfterDelete must fail the request")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateBeforeHookErrorRollsBackWithoutInsert(t *testing.T) {
+	h, mock, ctx := newTxHarness(t)
+	h.Hooks().Register(BeforeCreate, func(*HookContext) error { return sql.ErrConnDone })
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	if _, err := h.executeCreate(ctx, "public", "items", map[string]interface{}{"name": "a"}); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateInsertErrorRollsBackBatch(t *testing.T) {
+	h, mock, ctx := newTxHarness(t)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`INSERT`).WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	items := []interface{}{map[string]interface{}{"name": "a"}, map[string]interface{}{"name": "b"}}
+	if _, err := h.executeCreate(ctx, "public", "items", items); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOnTxBeginErrorRollsBackEveryOperation(t *testing.T) {
+	ops := map[string]func(h *Handler, ctx context.Context) error{
+		"read": func(h *Handler, ctx context.Context) error {
+			_, _, err := h.executeRead(ctx, "public", "items", "7", common.RequestOptions{})
+			return err
+		},
+		"create": func(h *Handler, ctx context.Context) error {
+			_, err := h.executeCreate(ctx, "public", "items", map[string]interface{}{"name": "a"})
+			return err
+		},
+		"update": func(h *Handler, ctx context.Context) error {
+			_, err := h.executeUpdate(ctx, "public", "items", "7", map[string]interface{}{"name": "a"})
+			return err
+		},
+		"delete": func(h *Handler, ctx context.Context) error {
+			_, err := h.executeDelete(ctx, "public", "items", "7")
+			return err
+		},
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			h, mock, ctx := newTxHarness(t)
+			h.Hooks().Register(OnTxBegin, func(*HookContext) error { return sql.ErrConnDone })
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+			if err := op(h, ctx); err == nil {
+				t.Fatal("expected error")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type stubProvider struct{ security.SecurityProvider }
+
+func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
+	h, mock, ctx := newTxHarness(t)
+	list, err := security.NewSecurityList(stubProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.SetTxSettings(func(security.SecurityContext) (map[string]string, error) {
+		return map[string]string{"app.user_id": "7"}, nil
+	})
+	RegisterSecurityHooks(h, list)
+	ctx = context.WithValue(ctx, security.UserContextKey, &security.UserContext{UserID: 7, UserName: "u"})
+
+	// Update opens two transactions; each must be stamped before any other SQL.
+	cols := []string{"id", "name"}
+	mock.ExpectBegin()
+	mock.ExpectExec(`set_config\('app\.user_id'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a"))
+	mock.ExpectExec(`UPDATE`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(`set_config\('app\.user_id'`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "b"))
+	mock.ExpectCommit()
+
+	if _, err := h.executeUpdate(ctx, "public", "items", "7", map[string]interface{}{"name": "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

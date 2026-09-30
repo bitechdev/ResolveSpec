@@ -108,7 +108,7 @@ func (l *PostgresListener) dial(ctx context.Context) (*pgx.Conn, error) {
 		// Test the connection
 		if err = conn.Ping(ctx); err != nil {
 			lastErr = err
-			closeConnBounded(conn)
+			_ = closeConnBounded(conn)
 			if l.config.GetEnableLogging() {
 				logger.Warn("Failed to ping PostgreSQL listener: %v", err)
 			}
@@ -412,13 +412,13 @@ func (l *PostgresListener) reconnect(ctx context.Context) error {
 
 	for _, ch := range channels {
 		if _, err := conn.Exec(ctx, fmt.Sprintf("LISTEN %s", pgx.Identifier{ch}.Sanitize())); err != nil {
-			closeConnBounded(conn)
+			_ = closeConnBounded(conn)
 			return fmt.Errorf("failed to resubscribe to channel %s: %w", ch, err)
 		}
 	}
 
 	if l.ctx.Err() != nil {
-		closeConnBounded(conn)
+		_ = closeConnBounded(conn)
 		return l.ctx.Err()
 	}
 	l.swapConn(conn)
@@ -434,7 +434,7 @@ func (l *PostgresListener) swapConn(conn *pgx.Conn) {
 	l.conn = conn
 	l.mu.Unlock()
 	if old != nil {
-		closeConnBounded(old)
+		_ = closeConnBounded(old)
 	}
 	l.connMu.Unlock()
 }

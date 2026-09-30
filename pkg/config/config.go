@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Config represents the complete application configuration
 type Config struct {
@@ -198,3 +201,23 @@ type EventBrokerRetryPolicyConfig struct {
 // This is a map of path name to file system path
 // Example: "data_dir": "/var/lib/myapp/data"
 type PathsConfig map[string]string
+
+// Validate checks every configuration section for invalid or unsafe values.
+func (c *Config) Validate() error {
+	if err := c.Servers.Validate(); err != nil {
+		return fmt.Errorf("servers: %w", err)
+	}
+	if c.Middleware.RateLimitRPS < 0 || c.Middleware.RateLimitBurst < 0 {
+		return fmt.Errorf("middleware: rate_limit_rps and rate_limit_burst must not be negative")
+	}
+	if c.Middleware.MaxRequestSize <= 0 {
+		return fmt.Errorf("middleware: max_request_size must be greater than 0")
+	}
+	if c.EventBroker.Enabled && c.EventBroker.WorkerCount <= 0 {
+		return fmt.Errorf("event_broker: worker_count must be greater than 0")
+	}
+	if c.DBManager.MaxOpenConns < 0 || c.DBManager.MaxIdleConns < 0 || c.DBManager.RetryAttempts < 0 {
+		return fmt.Errorf("dbmanager: max_open_conns, max_idle_conns and retry_attempts must not be negative")
+	}
+	return nil
+}

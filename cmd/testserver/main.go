@@ -24,6 +24,7 @@ import (
 func main() {
 	// Load configuration
 	cfgMgr := config.NewManager()
+	config.SetConfigManager(cfgMgr)
 	if err := cfgMgr.Load(); err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}

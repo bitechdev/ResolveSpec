@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Get retrieves a path by name
@@ -34,9 +35,13 @@ func (pc PathsConfig) GetOrDefault(name, defaultPath string) string {
 	return path
 }
 
-// Set sets a path by name
-func (pc PathsConfig) Set(name, path string) {
-	pc[name] = path
+// Set sets a path by name. It takes a pointer so a nil map can be allocated.
+// PathsConfig is not safe for concurrent mutation; populate it before sharing.
+func (pc *PathsConfig) Set(name, path string) {
+	if *pc == nil {
+		*pc = make(PathsConfig)
+	}
+	(*pc)[name] = path
 }
 
 // Has checks if a path exists by name
@@ -92,7 +97,8 @@ func (pc PathsConfig) AbsPath(name string) (string, error) {
 	return absPath, nil
 }
 
-// Join joins path segments with a named base path
+// Join joins path segments with a named base path.
+// It returns an error if the result would escape the base path.
 func (pc PathsConfig) Join(name string, elem ...string) (string, error) {
 	base, err := pc.Get(name)
 	if err != nil {
@@ -100,7 +106,14 @@ func (pc PathsConfig) Join(name string, elem ...string) (string, error) {
 	}
 
 	parts := append([]string{base}, elem...)
-	return filepath.Join(parts...), nil
+	joined := filepath.Join(parts...)
+
+	// filepath.Join resolves ".." rather than rejecting it; ensure the result stays under base
+	cleanBase := filepath.Clean(base)
+	if joined != cleanBase && !strings.HasPrefix(joined, cleanBase+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %q escapes base path '%s'", joined, name)
+	}
+	return joined, nil
 }
 
 // List returns all configured path names

@@ -24,7 +24,7 @@ validators. Two serious issues:
 |---|----------|------|---------|
 | 1 | **Critical** | Locking | `Manager.Set`/`Get` over a lock-free `*viper.Viper` → concurrent map write → process-fatal |
 | 2 | **High** | Locking | `GetConfigManager()` is an unsynchronised lazy singleton; `NewManager()` also clobbers the global as a side effect |
-| 3 | **High** | Security | Insecure defaults: `cors.allowed_origins: ["*"]`, `allowed_headers: ["*"]`, `sslmode: disable`, `user: postgres` + blank password |
+| 3 | **High** | Security | **OPEN (deferred)** Insecure defaults: `cors.allowed_origins: ["*"]`, `allowed_headers: ["*"]`, `sslmode: disable`, `user: postgres` + blank password |
 | 4 | **High** | Security | `SaveConfig` writes all secrets in plaintext at mode `0644` (viper default, never overridden) |
 | 5 | Medium | Security | `AddConfigPath(".")` is searched first — CWD config injection |
 | 6 | Medium | Observability | `Load()` swallows `ConfigFileNotFoundError` with no log at all |
@@ -36,6 +36,24 @@ validators. Two serious issues:
 | 12 | Low | Security | No validation of `middleware.*` / `event_broker.worker_count` — `0` workers is accepted |
 | 13 | Low | Correctness | `ServersConfig.GetDefault()` returns a pointer to a copy of a map value |
 | 14 | Low | Security | `PathsConfig.Join` does not confine the result to the base path |
+
+## Resolution status (2026-09-30)
+
+- **#1** — Fixed: `sync.RWMutex` guards every viper access, options included
+- **#2** — Fixed: mutex-guarded singleton; `NewManager` no longer touches the global (new `SetConfigManager` publishes explicitly)
+- **#4** — Fixed: `SetConfigPermissions(0o600)` plus `chmod 0600` after write (secrets are not stripped)
+- **#5** — Fixed: search order is `/etc/resolvespec`, `$HOME/.resolvespec`, `./config`, `.` (CWD last, not dropped)
+- **#6** — Partly fixed: `ConfigFileUsed()` added; no log line because `pkg/config` cannot import `logger` (import cycle)
+- **#7** — Fixed: `Set` has a pointer receiver and allocates
+- **#8** — Not fixed: still a bare map; `Set` documented as not concurrency-safe
+- **#9** — Fixed: `LookupIPAddr` with a 2s timeout, fallback normalised to bare IPs and populates the slice
+- **#10** — Fixed: dead `Unmarshal` removed, `SetConfig` is atomic
+- **#11** — Fixed: recover removed (nothing in the function can panic)
+- **#12** — Partly fixed: `Config.Validate()` added, but it is not called from `GetConfig()`. The `*` CORS+credentials check is not implemented
+- **#13** — Documented only: `GetDefault` returns a pointer to a copy
+- **#14** — Fixed: `Join` errors if the result escapes the base
+- **#3** — Open: default flips deferred by decision (breaking change).
+- Tests: `pkg/config/hardening_test.go`.
 
 ---
 

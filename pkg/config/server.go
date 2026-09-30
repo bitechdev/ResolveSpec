@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 // ApplyGlobalDefaults applies global server defaults to this instance
@@ -95,7 +97,8 @@ func (sc *ServersConfig) Validate() error {
 	return nil
 }
 
-// GetDefault returns the default server instance configuration
+// GetDefault returns the default server instance configuration.
+// The returned pointer refers to a copy: mutating it does not modify sc.Instances.
 func (sc *ServersConfig) GetDefault() (*ServerInstanceConfig, error) {
 	if sc.DefaultServer == "" {
 		return nil, fmt.Errorf("no default server configured")
@@ -109,41 +112,37 @@ func (sc *ServersConfig) GetDefault() (*ServerInstanceConfig, error) {
 	return &instance, nil
 }
 
-// GetIPs - GetIP for pc
+// GetIPs returns the hostname, a comma-separated list of non-loopback IPs and the
+// same IPs as []net.IP. The lookup is bounded by a short timeout.
 func GetIPs() (hostname string, ipList string, ipNetList []net.IP) {
-	defer func() {
-		if err := recover(); err != nil {
-			fmt.Println("Recovered in GetIPs", err)
-		}
-	}()
 	hostname, _ = os.Hostname()
-	ipaddrlist := make([]net.IP, 0)
-	iplist := ""
-	addrs, err := net.LookupIP(hostname)
-	if err != nil {
-		return hostname, iplist, ipaddrlist
-	}
+	ipNetList = make([]net.IP, 0)
 
-	for _, a := range addrs {
-		// cfg.LogInfo("\nFound IP Host Address: %s", a)
-		if strings.Contains(a.String(), "127.0.0.1") {
-			continue
-		}
-		iplist = fmt.Sprintf("%s,%s", iplist, a)
-		ipaddrlist = append(ipaddrlist, a)
-	}
-	if iplist == "" {
-		iff, _ := net.InterfaceAddrs()
-		for _, a := range iff {
-			// cfg.LogInfo("\nFound IP Address: %s", a)
-			if strings.Contains(a.String(), "127.0.0.1") {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var ips []string
+	if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, hostname); err == nil {
+		for _, a := range addrs {
+			if a.IP.IsLoopback() {
 				continue
 			}
-			iplist = fmt.Sprintf("%s,%s", iplist, a)
-
+			ips = append(ips, a.IP.String())
+			ipNetList = append(ipNetList, a.IP)
 		}
-
 	}
-	iplist = strings.TrimLeft(iplist, ",")
-	return hostname, iplist, ipaddrlist
+
+	if len(ips) == 0 {
+		ifaceAddrs, _ := net.InterfaceAddrs()
+		for _, a := range ifaceAddrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok || ipn.IP.IsLoopback() {
+				continue
+			}
+			ips = append(ips, ipn.IP.String())
+			ipNetList = append(ipNetList, ipn.IP)
+		}
+	}
+
+	return hostname, strings.Join(ips, ","), ipNetList
 }

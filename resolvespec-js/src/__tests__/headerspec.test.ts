@@ -2,6 +2,101 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildHeaders, encodeHeaderValue, decodeHeaderValue, HeaderSpecClient, getHeaderSpecClient } from '../headerspec/client';
 import type { Options, ClientConfig, APIResponse } from '../common/types';
 
+describe('buildHeaders (extended restheadspec options)', () => {
+    it('should set X-Preload-Where when all preloads share one where', () => {
+        const h = buildHeaders({
+            preload: [
+                { relation: 'Items', columns: ['id'], where: 'active = true' },
+                { relation: 'Tags', where: 'active = true' },
+            ],
+        });
+        expect(h['X-Preload']).toBe('Items:id|Tags');
+        expect(h['X-Preload-Where']).toBe('active = true');
+    });
+
+    it('should use numbered headers for mixed where clauses', () => {
+        const h = buildHeaders({
+            preload: [
+                { relation: 'Items', where: 'a = 1' },
+                { relation: 'Category' },
+                { relation: 'Tags', where: 'b = 2' },
+            ],
+        });
+        expect(h['X-Preload']).toBe('Category');
+        expect(h['X-Preload-Where']).toBeUndefined();
+        expect(h['X-Preload-1']).toBe('Items');
+        expect(h['X-Preload-1-Where']).toBe('a = 1');
+        expect(h['X-Preload-2']).toBe('Tags');
+        expect(h['X-Preload-2-Where']).toBe('b = 2');
+    });
+
+    it('should set expand, joins, or-sql, search cols, advsql', () => {
+        const h = buildHeaders({
+            expand: [{ relation: 'Dept', columns: ['id', 'name'] }, { relation: 'Role' }],
+            custom_sql_joins: ['LEFT JOIN a ON a.id = b.id', 'INNER JOIN c ON c.id = b.cid'],
+            custom_sql_or: ['x = 1', 'y = 2'],
+            search_columns: ['name', 'email'],
+            advanced_sql: { total: 'a + b' },
+        });
+        expect(h['X-Expand']).toBe('Dept:id,name|Role');
+        expect(h['X-Custom-SQL-Join']).toBe('LEFT JOIN a ON a.id = b.id|INNER JOIN c ON c.id = b.cid');
+        expect(h['X-Custom-SQL-Or']).toBe('x = 1 OR y = 2');
+        expect(h['X-SearchCols']).toBe('name,email');
+        expect(h['X-AdvSQL-total']).toBe('a + b');
+    });
+
+    it('should set boolean flags, pk row and response format', () => {
+        const h = buildHeaders({
+            clean_json: true,
+            distinct: true,
+            skip_count: true,
+            skip_cache: false,
+            atomic_transaction: true,
+            single_record_as_object: false,
+            pk_row: '42',
+            response_format: 'detail',
+        });
+        expect(h['X-Clean-JSON']).toBe('true');
+        expect(h['X-Distinct']).toBe('true');
+        expect(h['X-SkipCount']).toBe('true');
+        expect(h['X-SkipCache']).toBe('false');
+        expect(h['X-Transaction-Atomic']).toBe('true');
+        expect(h['X-Single-Record-As-Object']).toBe('false');
+        expect(h['X-PKRow']).toBe('42');
+        expect(h['X-DetailApi']).toBe('true');
+    });
+
+    it('should set spatial and vector filters as JSON', () => {
+        const h = buildHeaders({
+            filters: [
+                { column: 'geom', operator: 'st_dwithin', value: { geom: 'POINT(0 0)', distance: 5 }, logic_operator: 'OR' },
+                { column: 'emb', operator: 'cosine_within', value: { vector: [1, 2], distance: 0.3 } },
+            ],
+        });
+        expect(JSON.parse(h['X-SpatialFilter-geom'])).toEqual({
+            op: 'st_dwithin', value: { geom: 'POINT(0 0)', distance: 5 }, logic: 'or',
+        });
+        expect(JSON.parse(h['X-VectorFilter-emb']).op).toBe('cosine_within');
+    });
+
+    it('should set vector search headers', () => {
+        const h = buildHeaders({
+            vector_search: { column: 'emb', vector: [0.1, 0.2], metric: 'cosine', as: 'dist', direction: 'desc' },
+        });
+        expect(h['X-Vector-Search-emb']).toBe('cosine');
+        expect(h['X-Vector-Search-Vector']).toBe('[0.1,0.2]');
+        expect(h['X-Vector-Search-As']).toBe('dist');
+        expect(h['X-Vector-Search-Dir']).toBe('desc');
+    });
+
+    it('should encode X-Files as ZIP_ JSON', () => {
+        const xf = { tablename: 'users', prefix: 'USR', limit: 10 };
+        const h = buildHeaders({ xfiles: xf });
+        expect(h['X-Files'].startsWith('ZIP_')).toBe(true);
+        expect(JSON.parse(decodeHeaderValue(h['X-Files']))).toEqual(xf);
+    });
+});
+
 describe('buildHeaders', () => {
     it('should set X-Select-Fields for columns', () => {
         const h = buildHeaders({ columns: ['id', 'name', 'email'] });

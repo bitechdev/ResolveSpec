@@ -106,6 +106,25 @@ await client.delete('public', 'users', '42');
 | `X-Fetch-RowNumber` | `fetch_row_number` | string |
 | `X-CQL-SEL-{col}` | `computedColumns` | expression |
 | `X-Custom-SQL-W` | `customOperators` | SQL AND-joined |
+| `X-Preload-Where` | `preload[].where` | applies to all preloads in `X-Preload`; differing wheres go to `X-Preload-{n}` + `X-Preload-{n}-Where` |
+| `X-Expand` | `expand` | `Rel:col1,col2` pipe-separated (LEFT JOIN) |
+| `X-Custom-SQL-Join` | `custom_sql_joins` | JOIN clauses, pipe-separated |
+| `X-Custom-SQL-Or` | `custom_sql_or` | SQL OR-joined |
+| `X-SearchCols` | `search_columns` | comma-separated |
+| `X-AdvSQL-{col}` | `advanced_sql` | column -> SQL |
+| `X-SpatialFilter-{col}` | `filters` (`st_dwithin`, `st_*`, `bbox`) | JSON `{op,value,logic}` |
+| `X-VectorFilter-{col}` | `filters` (`l2_within`, `cosine_within`, `ip_within`) | JSON `{op,value,logic}` |
+| `X-Vector-Search-{col}` / `-Vector` / `-As` / `-Dir` | `vector_search` | metric / JSON array / alias / asc\|desc |
+| `X-Clean-JSON` | `clean_json` | bool |
+| `X-Distinct` | `distinct` | bool |
+| `X-SkipCount` / `X-SkipCache` | `skip_count` / `skip_cache` | bool |
+| `X-PKRow` | `pk_row` | string |
+| `X-SimpleApi` / `X-DetailApi` / `X-Syncfusion` | `response_format` | `simple` \| `detail` \| `syncfusion` |
+| `X-Single-Record-As-Object` | `single_record_as_object` | bool (server default true) |
+| `X-Transaction-Atomic` | `atomic_transaction` | bool |
+| `X-Files` | `xfiles` | JSON, sent as `ZIP_` base64 |
+
+Extended fields live on `HeaderSpecOptions` (extends `Options`); `vector_search` is on `Options`.
 
 ### Utility Functions
 

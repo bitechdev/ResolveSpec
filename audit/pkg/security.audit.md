@@ -91,47 +91,52 @@ this; the gap is that the primary login path never got the same treatment.
 
 ## Findings
 
-| # | Severity | Axis | Finding |
-|---|---|---|---|
-| 1 | **Critical** | security | Password is never verified — in Direct mode *and* in the shipped stored procedures; passwords stored in cleartext; self-registration chooses its own roles |
-| 2 | **Critical** | security | Row-level security is silently inert: the `Where` type assertion at `hooks.go:134` can never match (verified) |
-| 3 | **Critical** | security / panic handling | `defer logger.CatchPanic(...)()` on unnamed results makes `ApplyColumnSecurity` and `GetRowSecurityTemplate` return "success, no rules" after a panic |
-| 4 | **High** | security | `setColSecValue` never masks `float*`, `bool`, `time.Time` or `[]byte`; its JSON branch tests the column *name*, not the type (verified) |
-| 5 | **High** | security | `loadSecurityRules` fails open on every error path — a transient provider error yields an unfiltered, unmasked query |
-| 6 | **High** | thread locking / slowness | Two package-wide write mutexes each held across a provider DB call, with `pOverwrite` ignored so nothing is ever cached |
-| 7 | **High** | security / logging | Session tokens and raw `Authorization` headers written to logs and forwarded to Sentry |
-| 8 | **High** | security | `HeaderAuthenticator` trusts `X-User-ID`/`X-User-Roles` from the client and is the authenticator used in the README's complete example |
-| 9 | **High** | security / slowness | One request can submit unlimited comma-separated tokens; each is tried against the database in turn |
-| 10 | **High** | security | Logout does not invalidate the cached session when the token carries a `Bearer ` prefix — the key used to delete differs from the key used to store |
-| 11 | **High** | security | Unauthenticated dynamic client registration: any caller registers a client with self-chosen scopes, and the `clients` map is never pruned |
-| 12 | **High** | security | `JWTAuthenticator.Login` issues `token_<userid>_<expiry>` as a bearer token — trivially forgeable — and never verifies the password |
-| 34 | **High** | security | `lookupOrFetchClient` rehydrates a persisted client without its secret hash, so after a restart every confidential client is treated as public and client authentication is skipped |
-| 13 | **Medium** | security | `refresh_token` grant authenticates no client and binds the token to none |
-| 14 | **Medium** | security | Both `SecurityList` maps grow without bound, and their keys embed session tokens and JWT claims |
-| 15 | **Medium** | security | Model rules fail open: unregistered models allow update and delete; `CheckModelAuthAllowed` grants every authenticated user every operation |
-| 16 | **Medium** | security / logging | `logDataAccess` is a `logger.Info` line with a TODO — there is no audit trail |
-| 17 | **Medium** | security | `ValidateSQLNames` / `ValidateTableNames` exist but are never called; names are interpolated into SQL unvalidated |
-| 18 | **Medium** | security | Internal error text echoed to unauthenticated clients on every auth failure |
-| 19 | **Medium** | security / panic handling | `probeFunctionExists` swallows a panic into `false`, silently downgrading the whole authenticator to Direct mode |
-| 20 | **Medium** | thread locking | `go a.updateSessionActivity(r.Context(), …)` — unbounded goroutine per request, no recover, and the context is already cancelled |
-| 21 | **Medium** | thread locking | `cleanupStates` and `cleanupExpired` goroutines: one unstoppable and leaked per `WithOAuth2` call |
-| 22 | **Medium** | security | `ApplyColumnSecurity` returns an error when a table has *no* rules, which `hooks.go:184` logs at `Warn` — one Sentry event per read |
-| 23 | **Medium** | security | Ephemeral RS256 signing key generated per process; `id_token`s break on restart and across replicas |
-| 24 | **Medium** | correctness | `contains` is prefix-or-suffix, not substring — primary-key detection misses `bun:"id,pk"` and `extractSQLName` returns `"column:name"` verbatim |
-| 25 | **Medium** | correctness | `maskString` masks one character too many at each end and indexes runes by byte offset (verified) |
-| 26 | **Low** | thread locking | Unsynchronised nil-map reads outside the lock in `ApplyColumnSecurity` and `GetRowSecurityTemplate` — a real race under `-race` |
-| 27 | **Low** | security | `SecurityList`'s maps and mutexes are exported, so any importer can mutate the security cache |
-| 28 | **Low** | correctness | `ColumSecurityApplyOnRecord` shadows `i` three times and indexes one slice with another's index |
-| 29 | **Low** | correctness | `ClearSecurity`'s filter condition is `&&` where it must be `||` (dead code — zero callers) |
-| 30 | **Low** | slowness | `splitTag` builds strings with `+=` inside a rune loop — O(n²) per struct tag, on every secured read |
-| 31 | **Low** | correctness | `registerDirect` uses `LastInsertId`, unsupported on Postgres, and checks uniqueness outside a transaction |
-| 32 | **Low** | security | `Authenticate` may return `(nil, nil)` through the callback, and the caller dereferences it |
-| 33 | **Low** | security | `requestPasswordReset` returns the raw reset token to its caller |
+| # | Severity | Axis | Finding | Status |
+|---|---|---|---|---|
+| 1 | **Critical** | security | Password is never verified — in Direct mode *and* in the shipped stored procedures; passwords stored in cleartext; self-registration chooses its own roles | Fixed (legacy upgrade opt-in) |
+| 2 | **Critical** | security | Row-level security is silently inert: the `Where` type assertion at `hooks.go:134` can never match (verified) | Fixed |
+| 3 | **Critical** | security / panic handling | `defer logger.CatchPanic(...)()` on unnamed results makes `ApplyColumnSecurity` and `GetRowSecurityTemplate` return "success, no rules" after a panic | Fixed |
+| 4 | **High** | security | `setColSecValue` never masks `float*`, `bool`, `time.Time` or `[]byte`; its JSON branch tests the column *name*, not the type (verified) | Open |
+| 5 | **High** | security | `loadSecurityRules` fails open on every error path — a transient provider error yields an unfiltered, unmasked query | Open |
+| 6 | **High** | thread locking / slowness | Two package-wide write mutexes each held across a provider DB call, with `pOverwrite` ignored so nothing is ever cached | Fixed |
+| 7 | **High** | security / logging | Session tokens and raw `Authorization` headers written to logs and forwarded to Sentry | Open |
+| 8 | **High** | security | `HeaderAuthenticator` trusts `X-User-ID`/`X-User-Roles` from the client and is the authenticator used in the README's complete example | Open |
+| 9 | **High** | security / slowness | One request can submit unlimited comma-separated tokens; each is tried against the database in turn | Partial |
+| 10 | **High** | security | Logout does not invalidate the cached session when the token carries a `Bearer ` prefix — the key used to delete differs from the key used to store | Open |
+| 11 | **High** | security | Unauthenticated dynamic client registration: any caller registers a client with self-chosen scopes, and the `clients` map is never pruned | Open |
+| 12 | **High** | security | `JWTAuthenticator.Login` issues `token_<userid>_<expiry>` as a bearer token — trivially forgeable — and never verifies the password | Open |
+| 34 | **High** | security | `lookupOrFetchClient` rehydrates a persisted client without its secret hash, so after a restart every confidential client is treated as public and client authentication is skipped | Open |
+| 13 | **Medium** | security | `refresh_token` grant authenticates no client and binds the token to none | Open |
+| 14 | **Medium** | security | Both `SecurityList` maps grow without bound, and their keys embed session tokens and JWT claims | Partial |
+| 15 | **Medium** | security | Model rules fail open: unregistered models allow update and delete; `CheckModelAuthAllowed` grants every authenticated user every operation | Open |
+| 16 | **Medium** | security / logging | `logDataAccess` is a `logger.Info` line with a TODO — there is no audit trail | Open |
+| 17 | **Medium** | security | `ValidateSQLNames` / `ValidateTableNames` exist but are never called; names are interpolated into SQL unvalidated | Open |
+| 18 | **Medium** | security | Internal error text echoed to unauthenticated clients on every auth failure | Open |
+| 19 | **Medium** | security / panic handling | `probeFunctionExists` swallows a panic into `false`, silently downgrading the whole authenticator to Direct mode | Open |
+| 20 | **Medium** | thread locking | `go a.updateSessionActivity(r.Context(), …)` — unbounded goroutine per request, no recover, and the context is already cancelled | Fixed |
+| 21 | **Medium** | thread locking | `cleanupStates` and `cleanupExpired` goroutines: one unstoppable and leaked per `WithOAuth2` call | Fixed |
+| 22 | **Medium** | security | `ApplyColumnSecurity` returns an error when a table has *no* rules, which `hooks.go:184` logs at `Warn` — one Sentry event per read | Open |
+| 23 | **Medium** | security | Ephemeral RS256 signing key generated per process; `id_token`s break on restart and across replicas | Open |
+| 24 | **Medium** | correctness | `contains` is prefix-or-suffix, not substring — primary-key detection misses `bun:"id,pk"` and `extractSQLName` returns `"column:name"` verbatim | Open |
+| 25 | **Medium** | correctness | `maskString` masks one character too many at each end and indexes runes by byte offset (verified) | Open |
+| 26 | **Low** | thread locking | Unsynchronised nil-map reads outside the lock in `ApplyColumnSecurity` and `GetRowSecurityTemplate` — a real race under `-race` | Fixed |
+| 27 | **Low** | security | `SecurityList`'s maps and mutexes are exported, so any importer can mutate the security cache | Open |
+| 28 | **Low** | correctness | `ColumSecurityApplyOnRecord` shadows `i` three times and indexes one slice with another's index | Open |
+| 29 | **Low** | correctness | `ClearSecurity`'s filter condition is `&&` where it must be `||` (dead code — zero callers) | Open |
+| 30 | **Low** | slowness | `splitTag` builds strings with `+=` inside a rune loop — O(n²) per struct tag, on every secured read | Fixed |
+| 31 | **Low** | correctness | `registerDirect` uses `LastInsertId`, unsupported on Postgres, and checks uniqueness outside a transaction | Open |
+| 32 | **Low** | security | `Authenticate` may return `(nil, nil)` through the callback, and the caller dereferences it | Open |
+| 33 | **Low** | security | `requestPasswordReset` returns the raw reset token to its caller | Open |
 
 ## Resolution status (2026-09-30)
 
-Only the thread-locking, data-race and slowness findings have been addressed so far
-(#6, #9, #20, #21, #26, #30); every other finding is untouched.
+Addressed so far: the thread-locking, data-race and slowness findings (#6, #9, #20, #21,
+#26, #30) and the three Critical findings (#1, #2, #3). Every other finding is untouched.
+
+- **#1** — Fixed. Login now verifies the password in Direct mode (`loginDirect`, `jwtLoginDirect`) and in the shipped procedures (`resolvespec_login`, `resolvespec_jwt_login`), with `password.go` providing bcrypt hash/verify, a 72-byte limit (longer is rejected, not truncated) and a dummy comparison for unknown users. Passwords are hashed on write (`registerDirect`, `completePasswordResetDirect`, `resolvespec_register`, `resolvespec_password_reset`). Registration ignores client-supplied `user_level`/`roles` (and `program_user_*` in the procedure): new users are level 0 with no roles. `resolvespec_jwt_login` no longer returns the password and the Go struct field is gone. `database_schema.sql` now creates the `pgcrypto` extension. Legacy cleartext rows are still accepted at login, but rewriting them as bcrypt is **opt-in and off by default**: `DatabaseAuthenticatorOptions.UpgradePasswordHash`, `JWTAuthenticator.WithPasswordHashUpgrade(true)`, and for the procedures `ALTER DATABASE <db> SET resolvespec.upgrade_password_hash = 'on'`. Until enabled, cleartext passwords stay in the table. The procedures were exercised against a scratch PostgreSQL (wrong/empty/legacy/bcrypt passwords, registration privileges, payload) and Go-generated hashes verify with `crypt()`; the procedure path has no automated test in the repo. Not done: `JWTAuthenticator` still issues the forgeable `token_<id>_<exp>` (#12); the not-found branch of the procedures is not timing-equalised
+- **#2** — Fixed. `RowSecurity.GetTemplate` now returns `(clause, args, error)`: `{UserID}` becomes a `?` placeholder with the user reduced to a scalar (`*UserContext` becomes its `UserID`; other structured values are rejected) and `{PrimaryKeyName}`/`{TableName}`/`{SchemaName}` must be plain identifiers. `applyRowSecurity` asserts `common.SelectQuery`, passes the bind args, and returns an error if the filter cannot be attached (previously it was silently dropped). The "Applying row security filter" line is now `Debug` and no longer prints the user. Tests use a fake `SelectQuery` that records `Where` calls. Not done: the `modelType.Kind()` check before `NumField()`
+- **#3** — Fixed. `ApplyColumnSecurity` and `GetRowSecurityTemplate` have named results and convert a panic into an error via `logger.HandlePanic`. New sentinels `ErrNoColumnSecurity`/`ErrNoRowSecurity` mean "no rules"; the hooks treat those as success and fail the request on any other error (including a recovered panic). Not done: `loadSecurityRules` still ignores provider load errors (#5), so a failed load still reads as "no rules"; `setColSecValue` still lacks `CanSet()` guards (#4)
+- Found while testing, not caused by this work: `database_schema.sql` fails to create one function (`parameter name "p_data" used more than once`, around line 1695); the same error occurs on the previously committed file
 
 - **#6** — Fixed: `LoadColumnSecurity`/`LoadRowSecurity` no longer hold a mutex across the provider call (load first, then publish under the lock), the provider call gets a 10 s deadline derived from the request context, and `pOverwrite` is honoured. Results are cached for 30 s (`securityCacheTTL`; revocations take up to that long to apply) and expired entries are pruned on write after a further 30 s grace. Expiry is tracked in side maps, so the exported `ColumnSecurity`/`RowSecurity` maps keep their shape. Duplicate cold-key queries are not collapsed (no singleflight)
 - **#9** — Partly fixed: `Authenticate` rejects more than 4 comma-separated tokens (`maxAuthTokens`) with `too many authorization tokens`, and splits with `SplitN` so a huge header is not fully split. Not done: aborting the loop on the first hard failure, per-token rate limiting, and dropping the header from the `Warn` (finding 7)
@@ -140,7 +145,7 @@ Only the thread-locking, data-race and slowness findings have been addressed so 
 - **#21** — Fixed: each `OAuth2Provider` has a stop channel and `cleanupStates` exits on it (and recovers panics); replacing a provider stops the old one; new `DatabaseAuthenticator.Close()` stops all of them and waits for in-flight activity updates. `Close` is not yet called from the server shutdown path
 - **#26** — Fixed: the nil-map checks in `ApplyColumnSecurity`, `ColumSecurityApplyOnRecord` and `GetRowSecurityTemplate` now run inside the lock. Error messages are unchanged
 - **#30** — Fixed: `splitTag` uses `strings.FieldsFunc`; `maskString` uses a `strings.Builder` (its off-by-one offsets, finding 25, are unchanged)
-- Tests: `pkg/security/concurrency_test.go` (run with `-race`).
+- Tests: `pkg/security/concurrency_test.go`, `direct_mode_test.go`, `hooks_test.go` (run with `-race`).
 
 ---
 

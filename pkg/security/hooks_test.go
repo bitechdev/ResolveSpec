@@ -3,19 +3,23 @@ package security
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/bitechdev/ResolveSpec/pkg/common"
 )
 
 // Mock SecurityContext for testing hooks
 type mockSecurityContext struct {
-	ctx       context.Context
-	userID    int
-	hasUser   bool
-	schema    string
-	entity    string
-	model     interface{}
-	query     interface{}
-	result    interface{}
+	ctx     context.Context
+	userID  int
+	hasUser bool
+	schema  string
+	entity  string
+	model   interface{}
+	query   interface{}
+	result  interface{}
+	userRef any
 }
 
 func (m *mockSecurityContext) GetContext() context.Context {
@@ -27,6 +31,9 @@ func (m *mockSecurityContext) GetUserID() (int, bool) {
 }
 
 func (m *mockSecurityContext) GetUserRef() (any, bool) {
+	if m.userRef != nil {
+		return m.userRef, m.hasUser
+	}
 	return m.userID, m.hasUser
 }
 
@@ -194,6 +201,19 @@ func TestLoadSecurityRules(t *testing.T) {
 	})
 }
 
+// recordingQuery is a common.SelectQuery that records Where calls.
+type recordingQuery struct {
+	common.SelectQuery
+	clauses []string
+	args    [][]any
+}
+
+func (q *recordingQuery) Where(query string, args ...interface{}) common.SelectQuery {
+	q.clauses = append(q.clauses, query)
+	q.args = append(q.args, args)
+	return q
+}
+
 // Test applyRowSecurity
 func TestApplyRowSecurity(t *testing.T) {
 	type TestModel struct {
@@ -207,6 +227,7 @@ func TestApplyRowSecurity(t *testing.T) {
 				Tablename: "orders",
 				Template:  "user_id = {UserID}",
 				HasBlock:  false,
+				UserID:    1,
 			},
 		}
 		secList, _ := NewSecurityList(provider)
@@ -215,11 +236,7 @@ func TestApplyRowSecurity(t *testing.T) {
 		// Load row security
 		_, _ = secList.LoadRowSecurity(ctx, 1, "public", "orders", false)
 
-		// Mock query that supports Where
-		type MockQuery struct {
-			whereClause string
-		}
-		mockQuery := &MockQuery{}
+		mockQuery := &recordingQuery{}
 
 		secCtx := &mockSecurityContext{
 			ctx:     ctx,
@@ -236,8 +253,61 @@ func TestApplyRowSecurity(t *testing.T) {
 			t.Fatalf("expected no error, got %v", err)
 		}
 
-		// Note: The actual WHERE clause application requires a query type that implements Where()
-		// In a real scenario, this would be a bun.SelectQuery or similar
+		if len(mockQuery.clauses) != 1 || mockQuery.clauses[0] != "user_id = ?" {
+			t.Fatalf("expected filter to be attached as %q, got %v", "user_id = ?", mockQuery.clauses)
+		}
+		if len(mockQuery.args[0]) != 1 || mockQuery.args[0][0] != 1 {
+			t.Fatalf("expected bound arg [1], got %v", mockQuery.args[0])
+		}
+	})
+
+	t.Run("fails closed when filter cannot be attached", func(t *testing.T) {
+		provider := &mockSecurityProvider{rowSecurity: RowSecurity{
+			Schema: "public", Tablename: "orders", Template: "user_id = {UserID}", UserID: 1,
+		}}
+		secList, _ := NewSecurityList(provider)
+		ctx := context.Background()
+		_, _ = secList.LoadRowSecurity(ctx, 1, "public", "orders", false)
+
+		secCtx := &mockSecurityContext{
+			ctx: ctx, userID: 1, hasUser: true, schema: "public", entity: "orders",
+			model: &TestModel{}, query: struct{}{},
+		}
+		if err := ApplyRowSecurity(secCtx, secList); err == nil {
+			t.Fatal("expected an error when the query does not support Where")
+		}
+	})
+
+	t.Run("user context is bound as its id, never rendered into SQL", func(t *testing.T) {
+		uc := &UserContext{UserID: 7, SessionID: "sess_secret", UserName: "x' OR '1'='1"}
+		provider := &mockSecurityProvider{rowSecurity: RowSecurity{
+			Schema: "public", Tablename: "orders", Template: "user_id = {UserID}", UserID: uc,
+		}}
+		secList, _ := NewSecurityList(provider)
+		ctx := context.Background()
+		_, _ = secList.LoadRowSecurity(ctx, uc, "public", "orders", false)
+
+		q := &recordingQuery{}
+		secCtx := &mockSecurityContext{
+			ctx: ctx, userID: 7, hasUser: true, schema: "public", entity: "orders",
+			model: &TestModel{}, query: q, userRef: uc,
+		}
+		if err := ApplyRowSecurity(secCtx, secList); err != nil {
+			t.Fatal(err)
+		}
+		if len(q.clauses) != 1 || strings.Contains(q.clauses[0], "sess_secret") || strings.Contains(q.clauses[0], "OR") {
+			t.Fatalf("user data leaked into SQL: %v", q.clauses)
+		}
+		if q.args[0][0] != 7 {
+			t.Fatalf("expected bound user id 7, got %v", q.args[0])
+		}
+	})
+
+	t.Run("invalid identifier is rejected", func(t *testing.T) {
+		rs := RowSecurity{Schema: "public", Tablename: "orders; DROP TABLE x", Template: "{TableName}.uid = 1"}
+		if _, _, err := rs.GetTemplate("id", nil); err == nil {
+			t.Fatal("expected invalid identifier error")
+		}
 	})
 
 	t.Run("block access", func(t *testing.T) {
@@ -472,6 +542,7 @@ func TestSecurityIntegration(t *testing.T) {
 			Tablename: "orders",
 			Template:  "user_id = {UserID}",
 			HasBlock:  false,
+			UserID:    1,
 		},
 	}
 
@@ -486,6 +557,7 @@ func TestSecurityIntegration(t *testing.T) {
 			schema:  "public",
 			entity:  "orders",
 			model:   &Order{},
+			query:   &recordingQuery{},
 		}
 
 		// Step 1: Load security rules
@@ -549,6 +621,7 @@ func TestRowSecurityGetTemplateIntegration(t *testing.T) {
 		rowSec       RowSecurity
 		pkName       string
 		expectedPart string // Part of the expected output
+		expectedArgs []any
 	}{
 		{
 			name: "with all placeholders",
@@ -559,7 +632,8 @@ func TestRowSecurityGetTemplateIntegration(t *testing.T) {
 				Template:  "{PrimaryKeyName} IN (SELECT {PrimaryKeyName} FROM {SchemaName}.{TableName}_access WHERE user_id = {UserID})",
 			},
 			pkName:       "order_id",
-			expectedPart: "order_id IN (SELECT order_id FROM sales.orders_access WHERE user_id = 42)",
+			expectedPart: "order_id IN (SELECT order_id FROM sales.orders_access WHERE user_id = ?)",
+			expectedArgs: []any{42},
 		},
 		{
 			name: "simple user filter",
@@ -570,17 +644,24 @@ func TestRowSecurityGetTemplateIntegration(t *testing.T) {
 				Template:  "user_id = {UserID}",
 			},
 			pkName:       "id",
-			expectedPart: "user_id = 1",
+			expectedPart: "user_id = ?",
+			expectedArgs: []any{1},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			modelType := reflect.TypeOf(Model{})
-			result := tt.rowSec.GetTemplate(tt.pkName, modelType)
+			result, args, err := tt.rowSec.GetTemplate(tt.pkName, modelType)
+			if err != nil {
+				t.Fatalf("GetTemplate() error = %v", err)
+			}
 
 			if result != tt.expectedPart {
 				t.Errorf("GetTemplate() = %q, want %q", result, tt.expectedPart)
+			}
+			if !reflect.DeepEqual(args, tt.expectedArgs) {
+				t.Errorf("GetTemplate() args = %v, want %v", args, tt.expectedArgs)
 			}
 		})
 	}

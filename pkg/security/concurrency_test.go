@@ -2,8 +2,10 @@ package security
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -143,5 +145,52 @@ func TestSplitTagDropsEmpty(t *testing.T) {
 	got := splitTag("a,,b,c,", ',')
 	if len(got) != 3 || got[0] != "a" || got[2] != "c" {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestColumnSecurityPanicFailsClosed(t *testing.T) {
+	type Rec struct {
+		JSONCol string `json:"json_col" bun:"json_col"`
+	}
+	sl, _ := NewSecurityList(&slowProvider{})
+	sl.ColumnSecurity["public.t@1"] = []ColumnSecurity{{
+		Schema: "public", Tablename: "t", Path: []string{"JSONCol"}, Accesstype: "mask", UserID: 1,
+	}}
+	// A struct boxed in an interface is not addressable, so SetString panics.
+	recs := []any{Rec{JSONCol: "secret"}}
+
+	out, err := sl.ApplyColumnSecurity(reflect.ValueOf(recs), reflect.TypeOf(Rec{}), 1, "public", "t")
+	if err == nil {
+		t.Fatalf("panic must be returned as an error, got out=%v", out)
+	}
+	if errors.Is(err, ErrNoColumnSecurity) {
+		t.Fatal("a panic must not look like 'no rules'")
+	}
+}
+
+func TestNoRulesIsNotAnError(t *testing.T) {
+	sl, _ := NewSecurityList(&slowProvider{})
+	if _, err := sl.GetRowSecurityTemplate(1, "s", "t"); !errors.Is(err, ErrNoRowSecurity) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := sl.ApplyColumnSecurity(reflect.ValueOf([]int{}), reflect.TypeOf(0), 1, "s", "t"); !errors.Is(err, ErrNoColumnSecurity) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestApplyColumnSecurityHookFailsClosedOnPanic(t *testing.T) {
+	type Rec struct {
+		JSONCol string `bun:"json_col"`
+	}
+	sl, _ := NewSecurityList(&slowProvider{})
+	sl.ColumnSecurity["public.t@1"] = []ColumnSecurity{{
+		Schema: "public", Tablename: "t", Path: []string{"JSONCol"}, Accesstype: "mask", UserID: 1,
+	}}
+	secCtx := &mockSecurityContext{
+		ctx: context.Background(), userID: 1, hasUser: true, schema: "public", entity: "t",
+		model: &Rec{}, result: []any{Rec{JSONCol: "secret"}},
+	}
+	if err := ApplyColumnSecurity(secCtx, sl); err == nil {
+		t.Fatal("a panic during masking must fail the request, not return unmasked data")
 	}
 }

@@ -53,11 +53,12 @@ func TestDirectMode_RegisterThenLogin(t *testing.T) {
 	ctx := context.Background()
 
 	regResp, err := auth.Register(ctx, RegisterRequest{
-		Username: "alice",
-		Password: "hunter2",
-		Email:    "alice@example.com",
-		Roles:    []string{"user", "admin"},
-		Claims:   map[string]any{"ip_address": "127.0.0.1", "user_agent": "test-agent"},
+		Username:  "alice",
+		Password:  "hunter2",
+		Email:     "alice@example.com",
+		Roles:     []string{"user", "admin"},
+		UserLevel: 99,
+		Claims:    map[string]any{"ip_address": "127.0.0.1", "user_agent": "test-agent"},
 	})
 	if err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -65,8 +66,27 @@ func TestDirectMode_RegisterThenLogin(t *testing.T) {
 	if regResp.Token == "" || regResp.User == nil {
 		t.Fatalf("Register() returned incomplete response: %+v", regResp)
 	}
-	if len(regResp.User.Roles) != 2 {
-		t.Errorf("expected 2 roles, got %v", regResp.User.Roles)
+	if len(regResp.User.Roles) != 0 || regResp.User.UserLevel != 0 {
+		t.Errorf("client-supplied privileges must be ignored, got level=%d roles=%v", regResp.User.UserLevel, regResp.User.Roles)
+	}
+
+	// Password must be stored as a bcrypt hash, not cleartext.
+	var stored string
+	if err := db.QueryRow(`SELECT password FROM users WHERE username = 'alice'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !isBcryptHash(stored) || stored == "hunter2" {
+		t.Errorf("password not hashed: %q", stored)
+	}
+
+	if _, err := auth.Login(ctx, LoginRequest{Username: "alice", Password: "wrong"}); err == nil {
+		t.Error("login with wrong password must fail")
+	}
+	if _, err := auth.Login(ctx, LoginRequest{Username: "alice"}); err == nil {
+		t.Error("login with empty password must fail")
+	}
+	if _, err := auth.Login(ctx, LoginRequest{Username: "nobody", Password: "hunter2"}); err == nil {
+		t.Error("login for unknown user must fail")
 	}
 
 	loginResp, err := auth.Login(ctx, LoginRequest{Username: "alice", Password: "hunter2"})
@@ -463,5 +483,53 @@ func TestDirectMode_OAuthServerClientAndCode(t *testing.T) {
 	}
 	if info.Active {
 		t.Error("expected token to be inactive after revoke")
+	}
+}
+
+func TestDirectMode_LegacyPlaintextUpgradeIsOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		db := newDirectTestDB(t)
+		auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect, UpgradePasswordHash: enabled})
+		ctx := context.Background()
+
+		if _, err := db.Exec(`DELETE FROM users`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO users (username, email, password, user_level, roles, is_active, created_at, updated_at) VALUES ('legacy', 'l@example.com', 'oldpass', 0, '', 1, datetime('now'), datetime('now'))`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := auth.Login(ctx, LoginRequest{Username: "legacy", Password: "nope"}); err == nil {
+			t.Fatal("wrong password must fail for legacy row")
+		}
+		if _, err := auth.Login(ctx, LoginRequest{Username: "legacy", Password: "oldpass"}); err != nil {
+			t.Fatalf("legacy login failed (upgrade=%v): %v", enabled, err)
+		}
+		var stored string
+		_ = db.QueryRow(`SELECT password FROM users WHERE username = 'legacy'`).Scan(&stored)
+		if enabled && !isBcryptHash(stored) {
+			t.Fatalf("upgrade enabled but password not upgraded: %q", stored)
+		}
+		if !enabled && stored != "oldpass" {
+			t.Fatalf("upgrade must not happen unless enabled, stored=%q", stored)
+		}
+		if _, err := auth.Login(ctx, LoginRequest{Username: "legacy", Password: "oldpass"}); err != nil {
+			t.Fatalf("second login failed (upgrade=%v): %v", enabled, err)
+		}
+	}
+}
+
+func TestVerifyPasswordEdgeCases(t *testing.T) {
+	h, _ := hashPassword("pw")
+	if ok, _ := verifyPassword(h, "pw"); !ok {
+		t.Error("bcrypt match failed")
+	}
+	if ok, _ := verifyPassword("", "pw"); ok {
+		t.Error("empty stored must not match")
+	}
+	if ok, _ := verifyPassword("pw", ""); ok {
+		t.Error("empty supplied must not match")
+	}
+	if _, err := hashPassword(string(make([]byte, 73))); err == nil {
+		t.Error("73-byte password must be rejected")
 	}
 }

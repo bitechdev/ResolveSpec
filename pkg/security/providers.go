@@ -88,6 +88,10 @@ type DatabaseAuthenticator struct {
 	queryMode  QueryMode
 	capability *dbCapability
 
+	// upgradePasswordHash enables rewriting legacy cleartext passwords as bcrypt
+	// on successful login (opt-in, see DatabaseAuthenticatorOptions).
+	upgradePasswordHash bool
+
 	// activityWG tracks in-flight asynchronous session activity updates
 	activityWG sync.WaitGroup
 
@@ -130,6 +134,11 @@ type DatabaseAuthenticatorOptions struct {
 	// CookieOptions.Name (default "session_token") in addition to the Authorization header,
 	// and LoginWithCookie / LogoutWithCookie automatically set / clear the cookie.
 	EnableCookieSession bool
+	// UpgradePasswordHash, when true, rewrites a legacy cleartext password as a
+	// bcrypt hash after a successful login. It is off by default and is never
+	// enabled automatically: legacy cleartext values are still accepted at login,
+	// but stored rows are left untouched unless this is set.
+	UpgradePasswordHash bool
 	// CookieOptions configures the session cookie written by LoginWithCookie.
 	// Only used when EnableCookieSession is true.
 	CookieOptions SessionCookieOptions
@@ -169,6 +178,7 @@ func NewDatabaseAuthenticatorWithOptions(db *sql.DB, opts DatabaseAuthenticatorO
 		capability:           newDBCapability(),
 		passkeyProvider:      opts.PasskeyProvider,
 		enableCookieSession:  opts.EnableCookieSession,
+		upgradePasswordHash:  opts.UpgradePasswordHash,
 		cookieOptions:        opts.CookieOptions,
 		authenticateCallback: opts.AuthenticateCallback,
 	}
@@ -610,6 +620,17 @@ type JWTAuthenticator struct {
 	tableNames *TableNames
 	queryMode  QueryMode
 	capability *dbCapability
+
+	// upgradePasswordHash enables rewriting legacy cleartext passwords as bcrypt
+	// on successful login. Off by default; enable with WithPasswordHashUpgrade.
+	upgradePasswordHash bool
+}
+
+// WithPasswordHashUpgrade explicitly enables (or disables) upgrading legacy
+// cleartext passwords to bcrypt after a successful login. Off by default.
+func (a *JWTAuthenticator) WithPasswordHashUpgrade(enabled bool) *JWTAuthenticator {
+	a.upgradePasswordHash = enabled
+	return a
 }
 
 func NewJWTAuthenticator(secretKey string, db *sql.DB, names ...*SQLNames) *JWTAuthenticator {
@@ -698,7 +719,6 @@ func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginR
 		ID        int    `json:"id"`
 		Username  string `json:"username"`
 		Email     string `json:"email"`
-		Password  string `json:"password"`
 		UserLevel int    `json:"user_level"`
 		Roles     string `json:"roles"`
 	}
@@ -707,10 +727,8 @@ func (a *JWTAuthenticator) Login(ctx context.Context, req LoginRequest) (*LoginR
 		return nil, fmt.Errorf("failed to parse user data: %w", err)
 	}
 
-	// TODO: Verify password
-	// if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-	//     return nil, fmt.Errorf("invalid credentials")
-	// }
+	// The password is verified inside resolvespec_jwt_login; the hash is never
+	// returned to Go.
 
 	// Generate token (placeholder - implement JWT signing when library is available)
 	expiresAt := time.Now().Add(24 * time.Hour)

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 )
@@ -85,9 +86,13 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 	// Get row security template
 	rowSec, err := securityList.GetRowSecurityTemplate(userRef, schema, tablename)
 	if err != nil {
-		// No row security defined, allow query to proceed
-		logger.Debug("No row security for %s.%s@%v: %v", schema, tablename, userRef, err)
-		return nil
+		if errors.Is(err, ErrNoRowSecurity) {
+			// No row security defined for this user/table: nothing to apply.
+			logger.Debug("No row security for %s.%s", schema, tablename)
+			return nil
+		}
+		// Anything else (including a recovered panic) fails closed.
+		return fmt.Errorf("row security failed for %s.%s: %w", schema, tablename, err)
 	}
 
 	// Check if user has a blocking rule
@@ -125,21 +130,21 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 			}
 		}
 
-		// Generate the WHERE clause from template
-		whereClause := rowSec.GetTemplate(pkName, modelType)
-
-		logger.Info("Applying row security filter for user %v on %s.%s: %s",
-			userRef, schema, tablename, whereClause)
-
-		// Apply the WHERE clause to the query
-		query := secCtx.GetQuery()
-		if selectQuery, ok := query.(interface {
-			Where(string, ...interface{}) interface{}
-		}); ok {
-			secCtx.SetQuery(selectQuery.Where(whereClause))
-		} else {
-			logger.Debug("Query doesn't support Where method, skipping row security")
+		// Generate the WHERE clause and bind arguments from the template
+		whereClause, whereArgs, err := rowSec.GetTemplate(pkName, modelType)
+		if err != nil {
+			return fmt.Errorf("row security failed for %s.%s: %w", schema, tablename, err)
 		}
+
+		logger.Debug("Applying row security filter on %s.%s: %s", schema, tablename, whereClause)
+
+		// A filter that cannot be attached must fail the request; silently
+		// skipping it would expose every row.
+		selectQuery, ok := secCtx.GetQuery().(common.SelectQuery)
+		if !ok {
+			return fmt.Errorf("row security: query type %T on %s.%s does not support Where", secCtx.GetQuery(), schema, tablename)
+		}
+		secCtx.SetQuery(selectQuery.Where(whereClause, whereArgs...))
 	}
 
 	return nil
@@ -183,9 +188,14 @@ func applyColumnSecurity(secCtx SecurityContext, securityList *SecurityList) err
 
 	maskedResult, err := securityList.ApplyColumnSecurity(resultValue, modelType, userID, schema, tablename)
 	if err != nil {
-		logger.Warn("Column security error: %v", err)
-		// Don't fail the request, just log the issue
-		return nil
+		if errors.Is(err, ErrNoColumnSecurity) {
+			// No rules for this user/table: nothing to mask.
+			logger.Debug("No column security for %s.%s", schema, tablename)
+			return nil
+		}
+		// Anything else (including a recovered panic) fails closed rather
+		// than returning unmasked data.
+		return fmt.Errorf("column security failed for %s.%s: %w", schema, tablename, err)
 	}
 
 	// Update the result with masked data

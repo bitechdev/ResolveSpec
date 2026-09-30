@@ -38,7 +38,8 @@ func (m *mockSecurityProvider) Authenticate(r *http.Request) (*UserContext, erro
 	return m.authUser, m.authError
 }
 
-func (m *mockSecurityProvider) SetAuthenticateCallback(_ func(r *http.Request) (*UserContext, error)) {}
+func (m *mockSecurityProvider) SetAuthenticateCallback(_ func(r *http.Request) (*UserContext, error)) {
+}
 
 func (m *mockSecurityProvider) GetColumnSecurity(ctx context.Context, userID int, schema, table string) ([]ColumnSecurity, error) {
 	return m.columnSecurity, nil
@@ -78,13 +79,13 @@ func TestNewSecurityList(t *testing.T) {
 // Test maskString function
 func TestMaskString(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		maskStart  int
-		maskEnd    int
-		maskChar   string
-		invert     bool
-		expected   string
+		name      string
+		input     string
+		maskStart int
+		maskEnd   int
+		maskChar  string
+		invert    bool
+		expected  string
 	}{
 		{
 			name:      "mask first 3 characters",
@@ -299,11 +300,17 @@ func TestRowSecurityGetTemplate(t *testing.T) {
 		UserID:    42,
 	}
 
-	result := rowSec.GetTemplate("order_id", nil)
+	result, args, err := rowSec.GetTemplate("order_id", nil)
+	if err != nil {
+		t.Fatalf("GetTemplate() error = %v", err)
+	}
 
-	expected := "order_id IN (SELECT order_id FROM public.orders_access WHERE user_id = 42)"
+	expected := "order_id IN (SELECT order_id FROM public.orders_access WHERE user_id = ?)"
 	if result != expected {
 		t.Errorf("GetTemplate() = %q, want %q", result, expected)
+	}
+	if len(args) != 1 || args[0] != 42 {
+		t.Errorf("GetTemplate() args = %v, want [42]", args)
 	}
 }
 

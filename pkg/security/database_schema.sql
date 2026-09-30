@@ -1,12 +1,16 @@
 -- Database Schema for DatabaseAuthenticator
 -- ============================================
 
+-- pgcrypto provides gen_random_bytes(), crypt() and gen_salt(); it is required
+-- for session token generation and for password hashing/verification below.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(255) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
-    password VARCHAR(255), -- bcrypt hashed password (nullable for OAuth2 users)
+    password VARCHAR(255), -- bcrypt hash (nullable for OAuth2 users); legacy cleartext is accepted at login (upgrade to bcrypt is opt-in)
     user_level INTEGER DEFAULT 0,
     roles VARCHAR(500), -- Comma-separated roles: "admin,manager,user"
     is_active BOOLEAN DEFAULT true,
@@ -98,6 +102,8 @@ DECLARE
     v_user_level INTEGER;
     v_roles TEXT;
     v_password_hash TEXT;
+    v_supplied_password TEXT;
+    v_password_ok BOOLEAN := false;
     v_session_token TEXT;
     v_expires_at TIMESTAMP;
     v_ip_address TEXT;
@@ -107,6 +113,7 @@ DECLARE
 BEGIN
     -- Extract login request fields
     v_username := p_request->>'username';
+    v_supplied_password := p_request->>'password';
     v_ip_address := p_request->'claims'->>'ip_address';
     v_user_agent := p_request->'claims'->>'user_agent';
 
@@ -121,12 +128,30 @@ BEGIN
         RETURN;
     END IF;
 
-    -- TODO: Verify password hash using pgcrypto extension
-    -- Enable pgcrypto: CREATE EXTENSION IF NOT EXISTS pgcrypto;
-    -- IF NOT (crypt(p_request->>'password', v_password_hash) = v_password_hash) THEN
-    --     RETURN QUERY SELECT false, 'Invalid credentials'::text, NULL::jsonb;
-    --     RETURN;
-    -- END IF;
+    -- Verify the password. bcrypt hashes are checked with crypt(); a legacy
+    -- cleartext value is still accepted (and only rewritten as bcrypt if the
+    -- upgrade is explicitly enabled).
+    -- bcrypt only uses the first 72 bytes, so longer input is rejected.
+    IF v_password_hash IS NOT NULL AND v_password_hash <> ''
+       AND v_supplied_password IS NOT NULL AND v_supplied_password <> ''
+       AND octet_length(v_supplied_password) <= 72 THEN
+        IF v_password_hash ~ '^\$2[aby]\$' THEN
+            v_password_ok := (crypt(v_supplied_password, v_password_hash) = v_password_hash);
+        ELSE
+            v_password_ok := (v_password_hash = v_supplied_password);
+            -- Upgrading the stored value is opt-in:
+            --   ALTER DATABASE <db> SET resolvespec.upgrade_password_hash = 'on';
+            IF v_password_ok AND COALESCE(current_setting('resolvespec.upgrade_password_hash', true), 'off') = 'on' THEN
+                UPDATE users SET password = crypt(v_supplied_password, gen_salt('bf')), updated_at = now()
+                WHERE id = v_user_id;
+            END IF;
+        END IF;
+    END IF;
+
+    IF NOT v_password_ok THEN
+        RETURN QUERY SELECT false, 'Invalid credentials'::text, NULL::jsonb;
+        RETURN;
+    END IF;
 
     -- Generate session token
     v_session_token := 'sess_' || encode(gen_random_bytes(32), 'hex') || '_' || extract(epoch from now())::bigint::text;
@@ -336,6 +361,7 @@ DECLARE
     v_username TEXT;
     v_email TEXT;
     v_password TEXT;
+    v_password_ok BOOLEAN := false;
     v_user_level INTEGER;
     v_roles TEXT;
 BEGIN
@@ -350,11 +376,26 @@ BEGIN
         RETURN;
     END IF;
 
-    -- TODO: Verify password hash
-    -- IF NOT (crypt(p_password, v_password) = v_password) THEN
-    --     RETURN QUERY SELECT false, 'Invalid credentials'::text, NULL::jsonb;
-    --     RETURN;
-    -- END IF;
+    -- Verify the password (bcrypt, or legacy cleartext).
+    IF v_password IS NOT NULL AND v_password <> ''
+       AND p_password IS NOT NULL AND p_password <> ''
+       AND octet_length(p_password) <= 72 THEN
+        IF v_password ~ '^\$2[aby]\$' THEN
+            v_password_ok := (crypt(p_password, v_password) = v_password);
+        ELSE
+            v_password_ok := (v_password = p_password);
+            -- Upgrading the stored value is opt-in (see resolvespec_login).
+            IF v_password_ok AND COALESCE(current_setting('resolvespec.upgrade_password_hash', true), 'off') = 'on' THEN
+                UPDATE users SET password = crypt(p_password, gen_salt('bf')), updated_at = now()
+                WHERE id = v_user_id;
+            END IF;
+        END IF;
+    END IF;
+
+    IF NOT v_password_ok THEN
+        RETURN QUERY SELECT false, 'Invalid credentials'::text, NULL::jsonb;
+        RETURN;
+    END IF;
 
     -- Return user data for JWT token generation
     RETURN QUERY SELECT
@@ -364,7 +405,6 @@ BEGIN
             'id', v_user_id,
             'username', v_username,
             'email', v_email,
-            'password', v_password,
             'user_level', v_user_level,
             'roles', v_roles
         );
@@ -442,7 +482,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 10. resolvespec_register - Registers a new user and creates session
--- Input: RegisterRequest as jsonb {username: string, password: string, email: string, user_level: int, roles: array, claims: object, meta: object}
+-- Input: RegisterRequest as jsonb {username: string, password: string, email: string, claims: object, meta: object}
+-- (user_level / roles in the request are ignored; new users are unprivileged)
 -- Output: p_success (bool), p_error (text), p_data (LoginResponse as jsonb)
 CREATE OR REPLACE FUNCTION resolvespec_register(p_request jsonb)
 RETURNS TABLE(p_success boolean, p_error text, p_data jsonb) AS $$
@@ -465,15 +506,14 @@ BEGIN
     v_username := p_request->>'username';
     v_email := p_request->>'email';
     v_password := p_request->>'password';
-    v_user_level := COALESCE((p_request->>'user_level')::integer, 0);
+    -- Privileges are never taken from the request: self-registration always
+    -- creates an unprivileged user (level 0, no roles, no program user link).
+    v_user_level := 0;
+    v_roles := '';
     v_ip_address := p_request->'claims'->>'ip_address';
     v_user_agent := p_request->'claims'->>'user_agent';
-    v_program_user_id := COALESCE((p_request->>'program_user_id')::integer, 0);
-    v_program_user_table := COALESCE(p_request->>'program_user_table', '');
-    
-    -- Convert roles array from JSON to comma-separated string
-    SELECT array_to_string(ARRAY(SELECT jsonb_array_elements_text(p_request->'roles')), ',')
-    INTO v_roles;
+    v_program_user_id := 0;
+    v_program_user_table := '';
 
     -- Validate required fields
     IF v_username IS NULL OR v_username = '' THEN
@@ -491,6 +531,11 @@ BEGIN
         RETURN;
     END IF;
 
+    IF octet_length(v_password) > 72 THEN
+        RETURN QUERY SELECT false, 'Password must be at most 72 bytes'::text, NULL::jsonb;
+        RETURN;
+    END IF;
+
     -- Check if username already exists
     IF EXISTS (SELECT 1 FROM users WHERE username = v_username) THEN
         RETURN QUERY SELECT false, 'Username already exists'::text, NULL::jsonb;
@@ -503,9 +548,7 @@ BEGIN
         RETURN;
     END IF;
 
-    -- TODO: Hash password using pgcrypto extension
-    -- Enable pgcrypto: CREATE EXTENSION IF NOT EXISTS pgcrypto;
-    -- v_password := crypt(v_password, gen_salt('bf'));
+    v_password := crypt(v_password, gen_salt('bf'));
 
     -- Create new user
     INSERT INTO users (username, email, password, user_level, roles, is_active, created_at, updated_at, program_user_id, program_user_table)
@@ -1520,8 +1563,7 @@ $$ LANGUAGE plpgsql;
 -- 2. resolvespec_password_reset - Validates the token and updates the user's password
 -- Input: p_request jsonb {token: string, new_password: string}
 -- Output: p_success (bool), p_error (text)
--- NOTE: Hash the new_password with bcrypt before storing (pgcrypto crypt/gen_salt).
---       The TODO below mirrors the convention used in resolvespec_register.
+-- NOTE: The new password is hashed with bcrypt (pgcrypto crypt/gen_salt) before storing.
 CREATE OR REPLACE FUNCTION resolvespec_password_reset(p_request jsonb)
 RETURNS TABLE(p_success boolean, p_error text) AS $$
 DECLARE
@@ -1563,9 +1605,11 @@ BEGIN
         RETURN;
     END IF;
 
-    -- TODO: Hash new password with pgcrypto before storing
-    -- Enable pgcrypto: CREATE EXTENSION IF NOT EXISTS pgcrypto;
-    -- v_new_pw := crypt(v_new_pw, gen_salt('bf'));
+    IF octet_length(v_new_pw) > 72 THEN
+        RETURN QUERY SELECT false, 'new_password must be at most 72 bytes'::text;
+        RETURN;
+    END IF;
+    v_new_pw := crypt(v_new_pw, gen_salt('bf'));
 
     -- Update password and invalidate all sessions
     UPDATE users SET password = v_new_pw, updated_at = now() WHERE id = v_user_id;

@@ -2,8 +2,10 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -41,13 +43,76 @@ type RowSecurity struct {
 	UserID any `json:"user_id"`
 }
 
-func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) string {
+// safeIdentRe matches an unquoted SQL identifier. Identifiers substituted into a
+// row-security template must match it; anything else is rejected.
+var safeIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ErrNoRowSecurity is returned by GetRowSecurityTemplate when no row security
+// entry is loaded for the user and table. It means "no rules", as opposed to a
+// failure, which callers must treat as fatal.
+var ErrNoRowSecurity = errors.New("no row security data")
+
+// ErrNoColumnSecurity is the column-security equivalent of ErrNoRowSecurity.
+var ErrNoColumnSecurity = errors.New("no column security data")
+
+// userIDScalar reduces the opaque user reference to a scalar that is safe to
+// bind as a query argument. A *UserContext is reduced to its UserID; other
+// structured values are rejected rather than stringified into SQL.
+func userIDScalar(ref any) (any, error) {
+	switch v := ref.(type) {
+	case nil:
+		return nil, fmt.Errorf("row security: no user reference")
+	case *UserContext:
+		if v == nil {
+			return nil, fmt.Errorf("row security: nil user context")
+		}
+		return v.UserID, nil
+	case UserContext:
+		return v.UserID, nil
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return v, nil
+	case string:
+		return v, nil
+	default:
+		return nil, fmt.Errorf("row security: unsupported user reference type %T", ref)
+	}
+}
+
+// GetTemplate expands the row-security template into a WHERE clause and its
+// bind arguments. {PrimaryKeyName}, {TableName} and {SchemaName} are validated
+// identifiers substituted in place; every {UserID} becomes a `?` placeholder
+// with the user reference bound as an argument, so user data never reaches the
+// SQL text.
+func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) (string, []any, error) {
 	str := m.Template
-	str = strings.ReplaceAll(str, "{PrimaryKeyName}", pPrimaryKeyName)
-	str = strings.ReplaceAll(str, "{TableName}", m.Tablename)
-	str = strings.ReplaceAll(str, "{SchemaName}", m.Schema)
-	str = strings.ReplaceAll(str, "{UserID}", fmt.Sprintf("%v", m.UserID))
-	return str
+
+	for placeholder, ident := range map[string]string{
+		"{PrimaryKeyName}": pPrimaryKeyName,
+		"{TableName}":      m.Tablename,
+		"{SchemaName}":     m.Schema,
+	} {
+		if !strings.Contains(str, placeholder) {
+			continue
+		}
+		if !safeIdentRe.MatchString(ident) {
+			return "", nil, fmt.Errorf("row security: invalid identifier %q for %s", ident, placeholder)
+		}
+		str = strings.ReplaceAll(str, placeholder, ident)
+	}
+
+	n := strings.Count(str, "{UserID}")
+	if n == 0 {
+		return str, nil, nil
+	}
+	uid, err := userIDScalar(m.UserID)
+	if err != nil {
+		return "", nil, err
+	}
+	args := make([]any, n)
+	for i := range args {
+		args[i] = uid
+	}
+	return strings.ReplaceAll(str, "{UserID}", "?"), args, nil
 }
 
 // SecurityList manages security state and caching
@@ -158,7 +223,7 @@ func (m *SecurityList) ColumSecurityApplyOnRecord(prevRecord reflect.Value, newR
 
 	colsecList, ok := m.ColumnSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
 	if !ok || colsecList == nil {
-		return cols, fmt.Errorf("no column security data")
+		return cols, ErrNoColumnSecurity
 	}
 
 	for i := range colsecList {
@@ -318,8 +383,15 @@ func setColSecValue(fieldsrc reflect.Value, colsec ColumnSecurity, fieldTypeName
 	return 0, fieldsrc
 }
 
-func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType reflect.Type, pUserID int, pSchema, pTablename string) (reflect.Value, error) {
-	defer logger.CatchPanic("ApplyColumnSecurity")()
+func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType reflect.Type, pUserID int, pSchema, pTablename string) (out reflect.Value, err error) {
+	// A panic must surface as an error: recovering into zero results would
+	// read as "success, nothing to mask" and let the response go out unmasked.
+	defer func() {
+		if r := recover(); r != nil {
+			out = reflect.Value{}
+			err = logger.HandlePanic("ApplyColumnSecurity", r)
+		}
+	}()
 
 	m.ColumnSecurityMutex.RLock()
 	defer m.ColumnSecurityMutex.RUnlock()
@@ -330,7 +402,7 @@ func (m *SecurityList) ApplyColumnSecurity(records reflect.Value, modelType refl
 
 	colsecList, ok := m.ColumnSecurity[fmt.Sprintf("%s.%s@%d", pSchema, pTablename, pUserID)]
 	if !ok || colsecList == nil {
-		return records, fmt.Errorf("nocolumn security data")
+		return records, ErrNoColumnSecurity
 	}
 
 	for i := range colsecList {
@@ -508,8 +580,15 @@ func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserRef any, pSchem
 	return record, nil
 }
 
-func (m *SecurityList) GetRowSecurityTemplate(pUserRef any, pSchema, pTablename string) (RowSecurity, error) {
-	defer logger.CatchPanic("GetRowSecurityTemplate")()
+func (m *SecurityList) GetRowSecurityTemplate(pUserRef any, pSchema, pTablename string) (out RowSecurity, err error) {
+	// A panic must surface as an error: recovering into zero results would
+	// read as "no row security" and unblock the user.
+	defer func() {
+		if r := recover(); r != nil {
+			out = RowSecurity{}
+			err = logger.HandlePanic("GetRowSecurityTemplate", r)
+		}
+	}()
 
 	m.RowSecurityMutex.RLock()
 	defer m.RowSecurityMutex.RUnlock()
@@ -520,7 +599,7 @@ func (m *SecurityList) GetRowSecurityTemplate(pUserRef any, pSchema, pTablename 
 
 	rowSec, ok := m.RowSecurity[fmt.Sprintf("%s.%s@%v", pSchema, pTablename, pUserRef)]
 	if !ok {
-		return RowSecurity{}, fmt.Errorf("no row security data")
+		return RowSecurity{}, ErrNoRowSecurity
 	}
 
 	return rowSec, nil

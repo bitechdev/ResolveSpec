@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // Direct-mode implementations for DatabaseAuthenticator and JWTAuthenticator.
@@ -17,10 +19,10 @@ import (
 // parameterized SQL against the configured TableNames, so they work on
 // SQLite, MySQL, or Postgres without the resolvespec_* functions installed.
 //
-// Password verification is intentionally not implemented here: the stored
-// procedures never verify the password hash either (see the TODOs in
-// database_schema.sql), so Direct mode matches that behavior exactly rather
-// than introducing a mismatch between modes.
+// Passwords are verified with bcrypt (see password.go). Legacy cleartext rows
+// are still accepted at login; they are only rewritten as bcrypt when the
+// upgrade is explicitly enabled (UpgradePasswordHash). Registration
+// never honours client-supplied user_level/roles.
 
 var (
 	errUsernameExists = errors.New("username already exists")
@@ -29,20 +31,32 @@ var (
 
 func (a *DatabaseAuthenticator) loginDirect(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
 	var userID int
-	var email, roles, programUserTable sql.NullString
+	var email, roles, programUserTable, storedPassword sql.NullString
 	var userLevel, programUserID sql.NullInt64
 
 	err := a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := rewritePlaceholders(db, fmt.Sprintf(
-			`SELECT id, email, user_level, roles, program_user_id, program_user_table FROM %s WHERE username = ? AND is_active = ?`,
+			`SELECT id, email, user_level, roles, program_user_id, program_user_table, password FROM %s WHERE username = ? AND is_active = ?`,
 			a.tableNames.Users))
-		return db.QueryRowContext(ctx, query, req.Username, true).Scan(&userID, &email, &userLevel, &roles, &programUserID, &programUserTable)
+		return db.QueryRowContext(ctx, query, req.Username, true).Scan(&userID, &email, &userLevel, &roles, &programUserID, &programUserTable, &storedPassword)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			burnPasswordCheck(req.Password)
 			return nil, fmt.Errorf("invalid credentials")
 		}
 		return nil, fmt.Errorf("login query failed: %w", err)
+	}
+
+	ok, needsRehash := verifyPassword(storedPassword.String, req.Password)
+	if !ok {
+		if storedPassword.String == "" {
+			burnPasswordCheck(req.Password)
+		}
+		return nil, fmt.Errorf("invalid credentials")
+	}
+	if needsRehash && a.upgradePasswordHash {
+		a.upgradePasswordHashFor(ctx, userID, req.Password)
 	}
 
 	sessionToken, err := generateSessionToken()
@@ -86,6 +100,24 @@ func (a *DatabaseAuthenticator) loginDirect(ctx context.Context, req LoginReques
 	}, nil
 }
 
+// upgradePasswordHashFor replaces a legacy cleartext password with a bcrypt hash.
+// Only called when the upgrade has been explicitly enabled. Failure is logged
+// and ignored: the login itself already succeeded.
+func (a *DatabaseAuthenticator) upgradePasswordHashFor(ctx context.Context, userID int, password string) {
+	h, err := hashPassword(password)
+	if err != nil {
+		return
+	}
+	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
+		q := rewritePlaceholders(db, fmt.Sprintf(`UPDATE %s SET password = ?, updated_at = ? WHERE id = ?`, a.tableNames.Users))
+		_, err := db.ExecContext(ctx, q, h, time.Now(), userID)
+		return err
+	})
+	if err != nil {
+		logger.Warn("failed to upgrade legacy password hash for user %d: %v", userID, err)
+	}
+}
+
 func (a *DatabaseAuthenticator) registerDirect(ctx context.Context, req RegisterRequest) (*LoginResponse, error) {
 	if req.Username == "" {
 		return nil, fmt.Errorf("username is required")
@@ -97,12 +129,20 @@ func (a *DatabaseAuthenticator) registerDirect(ctx context.Context, req Register
 		return nil, fmt.Errorf("password is required")
 	}
 
-	rolesStr := strings.Join(req.Roles, ",")
+	passwordHash, err := hashPassword(req.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	// Privileges are never taken from the request: self-registration always
+	// creates an unprivileged user.
+	const userLevel = 0
+	const rolesStr = ""
 	now := time.Now()
 	ipAddress, userAgent := claimStrings(req.Claims)
 
 	var userID int64
-	err := a.runDBOpWithReconnect(func(db *sql.DB) error {
+	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
 		var count int
 		checkQuery := rewritePlaceholders(db, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE username = ?`, a.tableNames.Users))
 		if err := db.QueryRowContext(ctx, checkQuery, req.Username).Scan(&count); err != nil {
@@ -122,7 +162,7 @@ func (a *DatabaseAuthenticator) registerDirect(ctx context.Context, req Register
 		insertQuery := rewritePlaceholders(db, fmt.Sprintf(
 			`INSERT INTO %s (username, email, password, user_level, roles, is_active, created_at, updated_at, program_user_id, program_user_table) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			a.tableNames.Users))
-		res, err := db.ExecContext(ctx, insertQuery, req.Username, req.Email, req.Password, req.UserLevel, rolesStr, true, now, now, 0, "")
+		res, err := db.ExecContext(ctx, insertQuery, req.Username, req.Email, passwordHash, userLevel, rolesStr, true, now, now, 0, "")
 		if err != nil {
 			return err
 		}
@@ -164,7 +204,7 @@ func (a *DatabaseAuthenticator) registerDirect(ctx context.Context, req Register
 		UserID:           int(userID),
 		UserName:         req.Username,
 		Email:            req.Email,
-		UserLevel:        req.UserLevel,
+		UserLevel:        userLevel,
 		Roles:            parseRoles(rolesStr),
 		SessionID:        sessionToken,
 		ProgramUserID:    0,
@@ -367,12 +407,17 @@ func (a *DatabaseAuthenticator) completePasswordResetDirect(ctx context.Context,
 		return fmt.Errorf("new_password is required")
 	}
 
+	newHash, err := hashPassword(req.NewPassword)
+	if err != nil {
+		return err
+	}
+
 	hash := sha256.Sum256([]byte(req.Token))
 	tokenHash := hex.EncodeToString(hash[:])
 
 	var resetID, userID int
 	var expiresAt time.Time
-	err := a.runDBOpWithReconnect(func(db *sql.DB) error {
+	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
 		query := rewritePlaceholders(db, fmt.Sprintf(`SELECT id, user_id, expires_at FROM %s WHERE token_hash = ? AND used = ?`, a.tableNames.UserPasswordResets))
 		return db.QueryRowContext(ctx, query, tokenHash, false).Scan(&resetID, &userID, &expiresAt)
 	})
@@ -389,7 +434,7 @@ func (a *DatabaseAuthenticator) completePasswordResetDirect(ctx context.Context,
 	now := time.Now()
 	err = a.runDBOpWithReconnect(func(db *sql.DB) error {
 		updUser := rewritePlaceholders(db, fmt.Sprintf(`UPDATE %s SET password = ?, updated_at = ? WHERE id = ?`, a.tableNames.Users))
-		if _, err := db.ExecContext(ctx, updUser, req.NewPassword, now, userID); err != nil {
+		if _, err := db.ExecContext(ctx, updUser, newHash, now, userID); err != nil {
 			return err
 		}
 		delSessions := rewritePlaceholders(db, fmt.Sprintf(`DELETE FROM %s WHERE user_id = ?`, a.tableNames.UserSessions))
@@ -424,12 +469,12 @@ func claimStrings(claims map[string]any) (ipAddress, userAgent string) {
 // jwtLoginDirect mirrors resolvespec_jwt_login.
 func (a *JWTAuthenticator) jwtLoginDirect(ctx context.Context, req LoginRequest) (*LoginResponse, error) {
 	var userID int
-	var email, roles sql.NullString
+	var email, roles, storedPassword sql.NullString
 	var userLevel sql.NullInt64
 
 	runQuery := func() error {
-		query := rewritePlaceholders(a.getDB(), fmt.Sprintf(`SELECT id, email, user_level, roles FROM %s WHERE username = ? AND is_active = ?`, a.tableNames.Users))
-		return a.getDB().QueryRowContext(ctx, query, req.Username, true).Scan(&userID, &email, &userLevel, &roles)
+		query := rewritePlaceholders(a.getDB(), fmt.Sprintf(`SELECT id, email, user_level, roles, password FROM %s WHERE username = ? AND is_active = ?`, a.tableNames.Users))
+		return a.getDB().QueryRowContext(ctx, query, req.Username, true).Scan(&userID, &email, &userLevel, &roles, &storedPassword)
 	}
 	err := runQuery()
 	if isDBClosed(err) {
@@ -439,9 +484,26 @@ func (a *JWTAuthenticator) jwtLoginDirect(ctx context.Context, req LoginRequest)
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			burnPasswordCheck(req.Password)
 			return nil, fmt.Errorf("invalid credentials")
 		}
 		return nil, fmt.Errorf("login query failed: %w", err)
+	}
+
+	ok, needsRehash := verifyPassword(storedPassword.String, req.Password)
+	if !ok {
+		if storedPassword.String == "" {
+			burnPasswordCheck(req.Password)
+		}
+		return nil, fmt.Errorf("invalid credentials")
+	}
+	if needsRehash && a.upgradePasswordHash {
+		if h, herr := hashPassword(req.Password); herr == nil {
+			q := rewritePlaceholders(a.getDB(), fmt.Sprintf(`UPDATE %s SET password = ?, updated_at = ? WHERE id = ?`, a.tableNames.Users))
+			if _, uerr := a.getDB().ExecContext(ctx, q, h, time.Now(), userID); uerr != nil {
+				logger.Warn("failed to upgrade legacy password hash for user %d: %v", userID, uerr)
+			}
+		}
 	}
 
 	expiresAt := time.Now().Add(24 * time.Hour)

@@ -128,6 +128,20 @@ this; the gap is that the primary login path never got the same treatment.
 | 32 | **Low** | security | `Authenticate` may return `(nil, nil)` through the callback, and the caller dereferences it |
 | 33 | **Low** | security | `requestPasswordReset` returns the raw reset token to its caller |
 
+## Resolution status (2026-09-30)
+
+Only the thread-locking, data-race and slowness findings have been addressed so far
+(#6, #9, #20, #21, #26, #30); every other finding is untouched.
+
+- **#6** — Fixed: `LoadColumnSecurity`/`LoadRowSecurity` no longer hold a mutex across the provider call (load first, then publish under the lock), the provider call gets a 10 s deadline derived from the request context, and `pOverwrite` is honoured. Results are cached for 30 s (`securityCacheTTL`; revocations take up to that long to apply) and expired entries are pruned on write after a further 30 s grace. Expiry is tracked in side maps, so the exported `ColumnSecurity`/`RowSecurity` maps keep their shape. Duplicate cold-key queries are not collapsed (no singleflight)
+- **#9** — Partly fixed: `Authenticate` rejects more than 4 comma-separated tokens (`maxAuthTokens`) with `too many authorization tokens`, and splits with `SplitN` so a huge header is not fully split. Not done: aborting the loop on the first hard failure, per-token rate limiting, and dropping the header from the `Warn` (finding 7)
+- **#14** — Partly fixed as a side effect of #6: entries now expire and are pruned. The unstable `%v` row-security key (session token and claims inside the key) is unchanged
+- **#20** — Fixed: the activity update runs on `context.WithoutCancel(r.Context())` with a 5 s timeout and recovers panics; the existing `activityWG` tracks it. Not done: coalescing into one batched flush
+- **#21** — Fixed: each `OAuth2Provider` has a stop channel and `cleanupStates` exits on it (and recovers panics); replacing a provider stops the old one; new `DatabaseAuthenticator.Close()` stops all of them and waits for in-flight activity updates. `Close` is not yet called from the server shutdown path
+- **#26** — Fixed: the nil-map checks in `ApplyColumnSecurity`, `ColumSecurityApplyOnRecord` and `GetRowSecurityTemplate` now run inside the lock. Error messages are unchanged
+- **#30** — Fixed: `splitTag` uses `strings.FieldsFunc`; `maskString` uses a `strings.Builder` (its off-by-one offsets, finding 25, are unchanged)
+- Tests: `pkg/security/concurrency_test.go` (run with `-race`).
+
 ---
 
 ## 1. Critical — the password is never verified, in either query mode

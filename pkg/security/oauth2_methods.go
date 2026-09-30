@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
+
 	"golang.org/x/oauth2"
 )
 
@@ -39,6 +41,8 @@ type OAuth2Provider struct {
 	providerName   string
 	states         map[string]time.Time // state -> expiry time
 	statesMutex    sync.RWMutex
+	stopCh         chan struct{} // closed to stop cleanupStates
+	stopOnce       sync.Once
 }
 
 // WithOAuth2 configures OAuth2 support for the DatabaseAuthenticator
@@ -68,6 +72,7 @@ func (a *DatabaseAuthenticator) WithOAuth2(cfg OAuth2Config) *DatabaseAuthentica
 		userInfoParser: cfg.UserInfoParser,
 		providerName:   cfg.ProviderName,
 		states:         make(map[string]time.Time),
+		stopCh:         make(chan struct{}),
 	}
 
 	// Initialize providers map if needed
@@ -77,6 +82,9 @@ func (a *DatabaseAuthenticator) WithOAuth2(cfg OAuth2Config) *DatabaseAuthentica
 	}
 
 	// Register provider
+	if old := a.oauth2Providers[cfg.ProviderName]; old != nil {
+		old.stop() // replaced provider: stop its cleanup goroutine
+	}
 	a.oauth2Providers[cfg.ProviderName] = provider
 	a.oauth2ProvidersMutex.Unlock()
 
@@ -335,10 +343,16 @@ func (p *OAuth2Provider) validateState(state string) bool {
 
 // cleanupStates removes expired states periodically
 func (p *OAuth2Provider) cleanupStates() {
+	defer logger.CatchPanic("OAuth2Provider.cleanupStates")()
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+		}
 		p.statesMutex.Lock()
 		now := time.Now()
 		for state, expiry := range p.states {
@@ -348,6 +362,23 @@ func (p *OAuth2Provider) cleanupStates() {
 		}
 		p.statesMutex.Unlock()
 	}
+}
+
+// stop terminates the cleanup goroutine; safe to call more than once.
+func (p *OAuth2Provider) stop() {
+	p.stopOnce.Do(func() { close(p.stopCh) })
+}
+
+// Close stops the background OAuth2 state cleanup goroutines and waits for
+// in-flight session activity updates. It is safe to call more than once.
+func (a *DatabaseAuthenticator) Close() error {
+	a.oauth2ProvidersMutex.RLock()
+	for _, p := range a.oauth2Providers {
+		p.stop()
+	}
+	a.oauth2ProvidersMutex.RUnlock()
+	a.activityWG.Wait()
+	return nil
 }
 
 // defaultOAuth2UserInfoParser parses standard OAuth2 user info claims

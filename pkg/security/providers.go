@@ -64,6 +64,13 @@ func (a *HeaderAuthenticator) Authenticate(r *http.Request) (*UserContext, error
 	}, nil
 }
 
+// maxAuthTokens caps the comma-separated credentials tried per request so one
+// request cannot drive unbounded session lookups.
+const maxAuthTokens = 4
+
+// sessionActivityTimeout bounds the detached last-activity update.
+const sessionActivityTimeout = 5 * time.Second
+
 // DatabaseAuthenticator provides session-based authentication with database storage
 // All database operations go through stored procedures for security and consistency
 // Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
@@ -368,7 +375,10 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 	} else {
 		// Parse Authorization header which may contain multiple comma-separated tokens
 		// Format: "Token abc, Token def" or "Bearer abc" or just "abc"
-		rawTokens := strings.Split(sessionToken, ",")
+		rawTokens := strings.SplitN(sessionToken, ",", maxAuthTokens+2)
+		if len(rawTokens) > maxAuthTokens {
+			return nil, fmt.Errorf("too many authorization tokens")
+		}
 		for _, token := range rawTokens {
 			token = strings.TrimSpace(token)
 			// Remove "Bearer " prefix if present
@@ -448,11 +458,16 @@ func (a *DatabaseAuthenticator) Authenticate(r *http.Request) (*UserContext, err
 		// Authentication succeeded with this token
 		// Update last activity timestamp asynchronously
 		activityCtx := userCtx
+		// Detach from the request (it is cancelled when the handler returns) but
+		// keep a deadline, and never let a panic here take the process down.
+		detached, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sessionActivityTimeout)
 		a.activityWG.Add(1)
 		go func(ctx context.Context, token string) {
 			defer a.activityWG.Done()
+			defer cancel()
+			defer logger.CatchPanic("updateSessionActivity")()
 			a.updateSessionActivity(ctx, token, &activityCtx)
-		}(r.Context(), token)
+		}(detached, token)
 
 		return &userCtx, nil
 	}

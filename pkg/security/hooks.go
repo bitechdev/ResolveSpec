@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
@@ -429,20 +430,5 @@ func extractSQLName(tag string) string {
 }
 
 func splitTag(tag string, sep rune) []string {
-	var parts []string
-	var current string
-	for _, ch := range tag {
-		if ch == sep {
-			if current != "" {
-				parts = append(parts, current)
-				current = ""
-			}
-		} else {
-			current += string(ch)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
+	return strings.FieldsFunc(tag, func(r rune) bool { return r == sep })
 }

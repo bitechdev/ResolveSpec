@@ -12,6 +12,7 @@ import (
 	"github.com/uptrace/bun"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
@@ -201,7 +202,7 @@ func (b *BunAdapter) Exec(ctx context.Context, query string, args ...interface{}
 			err = run()
 		}
 	}
-	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -219,7 +220,7 @@ func (b *BunAdapter) Query(ctx context.Context, dest interface{}, query string, 
 			err = b.getDB().NewRaw(query, args...).Scan(ctx, dest)
 		}
 	}
-	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 
@@ -254,6 +255,7 @@ func (b *BunAdapter) RunInTransaction(ctx context.Context, fn func(common.Databa
 			err = logger.HandlePanic("BunAdapter.RunInTransaction", r)
 		}
 	}()
+	defer dbtrace.TxBegin(ctx)()
 	run := func() error {
 		return b.getDB().RunInTx(ctx, &sql.TxOptions{}, func(ctx context.Context, tx bun.Tx) error {
 			adapter := &BunTxAdapter{tx: tx, driverName: b.driverName, metricsEnabled: b.metricsEnabled}
@@ -1301,7 +1303,7 @@ func (b *BunSelectQuery) Scan(ctx context.Context, dest interface{}) (err error)
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("BunSelectQuery.Scan", r)
 		}
-		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
+		recordQueryMetrics(ctx, b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
 	if dest == nil {
 		err = fmt.Errorf("destination cannot be nil")
@@ -1347,7 +1349,7 @@ func (b *BunSelectQuery) ScanModel(ctx context.Context) (err error) {
 			logger.Error("Panic in BunSelectQuery.ScanModel: %v. %s. SQL: %s", r, modelInfo, sqlStr)
 			err = logger.HandlePanic("BunSelectQuery.ScanModel", r)
 		}
-		recordQueryMetrics(b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
+		recordQueryMetrics(ctx, b.metricsEnabled, "SELECT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
 	if b.query.GetModel() == nil {
 		err = fmt.Errorf("model is nil")
@@ -1391,7 +1393,7 @@ func (b *BunSelectQuery) Count(ctx context.Context) (count int, err error) {
 			err = logger.HandlePanic("BunSelectQuery.Count", r)
 			count = 0
 		}
-		recordQueryMetrics(b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
+		recordQueryMetrics(ctx, b.metricsEnabled, "COUNT", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
 	// If Model() was set, use bun's native Count() which works properly
 	if b.hasModel {
@@ -1425,7 +1427,7 @@ func (b *BunSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 			err = logger.HandlePanic("BunSelectQuery.Exists", r)
 			exists = false
 		}
-		recordQueryMetrics(b.metricsEnabled, "EXISTS", b.schema, b.entity, b.tableName, startedAt, err)
+		recordQueryMetrics(ctx, b.metricsEnabled, "EXISTS", b.schema, b.entity, b.tableName, startedAt, err)
 	}()
 	exists, err = b.query.Exists(ctx)
 	if err != nil {
@@ -1512,7 +1514,7 @@ func (b *BunInsertQuery) Exec(ctx context.Context) (res common.Result, err error
 	startedAt := time.Now()
 	b.prepareValues()
 	result, err := b.query.Exec(ctx)
-	recordQueryMetrics(b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -1525,7 +1527,7 @@ func (b *BunInsertQuery) Scan(ctx context.Context, dest interface{}) (err error)
 	startedAt := time.Now()
 	b.prepareValues()
 	err = b.query.Scan(ctx, dest)
-	recordQueryMetrics(b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, "INSERT", b.schema, b.entity, b.tableName, startedAt, err)
 	return err
 }
 
@@ -1622,7 +1624,7 @@ func (b *BunUpdateQuery) Exec(ctx context.Context) (res common.Result, err error
 		logger.Error("BunUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(b.metricsEnabled, "UPDATE", b.schema, b.entity, b.tableName, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, "UPDATE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -1674,7 +1676,7 @@ func (b *BunDeleteQuery) Exec(ctx context.Context) (res common.Result, err error
 		logger.Error("BunDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(b.metricsEnabled, "DELETE", b.schema, b.entity, b.tableName, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, "DELETE", b.schema, b.entity, b.tableName, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -1730,7 +1732,7 @@ func (b *BunTxAdapter) Exec(ctx context.Context, query string, args ...interface
 	startedAt := time.Now()
 	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
 	result, err := b.tx.ExecContext(ctx, query, args...)
-	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return &BunResult{result: result}, err
 }
 
@@ -1738,7 +1740,7 @@ func (b *BunTxAdapter) Query(ctx context.Context, dest interface{}, query string
 	startedAt := time.Now()
 	operation, schema, entity, table := metricTargetFromRawQuery(query, b.driverName)
 	err := b.tx.NewRaw(query, args...).Scan(ctx, dest)
-	recordQueryMetrics(b.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, b.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 

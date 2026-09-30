@@ -15,6 +15,7 @@ import (
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"golang.org/x/sync/singleflight"
 )
 
 type ColumnSecurity struct {
@@ -130,6 +131,9 @@ type SecurityList struct {
 	rowSecExpiry map[string]time.Time
 	lastColPrune time.Time
 	lastRowPrune time.Time
+
+	// loads collapses concurrent provider calls for the same key (cold-cache stampede).
+	loads singleflight.Group
 }
 
 const (
@@ -479,10 +483,13 @@ func (m *SecurityList) LoadColumnSecurity(ctx context.Context, pUserID int, pSch
 	// Query the provider without holding any lock.
 	loadCtx, cancel := context.WithTimeout(ctx, securityLoadTimeout)
 	defer cancel()
-	colSecList, err := m.provider.GetColumnSecurity(loadCtx, pUserID, pSchema, pTablename)
+	v, err, _ := m.loads.Do("col:"+secKey, func() (any, error) {
+		return m.provider.GetColumnSecurity(loadCtx, pUserID, pSchema, pTablename)
+	})
 	if err != nil {
 		return fmt.Errorf("GetColumnSecurity failed: %v", err)
 	}
+	colSecList, _ := v.([]ColumnSecurity)
 	if colSecList == nil {
 		colSecList = make([]ColumnSecurity, 0)
 	}
@@ -552,10 +559,13 @@ func (m *SecurityList) LoadRowSecurity(ctx context.Context, pUserRef any, pSchem
 	// Query the provider without holding any lock.
 	loadCtx, cancel := context.WithTimeout(ctx, securityLoadTimeout)
 	defer cancel()
-	record, err := m.provider.GetRowSecurity(loadCtx, pUserRef, pSchema, pTablename)
+	v, err, _ := m.loads.Do("row:"+secKey, func() (any, error) {
+		return m.provider.GetRowSecurity(loadCtx, pUserRef, pSchema, pTablename)
+	})
 	if err != nil {
 		return RowSecurity{}, fmt.Errorf("GetRowSecurity failed: %v", err)
 	}
+	record, _ := v.(RowSecurity)
 
 	now := time.Now()
 	m.RowSecurityMutex.Lock()

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 )
 
 // QueryMode selects how a provider talks to the database: via the configured
@@ -59,6 +61,7 @@ func probeFunctionExists(ctx context.Context, db *sql.DB, procName string) bool 
 	if db == nil {
 		return false
 	}
+	dbtrace.Raw(ctx, "probe.pg_proc")
 	var exists bool
 	defer func() {
 		// Guard against any unexpected panic from a misbehaving driver.

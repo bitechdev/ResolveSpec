@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/config"
 	"github.com/bitechdev/ResolveSpec/pkg/dbmanager"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/middleware"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
@@ -73,8 +74,12 @@ func main() {
 	queue := middleware.NewClientQueue(middleware.ClientQueueConfig{MaxConcurrent: 10})
 	defer queue.Close()
 
+	// DB usage logging (off unless db_trace.enabled / RESOLVESPEC_DB_TRACE_ENABLED).
+	// Inside the queue so queue wait is not counted in request duration.
+	dbtrace.Configure(dbtrace.FromConfig(cfg.DBTrace))
+
 	// Setup routes using new SetupMuxRoutes function (without authentication)
-	resolvespec.SetupMuxRoutes(r, handler, middleware.Chain(queue.Middleware))
+	resolvespec.SetupMuxRoutes(r, handler, middleware.Chain(queue.Middleware, dbtrace.Middleware))
 
 	// Create server manager
 	mgr := server.NewManager()

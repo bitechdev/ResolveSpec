@@ -22,6 +22,12 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return nil
 	})
 
+	// Hook 0b: BeforeHandle - preload security rules before the handler opens its
+	// transaction (BeforeRead runs inside it and would need a second connection).
+	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
+		return security.PreloadSecurityRules(newSecurityContext(hookCtx), securityList, hookCtx.Operation)
+	})
+
 	// Hook 1: BeforeRead - Load security rules
 	handler.Hooks().Register(BeforeRead, func(hookCtx *HookContext) error {
 		secCtx := newSecurityContext(hookCtx)

@@ -2,7 +2,10 @@ package dbmanager
 
 import (
 	"sync"
+	"time"
 
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -129,6 +132,15 @@ func (m *connectionManager) PublishMetrics() {
 			// sql.DBStats values are cumulative, so add only the growth since
 			// the last publish to keep these true counters.
 			prev := lastPublished.swap(name, connStats)
+			if dbtrace.PoolLogEnabled() {
+				opened := connStats.TotalOpened - prev.TotalOpened
+				waits := connStats.WaitCount - prev.WaitCount
+				if opened > 0 || waits > 0 || connStats.InUse > 0 {
+					logger.Info("dbtrace pool %s: open=%d in_use=%d idle=%d max=%d opened=+%d waits=+%d wait_time=+%s",
+						name, connStats.OpenConnections, connStats.InUse, connStats.Idle, connStats.MaxOpenConnections,
+						opened, waits, (connStats.WaitDuration - prev.WaitDuration).Round(time.Millisecond))
+				}
+			}
 			connectionWaitCount.With(labels).Add(float64(connStats.WaitCount - prev.WaitCount))
 			connectionWaitDuration.With(labels).Add((connStats.WaitDuration - prev.WaitDuration).Seconds())
 			connectionLifetimeClosed.With(labels).Add(float64(connStats.MaxLifetimeClosed - prev.MaxLifetimeClosed))

@@ -167,6 +167,7 @@ func (m *Manager) SetConfig(cfg *Config) error {
 	m.v.Set("cors", cfg.CORS)
 	m.v.Set("event_broker", cfg.EventBroker)
 	m.v.Set("dbmanager", cfg.DBManager)
+	m.v.Set("db_trace", cfg.DBTrace)
 	m.v.Set("paths", cfg.Paths)
 	m.v.Set("extensions", cfg.Extensions)
 
@@ -282,6 +283,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.url", "")
 
 	// Database Manager defaults
+	// DB trace defaults (disabled)
+	v.SetDefault("db_trace.enabled", false)
+	v.SetDefault("db_trace.min_calls", 5)
+	v.SetDefault("db_trace.min_duration", "0s")
+	v.SetDefault("db_trace.pool_log", false)
+
 	v.SetDefault("dbmanager.default_connection", "default")
 	v.SetDefault("dbmanager.max_open_conns", 25)
 	v.SetDefault("dbmanager.max_idle_conns", 5)

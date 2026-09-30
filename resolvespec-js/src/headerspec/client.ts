@@ -5,7 +5,7 @@ import type {
   ClientConfig,
   CustomOperator,
   FilterOption,
-  Options,
+  HeaderSpecOptions,
   PreloadOption,
   SortOption,
 } from "../common/types";
@@ -59,8 +59,15 @@ function decodeBase64(str: string): string {
  *  - X-Fetch-RowNumber: row number fetch
  *  - X-CQL-SEL-{col}: computed columns
  *  - X-Custom-SQL-W: custom operators (AND)
+ *  - X-Preload-Where: where for X-Preload (extra where groups use X-Preload-{n}[-Where])
+ *  - X-SpatialFilter-{col} / X-VectorFilter-{col}: JSON {op,value,logic}
+ *  - X-Vector-Search-{col|vector|as|dir}: pgvector KNN
+ *  - X-Expand, X-Custom-SQL-Join, X-Custom-SQL-Or, X-SearchCols, X-AdvSQL-{col}
+ *  - X-Clean-JSON, X-Distinct, X-SkipCount, X-SkipCache, X-PKRow
+ *  - X-SimpleApi / X-DetailApi / X-Syncfusion, X-Single-Record-As-Object
+ *  - X-Transaction-Atomic, X-Files
  */
-export function buildHeaders(options: Options): Record<string, string> {
+export function buildHeaders(options: HeaderSpecOptions): Record<string, string> {
   const headers: Record<string, string> = {};
 
   // Column selection
@@ -78,6 +85,17 @@ export function buildHeaders(options: Options): Record<string, string> {
       const logicOp = filter.logic_operator ?? "AND";
       const op = mapOperatorToHeaderOp(filter.operator);
       const valueStr = formatFilterValue(filter);
+
+      const geoPrefix = geoFilterHeader(filter.operator);
+      if (geoPrefix) {
+        const payload: Record<string, unknown> = {
+          op: filter.operator,
+          value: filter.value,
+        };
+        if (logicOp === "OR") payload.logic = "or";
+        headers[`${geoPrefix}${filter.column}`] = JSON.stringify(payload);
+        continue;
+      }
 
       if (filter.operator === "eq" && logicOp === "AND") {
         // Simple field filter shorthand
@@ -117,13 +135,94 @@ export function buildHeaders(options: Options): Record<string, string> {
 
   // Preload
   if (options.preload?.length) {
-    const parts = options.preload.map((p: PreloadOption) => {
-      if (p.columns?.length) {
-        return `${p.relation}:${p.columns.join(",")}`;
+    // Go applies X-Preload-Where to every preload in the matching X-Preload header,
+    // so preloads are grouped by where clause.
+    const groups = new Map<string, string[]>();
+    for (const p of options.preload) {
+      const spec = p.columns?.length
+        ? `${p.relation}:${p.columns.join(",")}`
+        : p.relation;
+      const where = p.where ?? "";
+      groups.set(where, [...(groups.get(where) ?? []), spec]);
+    }
+    let n = 0;
+    for (const [where, specs] of groups) {
+      if (!where) {
+        headers["X-Preload"] = specs.join("|");
+      } else if (!groups.has("") && n === 0) {
+        // X-Preload-Where would also apply to a where-less X-Preload, so only use it alone
+        headers["X-Preload"] = specs.join("|");
+        headers["X-Preload-Where"] = where;
+        n++;
+      } else {
+        n++;
+        headers[`X-Preload-${n}`] = specs.join("|");
+        headers[`X-Preload-${n}-Where`] = where;
       }
-      return p.relation;
-    });
-    headers["X-Preload"] = parts.join("|");
+    }
+  }
+
+  // Expand (LEFT JOIN)
+  if (options.expand?.length) {
+    headers["X-Expand"] = options.expand
+      .map((e) =>
+        e.columns?.length ? `${e.relation}:${e.columns.join(",")}` : e.relation,
+      )
+      .join("|");
+  }
+
+  if (options.custom_sql_joins?.length) {
+    headers["X-Custom-SQL-Join"] = options.custom_sql_joins.join("|");
+  }
+  if (options.custom_sql_or?.length) {
+    headers["X-Custom-SQL-Or"] = options.custom_sql_or.join(" OR ");
+  }
+  if (options.search_columns?.length) {
+    headers["X-SearchCols"] = options.search_columns.join(",");
+  }
+  if (options.advanced_sql) {
+    for (const [col, sql] of Object.entries(options.advanced_sql)) {
+      headers[`X-AdvSQL-${col}`] = sql;
+    }
+  }
+
+  // pgvector KNN search
+  if (options.vector_search) {
+    const vs = options.vector_search;
+    headers[`X-Vector-Search-${vs.column}`] = vs.metric ?? "l2";
+    headers["X-Vector-Search-Vector"] = JSON.stringify(vs.vector);
+    if (vs.as) headers["X-Vector-Search-As"] = vs.as;
+    if (vs.direction) headers["X-Vector-Search-Dir"] = vs.direction;
+  }
+
+  // Flags
+  const flags: [string, boolean | undefined][] = [
+    ["X-Clean-JSON", options.clean_json],
+    ["X-Distinct", options.distinct],
+    ["X-SkipCount", options.skip_count],
+    ["X-SkipCache", options.skip_cache],
+    ["X-Transaction-Atomic", options.atomic_transaction],
+    ["X-Single-Record-As-Object", options.single_record_as_object],
+  ];
+  for (const [name, val] of flags) {
+    if (val !== undefined) headers[name] = String(val);
+  }
+
+  if (options.pk_row) {
+    headers["X-PKRow"] = options.pk_row;
+  }
+
+  if (options.response_format) {
+    const formatHeaders = {
+      simple: "X-SimpleApi",
+      detail: "X-DetailApi",
+      syncfusion: "X-Syncfusion",
+    } as const;
+    headers[formatHeaders[options.response_format]] = "true";
+  }
+
+  if (options.xfiles) {
+    headers["X-Files"] = encodeHeaderValue(JSON.stringify(options.xfiles));
   }
 
   // Fetch row number
@@ -147,6 +246,17 @@ export function buildHeaders(options: Options): Record<string, string> {
   }
 
   return headers;
+}
+
+const VECTOR_OPS = new Set(["l2_within", "cosine_within", "ip_within"]);
+
+function geoFilterHeader(operator: string): string | null {
+  const op = operator.toLowerCase();
+  if (VECTOR_OPS.has(op) || op.endsWith("_within")) return "X-VectorFilter-";
+  if (op.startsWith("st_") || op === "bbox" || op === "&&") {
+    return "X-SpatialFilter-";
+  }
+  return null;
 }
 
 function mapOperatorToHeaderOp(operator: string): string {
@@ -280,7 +390,7 @@ export class HeaderSpecClient {
     schema: string,
     entity: string,
     id?: string,
-    options?: Options,
+    options?: HeaderSpecOptions,
   ): Promise<APIResponse<T>> {
     const url = this.buildUrl(schema, entity, id);
     const optHeaders = options ? buildHeaders(options) : {};
@@ -294,7 +404,7 @@ export class HeaderSpecClient {
     schema: string,
     entity: string,
     data: any,
-    options?: Options,
+    options?: HeaderSpecOptions,
   ): Promise<APIResponse<T>> {
     const url = this.buildUrl(schema, entity);
     const optHeaders = options ? buildHeaders(options) : {};
@@ -310,7 +420,7 @@ export class HeaderSpecClient {
     entity: string,
     id: string,
     data: any,
-    options?: Options,
+    options?: HeaderSpecOptions,
   ): Promise<APIResponse<T>> {
     const url = this.buildUrl(schema, entity, id);
     const optHeaders = options ? buildHeaders(options) : {};

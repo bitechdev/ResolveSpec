@@ -16,6 +16,7 @@ type Config struct {
 	CORS          CORSConfig             `mapstructure:"cors"`
 	EventBroker   EventBrokerConfig      `mapstructure:"event_broker"`
 	DBManager     DBManagerConfig        `mapstructure:"dbmanager"`
+	DBTrace       DBTraceConfig          `mapstructure:"db_trace"`
 	Paths         PathsConfig            `mapstructure:"paths"`
 	Extensions    map[string]interface{} `mapstructure:"extensions"`
 }
@@ -140,6 +141,15 @@ type CORSConfig struct {
 	AllowedMethods []string `mapstructure:"allowed_methods"`
 	AllowedHeaders []string `mapstructure:"allowed_headers"`
 	MaxAge         int      `mapstructure:"max_age"`
+}
+
+// DBTraceConfig controls database usage logging (off by default).
+// Env: RESOLVESPEC_DB_TRACE_ENABLED, _MIN_CALLS, _MIN_DURATION, _POOL_LOG.
+type DBTraceConfig struct {
+	Enabled     bool          `mapstructure:"enabled"`      // per-request DB call logging
+	MinCalls    int           `mapstructure:"min_calls"`    // log requests with at least this many DB calls
+	MinDuration time.Duration `mapstructure:"min_duration"` // or that took at least this long (0 = off)
+	PoolLog     bool          `mapstructure:"pool_log"`     // log pool changes on each metrics publish
 }
 
 // ErrorTrackingConfig holds error tracking configuration

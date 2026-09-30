@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
@@ -151,7 +152,7 @@ func (g *GormAdapter) Exec(ctx context.Context, query string, args ...interface{
 			result = run()
 		}
 	}
-	recordQueryMetrics(g.metricsEnabled, operation, schema, entity, table, startedAt, result.Error)
+	recordQueryMetrics(ctx, g.metricsEnabled, operation, schema, entity, table, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
@@ -172,7 +173,7 @@ func (g *GormAdapter) Query(ctx context.Context, dest interface{}, query string,
 			err = run()
 		}
 	}
-	recordQueryMetrics(g.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, g.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 
@@ -206,6 +207,7 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 			err = logger.HandlePanic("GormAdapter.RunInTransaction", r)
 		}
 	}()
+	defer dbtrace.TxBegin(ctx)()
 	run := func() error {
 		return g.getDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			adapter := &GormAdapter{db: tx, dbFactory: g.dbFactory, driverName: g.driverName, metricsEnabled: g.metricsEnabled}
@@ -585,7 +587,7 @@ func (g *GormSelectQuery) Scan(ctx context.Context, dest interface{}) (err error
 		logger.Error("GormSelectQuery.Scan failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
+	recordQueryMetrics(ctx, g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
 }
 
@@ -616,7 +618,7 @@ func (g *GormSelectQuery) ScanModel(ctx context.Context) (err error) {
 		logger.Error("GormSelectQuery.ScanModel failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
+	recordQueryMetrics(ctx, g.metricsEnabled, "SELECT", g.schema, g.entity, g.tableName, startedAt, err)
 	return err
 }
 
@@ -646,7 +648,7 @@ func (g *GormSelectQuery) Count(ctx context.Context) (count int, err error) {
 		logger.Error("GormSelectQuery.Count failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "COUNT", g.schema, g.entity, g.tableName, startedAt, err)
+	recordQueryMetrics(ctx, g.metricsEnabled, "COUNT", g.schema, g.entity, g.tableName, startedAt, err)
 	return int(count64), err
 }
 
@@ -676,7 +678,7 @@ func (g *GormSelectQuery) Exists(ctx context.Context) (exists bool, err error) {
 		logger.Error("GormSelectQuery.Exists failed. SQL: %s. Error: %v", sqlStr, err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "EXISTS", g.schema, g.entity, g.tableName, startedAt, err)
+	recordQueryMetrics(ctx, g.metricsEnabled, "EXISTS", g.schema, g.entity, g.tableName, startedAt, err)
 	return count > 0, err
 }
 
@@ -752,7 +754,7 @@ func (g *GormInsertQuery) Exec(ctx context.Context) (res common.Result, err erro
 			result = run()
 		}
 	}
-	recordQueryMetrics(g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
+	recordQueryMetrics(ctx, g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
@@ -790,7 +792,7 @@ func (g *GormInsertQuery) Scan(ctx context.Context, dest interface{}) (err error
 		}
 	}
 
-	recordQueryMetrics(g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
+	recordQueryMetrics(ctx, g.metricsEnabled, "INSERT", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -937,7 +939,7 @@ func (g *GormUpdateQuery) Exec(ctx context.Context) (res common.Result, err erro
 		logger.Error("GormUpdateQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
 		return &GormResult{result: result}, common.WrapSQLError(result.Error, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "UPDATE", g.schema, g.entity, g.tableName, startedAt, result.Error)
+	recordQueryMetrics(ctx, g.metricsEnabled, "UPDATE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 
@@ -999,7 +1001,7 @@ func (g *GormDeleteQuery) Exec(ctx context.Context) (res common.Result, err erro
 		logger.Error("GormDeleteQuery.Exec failed. SQL: %s. Error: %v", sqlStr, result.Error)
 		return &GormResult{result: result}, common.WrapSQLError(result.Error, sqlStr)
 	}
-	recordQueryMetrics(g.metricsEnabled, "DELETE", g.schema, g.entity, g.tableName, startedAt, result.Error)
+	recordQueryMetrics(ctx, g.metricsEnabled, "DELETE", g.schema, g.entity, g.tableName, startedAt, result.Error)
 	return &GormResult{result: result}, result.Error
 }
 

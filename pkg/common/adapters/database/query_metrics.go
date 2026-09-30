@@ -1,18 +1,21 @@
 package database
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 	"github.com/bitechdev/ResolveSpec/pkg/metrics"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
 const maxMetricFallbackEntityLength = 120
 
-func recordQueryMetrics(enabled bool, operation, schema, entity, table string, startedAt time.Time, err error) {
+func recordQueryMetrics(ctx context.Context, enabled bool, operation, schema, entity, table string, startedAt time.Time, err error) {
+	dbtrace.Query(ctx)
 	if !enabled {
 		return
 	}

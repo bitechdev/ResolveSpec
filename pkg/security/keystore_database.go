@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/cache"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
+	"golang.org/x/sync/singleflight"
 )
 
 // DatabaseKeyStoreOptions configures DatabaseKeyStore.
@@ -51,6 +53,9 @@ type DatabaseKeyStore struct {
 	capability *dbCapability
 	cache      *cache.Cache
 	cacheTTL   time.Duration
+
+	// validateLoads collapses concurrent key lookups for the same key
+	validateLoads singleflight.Group
 }
 
 // NewDatabaseKeyStore creates a DatabaseKeyStore with optional configuration.
@@ -237,6 +242,24 @@ func (ks *DatabaseKeyStore) ValidateKey(ctx context.Context, rawKey string, keyT
 		}
 	}
 
+	// Concurrent misses for the same key share one database lookup.
+	v, err, _ := ks.validateLoads.Do(cacheKey+"|"+string(keyType), func() (any, error) {
+		return ks.validateKeyLoad(ctx, hash, cacheKey, keyType)
+	})
+	if err != nil {
+		return nil, err
+	}
+	key, _ := v.(*UserKey)
+	if key == nil {
+		return nil, errors.New("invalid or expired key")
+	}
+	cp := *key
+	return &cp, nil
+}
+
+// validateKeyLoad validates against the database and fills the cache.
+func (ks *DatabaseKeyStore) validateKeyLoad(ctx context.Context, hash, cacheKey string, keyType KeyType) (*UserKey, error) {
+	dbtrace.Raw(ctx, "keystore.validate")
 	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.ValidateKey) {
 		key, err := ks.validateKeyDirect(ctx, hash, keyType)
 		if err != nil {

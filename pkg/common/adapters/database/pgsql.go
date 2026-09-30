@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
@@ -137,10 +138,10 @@ func (p *PgSQLAdapter) Exec(ctx context.Context, query string, args ...interface
 	}
 	if err != nil {
 		logger.Error("PgSQL Exec failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return nil, common.WrapSQLError(err, query)
 	}
-	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
+	recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -163,13 +164,13 @@ func (p *PgSQLAdapter) Query(ctx context.Context, dest interface{}, query string
 	}
 	if err != nil {
 		logger.Error("PgSQL Query failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 
 	err = scanRows(rows, dest)
-	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 
@@ -196,6 +197,7 @@ func (p *PgSQLAdapter) RunInTransaction(ctx context.Context, fn func(common.Data
 		}
 	}()
 
+	defer dbtrace.TxBegin(ctx)()
 	tx, err := p.getDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -510,20 +512,20 @@ func (p *PgSQLSelectQuery) Scan(ctx context.Context, dest interface{}) (err erro
 
 	if err != nil {
 		logger.Error("PgSQL SELECT failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
 		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 
 	err = scanRows(rows, dest)
 	if err != nil {
-		recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
 		return err
 	}
 
 	// Apply preloads that use separate queries
 	err = p.applySubqueryPreloads(ctx, dest)
-	recordQueryMetrics(p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
+	recordQueryMetrics(ctx, p.metricsEnabled, "SELECT", p.schema, p.entity, p.tableName, startedAt, err)
 	return err
 }
 
@@ -590,7 +592,7 @@ func (p *PgSQLSelectQuery) Count(ctx context.Context) (count int, err error) {
 		logger.Error("PgSQL COUNT failed: %v", err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(p.metricsEnabled, "COUNT", p.schema, p.entity, p.tableName, startedAt, err)
+	recordQueryMetrics(ctx, p.metricsEnabled, "COUNT", p.schema, p.entity, p.tableName, startedAt, err)
 	return count, err
 }
 
@@ -608,7 +610,7 @@ func (p *PgSQLSelectQuery) Exists(ctx context.Context) (exists bool, err error) 
 		logger.Error("PgSQL EXISTS failed: %v", err)
 		err = common.WrapSQLError(err, sqlStr)
 	}
-	recordQueryMetrics(p.metricsEnabled, "EXISTS", p.schema, p.entity, p.tableName, startedAt, err)
+	recordQueryMetrics(ctx, p.metricsEnabled, "EXISTS", p.schema, p.entity, p.tableName, startedAt, err)
 	return count > 0, err
 }
 
@@ -667,7 +669,7 @@ func (p *PgSQLInsertQuery) Exec(ctx context.Context) (res common.Result, err err
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLInsertQuery.Exec", r)
 		}
-		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
 
 	if len(p.values) == 0 {
@@ -718,7 +720,7 @@ func (p *PgSQLInsertQuery) Scan(ctx context.Context, dest interface{}) (err erro
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLInsertQuery.Scan", r)
 		}
-		recordQueryMetrics(p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "INSERT", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
 
 	if len(p.values) == 0 {
@@ -868,7 +870,7 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLUpdateQuery.Exec", r)
 		}
-		recordQueryMetrics(p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "UPDATE", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
 
 	if len(p.sets) == 0 {
@@ -994,7 +996,7 @@ func (p *PgSQLDeleteQuery) Exec(ctx context.Context) (res common.Result, err err
 		if r := recover(); r != nil {
 			err = logger.HandlePanic("PgSQLDeleteQuery.Exec", r)
 		}
-		recordQueryMetrics(p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, "DELETE", p.schema, p.entity, p.tableName, startedAt, err)
 	}()
 
 	query := fmt.Sprintf("DELETE FROM %s", p.tableName) //nolint:gosec // G201: table identifier is internal/validated; values use placeholders
@@ -1094,10 +1096,10 @@ func (p *PgSQLTxAdapter) Exec(ctx context.Context, query string, args ...interfa
 	result, err := p.tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		logger.Error("PgSQL Tx Exec failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return nil, common.WrapSQLError(err, query)
 	}
-	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
+	recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, nil)
 	return &PgSQLResult{result: result}, nil
 }
 
@@ -1108,13 +1110,13 @@ func (p *PgSQLTxAdapter) Query(ctx context.Context, dest interface{}, query stri
 	rows, err := p.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		logger.Error("PgSQL Tx Query failed: %v", err)
-		recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+		recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 		return common.WrapSQLError(err, query)
 	}
 	defer rows.Close()
 
 	err = scanRows(rows, dest)
-	recordQueryMetrics(p.metricsEnabled, operation, schema, entity, table, startedAt, err)
+	recordQueryMetrics(ctx, p.metricsEnabled, operation, schema, entity, table, startedAt, err)
 	return err
 }
 

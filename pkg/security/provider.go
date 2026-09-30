@@ -83,7 +83,7 @@ func userIDScalar(ref any) (any, error) {
 // identifiers substituted in place; every {UserID} becomes a `?` placeholder
 // with the user reference bound as an argument, so user data never reaches the
 // SQL text.
-func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) (string, []any, error) {
+func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Type) (clause string, args []any, err error) {
 	str := m.Template
 
 	for placeholder, ident := range map[string]string{
@@ -108,7 +108,7 @@ func (m *RowSecurity) GetTemplate(pPrimaryKeyName string, pModelType reflect.Typ
 	if err != nil {
 		return "", nil, err
 	}
-	args := make([]any, n)
+	args = make([]any, n)
 	for i := range args {
 		args[i] = uid
 	}

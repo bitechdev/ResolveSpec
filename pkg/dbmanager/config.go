@@ -72,6 +72,9 @@ type ManagerConfig struct {
 	EnableAutoReconnect bool `mapstructure:"enable_auto_reconnect"`
 }
 
+// DefaultApplicationName is used when a connection does not set ApplicationName.
+const DefaultApplicationName = "ResolveSpec"
+
 // ConnectionConfig defines configuration for a single database connection
 type ConnectionConfig struct {
 	// Name is the unique name of this connection
@@ -94,6 +97,10 @@ type ConnectionConfig struct {
 	// PostgreSQL/MSSQL specific
 	SSLMode string `mapstructure:"sslmode"` // disable, require, verify-ca, verify-full
 	Schema  string `mapstructure:"schema"`  // Default schema
+
+	// ApplicationName identifies this client to the server (postgres
+	// application_name, mssql app name, mongodb appName)
+	ApplicationName string `mapstructure:"application_name"`
 
 	// SQLite specific
 	FilePath string `mapstructure:"filepath"`
@@ -225,6 +232,10 @@ func (cc *ConnectionConfig) ApplyDefaults(global *ManagerConfig) {
 		cc.ConnMaxIdleTime = &idleTime
 	}
 
+	if cc.ApplicationName == "" {
+		cc.ApplicationName = DefaultApplicationName
+	}
+
 	// Default timeouts
 	if cc.ConnectTimeout == 0 {
 		cc.ConnectTimeout = 10 * time.Second
@@ -347,6 +358,9 @@ func (cc *ConnectionConfig) buildPostgresDSN() string {
 	if cc.Schema != "" {
 		q.Set("search_path", cc.Schema)
 	}
+	if cc.ApplicationName != "" {
+		q.Set("application_name", cc.ApplicationName)
+	}
 
 	u := url.URL{
 		Scheme:   "postgres",
@@ -405,6 +419,9 @@ func (cc *ConnectionConfig) buildMSSQLDSN() string {
 	if cc.Schema != "" {
 		q.Set("schema", cc.Schema)
 	}
+	if cc.ApplicationName != "" {
+		q.Set("app name", cc.ApplicationName)
+	}
 	if cc.ConnectTimeout > 0 {
 		sec := strconv.Itoa(int(cc.ConnectTimeout.Seconds()))
 		q.Set("connection timeout", sec)
@@ -436,6 +453,9 @@ func (cc *ConnectionConfig) buildMongoDSN() string {
 	}
 	if cc.ReadPreference != "" {
 		q.Set("readPreference", cc.ReadPreference)
+	}
+	if cc.ApplicationName != "" {
+		q.Set("appName", cc.ApplicationName)
 	}
 
 	u := url.URL{
@@ -480,6 +500,7 @@ func FromConfig(cfg config.DBManagerConfig) ManagerConfig {
 			Database:        connCfg.Database,
 			SSLMode:         connCfg.SSLMode,
 			Schema:          connCfg.Schema,
+			ApplicationName: connCfg.ApplicationName,
 			FilePath:        connCfg.FilePath,
 			AuthSource:      connCfg.AuthSource,
 			ReplicaSet:      connCfg.ReplicaSet,
@@ -519,6 +540,7 @@ func (cc *ConnectionConfig) GetConnMaxIdleTime() *time.Duration { return cc.Conn
 func (cc *ConnectionConfig) GetQueryTimeout() time.Duration     { return cc.QueryTimeout }
 func (cc *ConnectionConfig) GetEnableMetrics() bool             { return cc.EnableMetrics }
 func (cc *ConnectionConfig) GetReadPreference() string          { return cc.ReadPreference }
+func (cc *ConnectionConfig) GetApplicationName() string         { return cc.ApplicationName }
 func (cc *ConnectionConfig) GetRetryAttempts() int              { return cc.RetryAttempts }
 func (cc *ConnectionConfig) GetRetryDelay() time.Duration       { return cc.RetryDelay }
 func (cc *ConnectionConfig) GetRetryMaxDelay() time.Duration    { return cc.RetryMaxDelay }

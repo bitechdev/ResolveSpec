@@ -107,3 +107,33 @@ func TestSQLiteMemoryPoolPinned(t *testing.T) {
 		}
 	}
 }
+
+func TestApplicationNameInDSN(t *testing.T) {
+	cc := ConnectionConfig{Host: "h", Port: 1, Database: "d", ApplicationName: "my app&x=y"}
+	for name, c := range map[string]struct{ dsn, key string }{
+		"postgres": {cc.buildPostgresDSN(), "application_name"},
+		"mssql":    {cc.buildMSSQLDSN(), "app name"},
+		"mongo":    {cc.buildMongoDSN(), "appName"},
+	} {
+		u, err := url.Parse(c.dsn)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := u.Query().Get(c.key); got != cc.ApplicationName {
+			t.Errorf("%s: %s = %q, want %q", name, c.key, got, cc.ApplicationName)
+		}
+	}
+}
+
+func TestApplicationNameDefault(t *testing.T) {
+	cc := ConnectionConfig{Type: DatabaseTypePostgreSQL, Host: "h", Database: "d"}
+	cc.ApplyDefaults(nil)
+	if cc.ApplicationName != "ResolveSpec" {
+		t.Errorf("ApplicationName = %q, want ResolveSpec", cc.ApplicationName)
+	}
+	cc = ConnectionConfig{Type: DatabaseTypePostgreSQL, Host: "h", Database: "d", ApplicationName: "x"}
+	cc.ApplyDefaults(nil)
+	if cc.ApplicationName != "x" {
+		t.Errorf("explicit ApplicationName overwritten: %q", cc.ApplicationName)
+	}
+}

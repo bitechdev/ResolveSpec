@@ -59,6 +59,7 @@ type ConnectionConfig interface {
 	GetConnMaxLifetime() *time.Duration
 	GetConnMaxIdleTime() *time.Duration
 	GetReadPreference() string
+	GetApplicationName() string
 	GetRetryAttempts() int
 	GetRetryDelay() time.Duration
 	GetRetryMaxDelay() time.Duration

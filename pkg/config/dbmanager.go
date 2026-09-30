@@ -55,6 +55,10 @@ type DBConnectionConfig struct {
 	SSLMode string `mapstructure:"sslmode"` // disable, require, verify-ca, verify-full
 	Schema  string `mapstructure:"schema"`  // Default schema
 
+	// ApplicationName identifies this client to the server (postgres
+	// application_name, mssql app name, mongodb appName)
+	ApplicationName string `mapstructure:"application_name"`
+
 	// SQLite specific
 	FilePath string `mapstructure:"filepath"`
 

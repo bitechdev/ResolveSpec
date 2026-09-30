@@ -271,6 +271,7 @@ db, _ := mgr.GetDefaultDatabase()
 | `database` | string | Database name |
 | `sslmode` | string | SSL mode (postgres/mssql): `disable`, `require`, etc. |
 | `schema` | string | Default schema (postgres/mssql) |
+| `application_name` | string | Client name shown by the server (postgres `application_name`, mssql `app name`, mongodb `appName`); defaults to `ResolveSpec` |
 | `filepath` | string | File path (sqlite only) |
 | `auth_source` | string | Auth source (mongodb) |
 | `replica_set` | string | Replica set name (mongodb) |

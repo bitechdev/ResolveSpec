@@ -123,6 +123,12 @@ func buildPGXConfig(cfg ConnectionConfig) (*pgx.ConnConfig, error) {
 	}
 
 	cc.DialFunc = newDialFunc(cfg.GetConnectTimeout())
+	// Also applies to caller-supplied DSNs that do not set application_name.
+	if name := cfg.GetApplicationName(); name != "" {
+		if _, set := cc.RuntimeParams["application_name"]; !set {
+			cc.RuntimeParams["application_name"] = name
+		}
+	}
 	if cfg.GetQueryTimeout() > 0 {
 		if _, set := cc.RuntimeParams["statement_timeout"]; !set {
 			cc.RuntimeParams["statement_timeout"] = fmt.Sprintf("%d", cfg.GetQueryTimeout().Milliseconds())

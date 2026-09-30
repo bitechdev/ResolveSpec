@@ -576,10 +576,31 @@ Centralized management of multiple database connections with support for Postgre
 - Multiple named database connections
 - Multi-ORM access (Bun, GORM, Native SQL) sharing the same connection pool
 - Automatic SQLite schema translation (`schema.table` → `schema_table`)
-- Health checks with auto-reconnect
+- Background health checks (report status; they never close the pool)
 - Prometheus metrics for monitoring
 - Configuration-driven via YAML
 - Per-connection statistics and management
+
+**How to use it correctly**:
+
+```go
+mgr, err := dbmanager.NewManager(cfg)   // or dbmanager.SetupManager(cfg) + GetInstance()
+if err != nil { /* handle */ }
+if err := mgr.Connect(ctx); err != nil { /* handle */ } // SetupManager does NOT connect
+defer mgr.Close()                                        // once, at shutdown
+
+conn, _ := mgr.GetDefault()
+db, _ := conn.Bun()      // or conn.GORM() / conn.Native() / conn.Database()
+handler := restheadspec.NewHandlerWithBun(db)
+```
+
+- **Fetch a handle once and keep it.** `Bun()`, `GORM()`, `Native()` and `Database()` return handles over one long-lived `*sql.DB`. You do not need to re-fetch them per request, and they stay valid for the life of the connection.
+- **Never close a handle yourself.** Closing a `*bun.DB`, `*gorm.DB` or the `*sql.DB` closes the shared pool for everyone. Only `mgr.Close()` (at shutdown) should close it. After `Close`, the handles are dead.
+- **Don't reconnect to recover from errors.** `database/sql` already discards bad connections and dials new ones. The manager does not close the pool on errors or failed health checks. `conn.Reconnect(ctx)` is for explicit operator use only (for example after rotating credentials): on PostgreSQL it retires pooled connections without closing the pool, so held handles keep working. Other databases close and reopen the pool, which invalidates handles you already hold.
+- **Bring your own `*sql.DB`.** `dbmanager.NewConnectionFromDB(name, type, db)` wraps a pool you opened. The manager never closes it (`Close` only logs a warning); you own it and must close it.
+- **Set deadlines on request contexts.** `query_timeout` is applied to PostgreSQL as `statement_timeout` (server side) and TCP timeouts detect dead sockets, but pass a context with a deadline to your queries so callers fail fast.
+- **Pool tuning.** Keep `conn_max_idle_time` below the shortest idle timeout of any NAT, load balancer or pgbouncer between you and the database (typically 60-240s). SQLite `:memory:` is pinned to a single connection.
+- **Health checks** run every `health_check_interval` (default 15s; a negative value disables them) and publish Prometheus metrics. `enable_auto_reconnect` is deprecated and ignored.
 
 For documentation, see [pkg/dbmanager/README.md](pkg/dbmanager/README.md).
 

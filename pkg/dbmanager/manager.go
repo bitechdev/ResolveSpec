@@ -2,9 +2,7 @@ package dbmanager
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +47,7 @@ type connectionManager struct {
 	// Background health check
 	healthTicker *time.Ticker
 	stopChan     chan struct{}
+	healthMu     sync.Mutex // guards healthTicker and stopChan
 	wg           sync.WaitGroup
 }
 
@@ -100,7 +99,9 @@ func ResetInstance() {
 	defer instanceMu.Unlock()
 
 	if instance != nil {
-		_ = instance.Close()
+		if err := instance.Close(); err != nil {
+			logger.Error("Failed to close manager during reset: %v", err)
+		}
 	}
 	instance = nil
 }
@@ -116,7 +117,6 @@ func NewManager(cfg ManagerConfig) (Manager, error) {
 	mgr := &connectionManager{
 		connections: make(map[string]Connection),
 		config:      cfg,
-		stopChan:    make(chan struct{}),
 	}
 
 	return mgr, nil
@@ -195,11 +195,26 @@ func (m *connectionManager) SetDefaultDatabase(name string) error {
 
 // Connect establishes all configured database connections
 func (m *connectionManager) Connect(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Create connections from configuration
+	// Dial outside m.mu so a slow connect never blocks Get/Stats/HealthCheck.
+	m.mu.RLock()
+	names := make([]string, 0, len(m.config.Connections))
 	for name := range m.config.Connections {
+		if _, exists := m.connections[name]; !exists {
+			names = append(names, name)
+		}
+	}
+	m.mu.RUnlock()
+
+	opened := make(map[string]Connection, len(names))
+	closeOpened := func() {
+		for name, conn := range opened {
+			if err := conn.Close(); err != nil {
+				logger.Error("Failed to close connection after failed Connect: name=%s, error=%v", name, err)
+			}
+		}
+	}
+
+	for _, name := range names {
 		// Get a copy of the connection config
 		connCfg := m.config.Connections[name]
 		// Apply global defaults to connection config
@@ -209,17 +224,31 @@ func (m *connectionManager) Connect(ctx context.Context) error {
 		// Create connection using factory
 		conn, err := createConnection(connCfg)
 		if err != nil {
+			closeOpened()
 			return fmt.Errorf("failed to create connection '%s': %w", name, err)
 		}
 
 		// Connect
 		if err := conn.Connect(ctx); err != nil {
+			closeOpened()
 			return fmt.Errorf("failed to connect '%s': %w", name, err)
 		}
 
-		m.connections[name] = conn
+		opened[name] = conn
 		logger.Info("Database connection established: name=%s, type=%s", name, connCfg.Type)
 	}
+
+	m.mu.Lock()
+	for name, conn := range opened {
+		if _, exists := m.connections[name]; exists {
+			// Lost a race with a concurrent Connect; drop our duplicate.
+			_ = conn.Close()
+			continue
+		}
+		m.connections[name] = conn
+	}
+	total := len(m.connections)
+	m.mu.Unlock()
 
 	// Always start background health checks
 	if m.config.HealthCheckInterval > 0 {
@@ -227,7 +256,7 @@ func (m *connectionManager) Connect(ctx context.Context) error {
 		logger.Info("Background health checker started: interval=%v", m.config.HealthCheckInterval)
 	}
 
-	logger.Info("Database manager initialized: connections=%d", len(m.connections))
+	logger.Info("Database manager initialized: connections=%d", total)
 	return nil
 }
 
@@ -246,7 +275,7 @@ func (m *connectionManager) Close() error {
 	for name, conn := range m.connections {
 		if err := conn.Close(); err != nil {
 			errors = append(errors, fmt.Errorf("failed to close connection '%s': %w", name, err))
-			logger.Error("Failed to close connection", "name", name, "error", err)
+			logger.Error("Failed to close connection: name=%s, error=%v", name, err)
 		} else {
 			logger.Info("Connection closed: name=%s", name)
 		}
@@ -311,11 +340,17 @@ func (m *connectionManager) Stats() *ManagerStats {
 
 // startHealthChecker starts background health checking
 func (m *connectionManager) startHealthChecker() {
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
+
 	if m.healthTicker != nil {
 		return // Already running
 	}
 
-	m.healthTicker = time.NewTicker(m.config.HealthCheckInterval)
+	ticker := time.NewTicker(m.config.HealthCheckInterval)
+	stop := make(chan struct{})
+	m.healthTicker = ticker
+	m.stopChan = stop
 
 	m.wg.Add(1)
 	go func() {
@@ -324,9 +359,9 @@ func (m *connectionManager) startHealthChecker() {
 
 		for {
 			select {
-			case <-m.healthTicker.C:
+			case <-ticker.C:
 				m.performHealthCheck()
-			case <-m.stopChan:
+			case <-stop:
 				logger.Info("Health checker stopped")
 				return
 			}
@@ -334,14 +369,19 @@ func (m *connectionManager) startHealthChecker() {
 	}()
 }
 
-// stopHealthChecker stops background health checking
+// stopHealthChecker stops background health checking. Safe to call repeatedly.
 func (m *connectionManager) stopHealthChecker() {
-	if m.healthTicker != nil {
-		m.healthTicker.Stop()
-		close(m.stopChan)
-		m.wg.Wait()
-		m.healthTicker = nil
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
+
+	if m.healthTicker == nil {
+		return
 	}
+	m.healthTicker.Stop()
+	close(m.stopChan)
+	m.wg.Wait()
+	m.healthTicker = nil
+	m.stopChan = nil
 }
 
 // performHealthCheck performs a health check on all connections
@@ -362,40 +402,14 @@ func (m *connectionManager) performHealthCheck() {
 	}
 	m.mu.RUnlock()
 
+	defer m.PublishMetrics()
+
 	for _, item := range connections {
 		if err := item.conn.HealthCheck(ctx); err != nil {
-			logger.Warn("Health check failed",
-				"connection", item.name,
-				"error", err)
-
-			// Only reconnect when the client handle itself is closed/disconnected.
-			// For transient database restarts or network blips, *sql.DB can recover
-			// on its own; forcing Close()+Connect() here invalidates any cached ORM
-			// wrappers and callers that still hold the old handle.
-			if m.config.EnableAutoReconnect && shouldReconnectAfterHealthCheck(err) {
-				logger.Info("Attempting reconnection: connection=%s", item.name)
-				if err := item.conn.Reconnect(ctx); err != nil {
-					logger.Error("Reconnection failed",
-						"connection", item.name,
-						"error", err)
-				} else {
-					logger.Info("Reconnection successful: connection=%s", item.name)
-				}
-			} else if m.config.EnableAutoReconnect {
-				logger.Info("Skipping reconnect for transient health check failure: connection=%s", item.name)
-			}
+			// Do not reconnect here: *sql.DB discards bad connections and dials
+			// new ones by itself, while Reconnect closes the pool and breaks
+			// every handle already handed out. Reconnect is operator-only.
+			logger.Warn("Health check failed: connection=%s, error=%v", item.name, err)
 		}
 	}
-}
-
-func shouldReconnectAfterHealthCheck(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	if errors.Is(err, ErrConnectionClosed) {
-		return true
-	}
-
-	return strings.Contains(err.Error(), "sql: database is closed")
 }

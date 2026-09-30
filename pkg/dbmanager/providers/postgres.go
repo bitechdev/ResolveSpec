@@ -3,12 +3,12 @@ package providers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -16,10 +16,11 @@ import (
 
 // PostgresProvider implements Provider for PostgreSQL databases
 type PostgresProvider struct {
-	db       *sql.DB
-	config   ConnectionConfig
-	listener *PostgresListener
-	mu       sync.Mutex
+	db        *sql.DB
+	connector *pgConnector
+	config    ConnectionConfig
+	listener  *PostgresListener
+	mu        sync.Mutex
 }
 
 // NewPostgresProvider creates a new PostgreSQL provider
@@ -29,22 +30,24 @@ func NewPostgresProvider() *PostgresProvider {
 
 // Connect establishes a PostgreSQL connection
 func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) error {
-	// Build DSN
-	dsn, err := cfg.BuildDSN()
+	connCfg, err := buildPGXConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to build DSN: %w", err)
+		return err
 	}
 
+	// The connector and *sql.DB are created once; the pool is never closed to
+	// recover from errors (see Refresh).
+	connector := newPGConnector(connCfg)
+	db := sql.OpenDB(connector)
+
 	// Connect with retry logic
-	var db *sql.DB
 	var lastErr error
+	retryAttempts, retryDelay, retryMaxDelay := retryPolicy(cfg)
 
-	retryAttempts := 3 // Default retry attempts
-	retryDelay := 1 * time.Second
-
+	connected := false
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		if attempt > 0 {
-			delay := calculateBackoff(attempt, retryDelay, 10*time.Second)
+			delay := calculateBackoff(attempt, retryDelay, retryMaxDelay)
 			if cfg.GetEnableLogging() {
 				logger.Info("Retrying PostgreSQL connection: attempt=%d/%d, delay=%v", attempt+1, retryAttempts, delay)
 			}
@@ -52,18 +55,9 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
+				db.Close()
 				return ctx.Err()
 			}
-		}
-
-		// Open database connection
-		db, err = sql.Open("pgx", dsn)
-		if err != nil {
-			lastErr = err
-			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to open PostgreSQL connection", "error", err)
-			}
-			continue
 		}
 
 		// Test the connection with context timeout
@@ -73,18 +67,18 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 
 		if err != nil {
 			lastErr = err
-			db.Close()
 			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to ping PostgreSQL database", "error", err)
+				logger.Warn("Failed to ping PostgreSQL database: %v", err)
 			}
 			continue
 		}
 
-		// Connection successful
+		connected = true
 		break
 	}
 
-	if err != nil {
+	if !connected {
+		db.Close()
 		return fmt.Errorf("failed to connect after %d attempts: %w", retryAttempts, lastErr)
 	}
 
@@ -103,6 +97,7 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 	}
 
 	p.db = db
+	p.connector = connector
 	p.config = cfg
 
 	if cfg.GetEnableLogging() {
@@ -112,34 +107,55 @@ func (p *PostgresProvider) Connect(ctx context.Context, cfg ConnectionConfig) er
 	return nil
 }
 
-// Close closes the PostgreSQL connection
-func (p *PostgresProvider) Close() error {
-	// Close listener if it exists
-	p.mu.Lock()
-	if p.listener != nil {
-		if err := p.listener.Close(); err != nil {
-			p.mu.Unlock()
-			return fmt.Errorf("failed to close listener: %w", err)
-		}
-		p.listener = nil
+// Refresh retires every pooled connection and dials fresh ones on demand,
+// without closing the *sql.DB. Handles already handed out keep working:
+// connections in use finish their current query and are then discarded.
+func (p *PostgresProvider) Refresh(ctx context.Context) error {
+	if p.db == nil || p.connector == nil {
+		return fmt.Errorf("database connection is not initialized")
 	}
+
+	connCfg, err := buildPGXConfig(p.config)
+	if err != nil {
+		return err
+	}
+	p.connector.swap(connCfg)
+
+	pingCtx, cancel := context.WithTimeout(ctx, p.config.GetConnectTimeout())
+	defer cancel()
+	if err := p.db.PingContext(pingCtx); err != nil {
+		return fmt.Errorf("failed to ping after refresh: %w", err)
+	}
+	return nil
+}
+
+// Close closes the PostgreSQL connection. A listener failure does not stop the
+// pool from being closed.
+func (p *PostgresProvider) Close() error {
+	var errs []error
+
+	p.mu.Lock()
+	listener := p.listener
+	p.listener = nil
 	p.mu.Unlock()
 
-	if p.db == nil {
-		return nil
+	if listener != nil {
+		if err := listener.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close listener: %w", err))
+		}
 	}
 
-	err := p.db.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close PostgreSQL connection: %w", err)
+	if p.db != nil {
+		if err := p.db.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close PostgreSQL connection: %w", err))
+		} else if p.config.GetEnableLogging() {
+			logger.Info("PostgreSQL connection closed: name=%s", p.config.GetName())
+		}
+		p.db = nil
+		p.connector = nil
 	}
 
-	if p.config.GetEnableLogging() {
-		logger.Info("PostgreSQL connection closed: name=%s", p.config.GetName())
-	}
-
-	p.db = nil
-	return nil
+	return errors.Join(errs...)
 }
 
 // HealthCheck verifies the PostgreSQL connection is alive

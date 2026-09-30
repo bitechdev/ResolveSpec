@@ -1,6 +1,8 @@
 package dbmanager
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -34,8 +36,8 @@ var (
 	)
 
 	// connectionWaitCount tracks how many times connections had to wait for availability
-	connectionWaitCount = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
+	connectionWaitCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
 			Name: "dbmanager_connection_wait_count",
 			Help: "Number of times connections had to wait for availability",
 		},
@@ -43,8 +45,8 @@ var (
 	)
 
 	// connectionWaitDuration tracks total time connections spent waiting
-	connectionWaitDuration = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
+	connectionWaitDuration = promauto.NewCounterVec(
+		prometheus.CounterOpts{
 			Name: "dbmanager_connection_wait_duration_seconds",
 			Help: "Total time connections spent waiting for availability",
 		},
@@ -61,8 +63,8 @@ var (
 	)
 
 	// connectionLifetimeClosed tracks connections closed due to max lifetime
-	connectionLifetimeClosed = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
+	connectionLifetimeClosed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
 			Name: "dbmanager_connection_lifetime_closed_total",
 			Help: "Total connections closed due to exceeding max lifetime",
 		},
@@ -70,8 +72,8 @@ var (
 	)
 
 	// connectionIdleClosed tracks connections closed due to max idle time
-	connectionIdleClosed = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
+	connectionIdleClosed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
 			Name: "dbmanager_connection_idle_closed_total",
 			Help: "Total connections closed due to exceeding max idle time",
 		},
@@ -114,13 +116,13 @@ func (m *connectionManager) PublishMetrics() {
 			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "idle").Set(float64(connStats.Idle))
 			connectionPoolSize.WithLabelValues(name, string(connStats.Type), "in_use").Set(float64(connStats.InUse))
 
-			// Wait stats
-			connectionWaitCount.With(labels).Set(float64(connStats.WaitCount))
-			connectionWaitDuration.With(labels).Set(connStats.WaitDuration.Seconds())
-
-			// Lifetime/idle closed
-			connectionLifetimeClosed.With(labels).Set(float64(connStats.MaxLifetimeClosed))
-			connectionIdleClosed.With(labels).Set(float64(connStats.MaxIdleClosed))
+			// sql.DBStats values are cumulative, so add only the growth since
+			// the last publish to keep these true counters.
+			prev := lastPublished.swap(name, connStats)
+			connectionWaitCount.With(labels).Add(float64(connStats.WaitCount - prev.WaitCount))
+			connectionWaitDuration.With(labels).Add((connStats.WaitDuration - prev.WaitDuration).Seconds())
+			connectionLifetimeClosed.With(labels).Add(float64(connStats.MaxLifetimeClosed - prev.MaxLifetimeClosed))
+			connectionIdleClosed.With(labels).Add(float64(connStats.MaxIdleClosed - prev.MaxIdleClosed))
 		}
 	}
 }
@@ -133,4 +135,26 @@ func RecordReconnectAttempt(name string, dbType DatabaseType, success bool) {
 	}
 
 	reconnectAttempts.WithLabelValues(name, string(dbType), result).Inc()
+}
+
+// publishedStats remembers the cumulative pool stats last exported per
+// connection so counters can be advanced by the delta.
+type publishedStats struct {
+	mu   sync.Mutex
+	last map[string]ConnectionStats
+}
+
+var lastPublished = &publishedStats{last: make(map[string]ConnectionStats)}
+
+// swap stores cur and returns the previous value. A counter reset (a new pool
+// after Close+Connect) is treated as starting from zero.
+func (p *publishedStats) swap(name string, cur *ConnectionStats) ConnectionStats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prev := p.last[name]
+	if cur.WaitCount < prev.WaitCount || cur.MaxIdleClosed < prev.MaxIdleClosed || cur.MaxLifetimeClosed < prev.MaxLifetimeClosed {
+		prev = ConnectionStats{}
+	}
+	p.last[name] = *cur
+	return prev
 }

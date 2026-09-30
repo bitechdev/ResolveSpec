@@ -41,9 +41,10 @@ func (p *MongoProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 		clientOpts.SetMaxPoolSize(maxPoolSize)
 	}
 
-	if cfg.GetMaxIdleConns() != nil {
-		minPoolSize := uint64(*cfg.GetMaxIdleConns())
-		clientOpts.SetMinPoolSize(minPoolSize)
+	// MaxIdleConns is a ceiling on idle connections, not a pre-warmed minimum
+	// (MinPoolSize), so only the idle-time limit maps onto the Mongo pool.
+	if cfg.GetConnMaxIdleTime() != nil {
+		clientOpts.SetMaxConnIdleTime(*cfg.GetConnMaxIdleTime())
 	}
 
 	// Set timeouts
@@ -65,12 +66,11 @@ func (p *MongoProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 	var client *mongo.Client
 	var lastErr error
 
-	retryAttempts := 3
-	retryDelay := 1 * time.Second
+	retryAttempts, retryDelay, retryMaxDelay := retryPolicy(cfg)
 
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		if attempt > 0 {
-			delay := calculateBackoff(attempt, retryDelay, 10*time.Second)
+			delay := calculateBackoff(attempt, retryDelay, retryMaxDelay)
 			if cfg.GetEnableLogging() {
 				logger.Info("Retrying MongoDB connection: attempt=%d/%d, delay=%v", attempt+1, retryAttempts, delay)
 			}
@@ -87,7 +87,7 @@ func (p *MongoProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 		if err != nil {
 			lastErr = err
 			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to connect to MongoDB", "error", err)
+				logger.Warn("Failed to connect to MongoDB: %v", err)
 			}
 			continue
 		}
@@ -101,7 +101,7 @@ func (p *MongoProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 			lastErr = err
 			_ = client.Disconnect(ctx)
 			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to ping MongoDB", "error", err)
+				logger.Warn("Failed to ping MongoDB: %v", err)
 			}
 			continue
 		}

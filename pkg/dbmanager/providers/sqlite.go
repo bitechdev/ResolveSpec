@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,15 +16,30 @@ import (
 
 // SQLiteProvider implements Provider for SQLite databases
 type SQLiteProvider struct {
-	db        *sql.DB
-	dbMu      sync.RWMutex
-	dbFactory func() (*sql.DB, error)
-	config    ConnectionConfig
+	db     *sql.DB
+	dbMu   sync.RWMutex
+	config ConnectionConfig
 }
 
 // NewSQLiteProvider creates a new SQLite provider
 func NewSQLiteProvider() *SQLiteProvider {
 	return &SQLiteProvider{}
+}
+
+// isMemoryDSN reports whether the SQLite DSN refers to a private in-memory
+// database (each pooled connection would get its own empty database).
+func isMemoryDSN(dsn string) bool {
+	path := dsn
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	if path == ":memory:" || path == "" {
+		return true
+	}
+	if strings.Contains(dsn, "mode=memory") && !strings.Contains(dsn, "cache=shared") {
+		return true
+	}
+	return path == "file::memory:" && !strings.Contains(dsn, "cache=shared")
 }
 
 // Connect establishes a SQLite connection
@@ -50,48 +66,35 @@ func (p *SQLiteProvider) Connect(ctx context.Context, cfg ConnectionConfig) erro
 		return fmt.Errorf("failed to ping SQLite database: %w", err)
 	}
 
-	// Configure connection pool
-	// Note: SQLite works best with MaxOpenConns=1 for write operations
-	// but can handle multiple readers
-	if cfg.GetMaxOpenConns() != nil {
-		db.SetMaxOpenConns(*cfg.GetMaxOpenConns())
-	} else {
-		// Default to 1 for SQLite to avoid "database is locked" errors
+	if isMemoryDSN(dsn) {
+		// A private in-memory database exists per connection and disappears when
+		// that connection closes, so pin the pool to one connection that is
+		// never recycled.
 		db.SetMaxOpenConns(1)
-	}
-
-	if cfg.GetMaxIdleConns() != nil {
-		db.SetMaxIdleConns(*cfg.GetMaxIdleConns())
-	}
-	if cfg.GetConnMaxLifetime() != nil {
-		db.SetConnMaxLifetime(*cfg.GetConnMaxLifetime())
-	}
-	if cfg.GetConnMaxIdleTime() != nil {
-		db.SetConnMaxIdleTime(*cfg.GetConnMaxIdleTime())
-	}
-
-	// Enable WAL mode for better concurrent access
-	_, err = db.ExecContext(ctx, "PRAGMA journal_mode=WAL")
-	if err != nil {
-		if cfg.GetEnableLogging() {
-			logger.Warn("Failed to enable WAL mode for SQLite", "error", err)
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(0)
+		db.SetConnMaxIdleTime(0)
+	} else {
+		// SQLite works best with few writers; default to 1 unless configured.
+		if cfg.GetMaxOpenConns() != nil {
+			db.SetMaxOpenConns(*cfg.GetMaxOpenConns())
+		} else {
+			db.SetMaxOpenConns(1)
 		}
-		// Don't fail connection if WAL mode cannot be enabled
-	}
-
-	// Set busy timeout to handle locked database (minimum 2 minutes = 120000ms)
-	busyTimeout := cfg.GetQueryTimeout().Milliseconds()
-	if busyTimeout < 120000 {
-		busyTimeout = 120000 // Enforce minimum of 2 minutes
-	}
-	_, err = db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", busyTimeout))
-	if err != nil {
-		if cfg.GetEnableLogging() {
-			logger.Warn("Failed to set busy timeout for SQLite", "error", err)
+		if cfg.GetMaxIdleConns() != nil {
+			db.SetMaxIdleConns(*cfg.GetMaxIdleConns())
+		}
+		if cfg.GetConnMaxLifetime() != nil {
+			db.SetConnMaxLifetime(*cfg.GetConnMaxLifetime())
+		}
+		if cfg.GetConnMaxIdleTime() != nil {
+			db.SetConnMaxIdleTime(*cfg.GetConnMaxIdleTime())
 		}
 	}
 
+	p.dbMu.Lock()
 	p.db = db
+	p.dbMu.Unlock()
 	p.config = cfg
 
 	if cfg.GetEnableLogging() {
@@ -132,14 +135,7 @@ func (p *SQLiteProvider) HealthCheck(ctx context.Context) error {
 
 	// Execute a simple query to verify the database is accessible
 	var result int
-	run := func() error { return p.getDB().QueryRowContext(healthCtx, "SELECT 1").Scan(&result) }
-	err := run()
-	if isDBClosed(err) {
-		if reconnErr := p.reconnectDB(); reconnErr == nil {
-			err = run()
-		}
-	}
-	if err != nil {
+	if err := p.getDB().QueryRowContext(healthCtx, "SELECT 1").Scan(&result); err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
 
@@ -150,30 +146,10 @@ func (p *SQLiteProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// WithDBFactory configures a factory used to reopen the database connection if it is closed.
-func (p *SQLiteProvider) WithDBFactory(factory func() (*sql.DB, error)) *SQLiteProvider {
-	p.dbFactory = factory
-	return p
-}
-
 func (p *SQLiteProvider) getDB() *sql.DB {
 	p.dbMu.RLock()
 	defer p.dbMu.RUnlock()
 	return p.db
-}
-
-func (p *SQLiteProvider) reconnectDB() error {
-	if p.dbFactory == nil {
-		return fmt.Errorf("no db factory configured for reconnect")
-	}
-	newDB, err := p.dbFactory()
-	if err != nil {
-		return err
-	}
-	p.dbMu.Lock()
-	p.db = newDB
-	p.dbMu.Unlock()
-	return nil
 }
 
 // GetNative returns the native *sql.DB connection

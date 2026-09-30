@@ -21,19 +21,30 @@ type healthCheckStubConnection struct {
 	reconnectCalls int
 }
 
-func (c *healthCheckStubConnection) Name() string                               { return "stub" }
-func (c *healthCheckStubConnection) Type() DatabaseType                         { return DatabaseTypePostgreSQL }
-func (c *healthCheckStubConnection) Bun() (*bun.DB, error)                      { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) GORM() (*gorm.DB, error)                    { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) Native() (*sql.DB, error)                   { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) DB() (*sql.DB, error)                       { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) Database() (common.Database, error)         { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) MongoDB() (*mongo.Client, error)            { return nil, fmt.Errorf("not implemented") }
-func (c *healthCheckStubConnection) Connect(ctx context.Context) error          { return nil }
-func (c *healthCheckStubConnection) Close() error                               { return nil }
-func (c *healthCheckStubConnection) HealthCheck(ctx context.Context) error      { return c.healthErr }
-func (c *healthCheckStubConnection) Reconnect(ctx context.Context) error        { c.reconnectCalls++; return nil }
-func (c *healthCheckStubConnection) Stats() *ConnectionStats                    { return &ConnectionStats{} }
+func (c *healthCheckStubConnection) Name() string          { return "stub" }
+func (c *healthCheckStubConnection) Type() DatabaseType    { return DatabaseTypePostgreSQL }
+func (c *healthCheckStubConnection) Bun() (*bun.DB, error) { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) GORM() (*gorm.DB, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (c *healthCheckStubConnection) Native() (*sql.DB, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (c *healthCheckStubConnection) DB() (*sql.DB, error) { return nil, fmt.Errorf("not implemented") }
+func (c *healthCheckStubConnection) Database() (common.Database, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (c *healthCheckStubConnection) MongoDB() (*mongo.Client, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (c *healthCheckStubConnection) Connect(ctx context.Context) error     { return nil }
+func (c *healthCheckStubConnection) Close() error                          { return nil }
+func (c *healthCheckStubConnection) HealthCheck(ctx context.Context) error { return c.healthErr }
+func (c *healthCheckStubConnection) Reconnect(ctx context.Context) error {
+	c.reconnectCalls++
+	return nil
+}
+func (c *healthCheckStubConnection) Stats() *ConnectionStats { return &ConnectionStats{} }
 
 func TestBackgroundHealthChecker(t *testing.T) {
 	// Create a SQLite in-memory database
@@ -117,40 +128,20 @@ func TestDefaultHealthCheckInterval(t *testing.T) {
 		t.Errorf("Expected default health check interval to be %v, got %v",
 			expectedInterval, defaults.HealthCheckInterval)
 	}
-
-	if !defaults.EnableAutoReconnect {
-		t.Error("Expected EnableAutoReconnect to be true by default")
-	}
 }
 
-func TestApplyDefaultsEnablesAutoReconnect(t *testing.T) {
-	// Create a config without setting EnableAutoReconnect
-	cfg := ManagerConfig{
-		Connections: map[string]ConnectionConfig{
-			"test": {
-				Name:     "test",
-				Type:     DatabaseTypeSQLite,
-				FilePath: ":memory:",
-			},
-		},
-	}
-
-	// Verify it's false initially (Go's zero value for bool)
-	if cfg.EnableAutoReconnect {
-		t.Error("Expected EnableAutoReconnect to be false before ApplyDefaults")
-	}
-
-	// Apply defaults
+func TestApplyDefaultsHealthCheckInterval(t *testing.T) {
+	cfg := ManagerConfig{}
 	cfg.ApplyDefaults()
-
-	// Verify it's now true
-	if !cfg.EnableAutoReconnect {
-		t.Error("Expected EnableAutoReconnect to be true after ApplyDefaults")
-	}
-
-	// Verify health check interval is also set
 	if cfg.HealthCheckInterval != 15*time.Second {
 		t.Errorf("Expected health check interval to be 15s, got %v", cfg.HealthCheckInterval)
+	}
+
+	// A negative interval disables the background checker and is preserved.
+	cfg = ManagerConfig{HealthCheckInterval: -1}
+	cfg.ApplyDefaults()
+	if cfg.HealthCheckInterval >= 0 {
+		t.Errorf("Expected negative interval to be preserved, got %v", cfg.HealthCheckInterval)
 	}
 }
 
@@ -270,7 +261,7 @@ func TestPerformHealthCheckSkipsReconnectForTransientFailures(t *testing.T) {
 	}
 }
 
-func TestPerformHealthCheckReconnectsClosedConnections(t *testing.T) {
+func TestPerformHealthCheckNeverReconnects(t *testing.T) {
 	conn := &healthCheckStubConnection{
 		healthErr: NewConnectionError("primary", "health check", fmt.Errorf("sql: database is closed")),
 	}
@@ -284,7 +275,7 @@ func TestPerformHealthCheckReconnectsClosedConnections(t *testing.T) {
 
 	mgr.performHealthCheck()
 
-	if conn.reconnectCalls != 1 {
-		t.Fatalf("expected reconnect attempt for closed database handle, got %d", conn.reconnectCalls)
+	if conn.reconnectCalls != 0 {
+		t.Fatalf("health check must not close the shared pool via Reconnect, got %d", conn.reconnectCalls)
 	}
 }

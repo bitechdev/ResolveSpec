@@ -3,6 +3,7 @@ package dbmanager
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
+	"github.com/bitechdev/ResolveSpec/pkg/dbmanager/providers"
 )
 
 // Connection represents a single named database connection
@@ -82,6 +84,9 @@ type sqlConnection struct {
 	// State
 	connected bool
 	mu        sync.RWMutex
+	// lifecycleMu serialises Connect/Close/Reconnect against health-check pings.
+	// Lock order: lifecycleMu before mu.
+	lifecycleMu sync.RWMutex
 
 	// Health check
 	lastHealthCheck   time.Time
@@ -110,9 +115,16 @@ func (c *sqlConnection) Type() DatabaseType {
 
 // Connect establishes the database connection
 func (c *sqlConnection) Connect(ctx context.Context) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.connectLocked(ctx)
+}
+
+// connectLocked requires lifecycleMu and mu held for writing.
+func (c *sqlConnection) connectLocked(ctx context.Context) error {
 	if c.connected {
 		return ErrAlreadyConnected
 	}
@@ -127,17 +139,29 @@ func (c *sqlConnection) Connect(ctx context.Context) error {
 
 // Close closes the database connection and all ORM instances
 func (c *sqlConnection) Close() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.closeLocked()
+}
+
+// closeLocked requires lifecycleMu and mu held for writing. The connection is
+// always marked disconnected and its cached handles dropped, even when closing
+// fails, so accessors never hand out handles over a half-closed pool.
+func (c *sqlConnection) closeLocked() error {
 	if !c.connected {
 		return nil
 	}
 
-	// Close Bun if initialized
-	if c.bunDB != nil {
+	var errs []error
+
+	// Close Bun if initialized. bun.DB.Close closes the underlying *sql.DB, so
+	// skip it when the pool belongs to the caller.
+	if o, ok := c.provider.(interface{ OwnsDB() bool }); c.bunDB != nil && (!ok || o.OwnsDB()) {
 		if err := c.bunDB.Close(); err != nil {
-			return NewConnectionError(c.name, "close bun", err)
+			errs = append(errs, NewConnectionError(c.name, "close bun", err))
 		}
 	}
 
@@ -145,7 +169,7 @@ func (c *sqlConnection) Close() error {
 
 	// Close the provider (which closes the underlying sql.DB)
 	if err := c.provider.Close(); err != nil {
-		return NewConnectionError(c.name, "close", err)
+		errs = append(errs, NewConnectionError(c.name, "close", err))
 	}
 
 	c.connected = false
@@ -156,39 +180,75 @@ func (c *sqlConnection) Close() error {
 	c.gormAdapter = nil
 	c.nativeAdapter = nil
 
-	return nil
+	return errors.Join(errs...)
 }
 
-// HealthCheck verifies the connection is alive
+// HealthCheck verifies the connection is alive. The network ping runs without
+// holding mu, so handle accessors are never blocked behind a slow ping.
 func (c *sqlConnection) HealthCheck(ctx context.Context) error {
 	if c == nil {
 		return fmt.Errorf("connection is nil")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	c.lastHealthCheck = time.Now()
+	// lifecycleMu (read) keeps Close/Reconnect from tearing the provider down
+	// mid-ping without blocking the accessors that only need mu.
+	c.lifecycleMu.RLock()
+	defer c.lifecycleMu.RUnlock()
 
-	if !c.connected {
-		c.healthCheckStatus = "disconnected"
+	c.mu.RLock()
+	connected := c.connected
+	provider := c.provider
+	c.mu.RUnlock()
+
+	if !connected {
+		c.setHealth("disconnected")
 		return ErrConnectionClosed
 	}
 
-	if err := c.provider.HealthCheck(ctx); err != nil {
-		c.healthCheckStatus = "unhealthy: " + err.Error()
+	if err := provider.HealthCheck(ctx); err != nil {
+		c.setHealth("unhealthy: " + err.Error())
 		return NewConnectionError(c.name, "health check", err)
 	}
 
-	c.healthCheckStatus = "healthy"
+	c.setHealth("healthy")
 	return nil
 }
 
-// Reconnect closes and re-establishes the connection
-func (c *sqlConnection) Reconnect(ctx context.Context) error {
-	if err := c.Close(); err != nil {
+func (c *sqlConnection) setHealth(status string) {
+	c.mu.Lock()
+	c.lastHealthCheck = time.Now()
+	c.healthCheckStatus = status
+	c.mu.Unlock()
+}
+
+// Reconnect refreshes the connection as a single critical section.
+//
+// Providers that support it (PostgreSQL) retire their pooled connections and
+// dial fresh ones without closing the *sql.DB, so handles handed out earlier
+// keep working. Other providers fall back to Close+Connect, which invalidates
+// earlier handles; that is meant for explicit operator use only, since
+// *sql.DB already replaces broken connections by itself.
+func (c *sqlConnection) Reconnect(ctx context.Context) (err error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	defer func() { RecordReconnectAttempt(c.name, c.dbType, err == nil) }()
+
+	if c.connected {
+		if r, ok := c.provider.(providers.Refresher); ok {
+			if err := r.Refresh(ctx); err != nil {
+				return NewConnectionError(c.name, "reconnect", err)
+			}
+			return nil
+		}
+	}
+
+	if err := c.closeLocked(); err != nil {
 		return err
 	}
-	return c.Connect(ctx)
+	return c.connectLocked(ctx)
 }
 
 // Native returns the native *sql.DB connection
@@ -250,6 +310,10 @@ func (c *sqlConnection) Bun() (*bun.DB, error) {
 		return c.bunDB, nil
 	}
 
+	if !c.connected {
+		return nil, ErrConnectionClosed
+	}
+
 	// Get native connection first
 	native, err := c.provider.GetNative()
 	if err != nil {
@@ -281,6 +345,10 @@ func (c *sqlConnection) GORM() (*gorm.DB, error) {
 	// Double-check after acquiring write lock
 	if c.gormDB != nil {
 		return c.gormDB, nil
+	}
+
+	if !c.connected {
+		return nil, ErrConnectionClosed
 	}
 
 	// Get native connection first
@@ -359,39 +427,18 @@ func (c *sqlConnection) Stats() *ConnectionStats {
 	return stats
 }
 
-func (c *sqlConnection) reconnectForAdapter() error {
-	timeout := c.config.ConnectTimeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	return c.Reconnect(ctx)
-}
-
+// The adapter factories only re-fetch the current handle. They must not close
+// the shared pool: *sql.DB discards bad connections on its own, and closing it
+// here would break every other holder of the pool.
 func (c *sqlConnection) reopenNativeForAdapter() (*sql.DB, error) {
-	if err := c.reconnectForAdapter(); err != nil {
-		return nil, err
-	}
-
 	return c.Native()
 }
 
 func (c *sqlConnection) reopenBunForAdapter() (*bun.DB, error) {
-	if err := c.reconnectForAdapter(); err != nil {
-		return nil, err
-	}
-
 	return c.Bun()
 }
 
 func (c *sqlConnection) reopenGORMForAdapter() (*gorm.DB, error) {
-	if err := c.reconnectForAdapter(); err != nil {
-		return nil, err
-	}
-
 	return c.GORM()
 }
 
@@ -512,15 +559,8 @@ func (c *sqlConnection) getNativeAdapter() (common.Database, error) {
 
 	// Create a native adapter based on database type
 	switch c.dbType {
-	case DatabaseTypePostgreSQL:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
-			WithDBFactory(c.reopenNativeForAdapter).
-			SetMetricsEnabled(c.config.EnableMetrics)
-	case DatabaseTypeSQLite:
-		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
-			WithDBFactory(c.reopenNativeForAdapter).
-			SetMetricsEnabled(c.config.EnableMetrics)
-	case DatabaseTypeMSSQL:
+	case DatabaseTypePostgreSQL, DatabaseTypeSQLite, DatabaseTypeMSSQL:
+		// The adapter takes the driver name so it can adjust its dialect.
 		c.nativeAdapter = database.NewPgSQLAdapter(c.nativeDB, string(c.dbType)).
 			WithDBFactory(c.reopenNativeForAdapter).
 			SetMetricsEnabled(c.config.EnableMetrics)
@@ -572,8 +612,9 @@ type mongoConnection struct {
 	client *mongo.Client
 
 	// State
-	connected bool
-	mu        sync.RWMutex
+	connected   bool
+	mu          sync.RWMutex
+	lifecycleMu sync.RWMutex // see sqlConnection.lifecycleMu
 
 	// Health check
 	lastHealthCheck   time.Time
@@ -601,9 +642,16 @@ func (c *mongoConnection) Type() DatabaseType {
 
 // Connect establishes the MongoDB connection
 func (c *mongoConnection) Connect(ctx context.Context) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.connectLocked(ctx)
+}
+
+// connectLocked requires lifecycleMu and mu held for writing.
+func (c *mongoConnection) connectLocked(ctx context.Context) error {
 	if c.connected {
 		return ErrAlreadyConnected
 	}
@@ -615,6 +663,7 @@ func (c *mongoConnection) Connect(ctx context.Context) error {
 	// Get the mongo client
 	client, err := c.provider.GetMongo()
 	if err != nil {
+		_ = c.provider.Close()
 		return NewConnectionError(c.name, "get mongo client", err)
 	}
 
@@ -625,49 +674,75 @@ func (c *mongoConnection) Connect(ctx context.Context) error {
 
 // Close closes the MongoDB connection
 func (c *mongoConnection) Close() error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.closeLocked()
+}
+
+// closeLocked requires lifecycleMu and mu held for writing. The connection is
+// marked disconnected even when the provider fails to close cleanly.
+func (c *mongoConnection) closeLocked() error {
 	if !c.connected {
 		return nil
 	}
 
-	if err := c.provider.Close(); err != nil {
-		return NewConnectionError(c.name, "close", err)
-	}
+	err := c.provider.Close()
 
 	c.connected = false
 	c.client = nil
+	if err != nil {
+		return NewConnectionError(c.name, "close", err)
+	}
 	return nil
 }
 
-// HealthCheck verifies the MongoDB connection is alive
+// HealthCheck verifies the MongoDB connection is alive. The ping runs without
+// holding mu so handle accessors are never blocked behind it.
 func (c *mongoConnection) HealthCheck(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lifecycleMu.RLock()
+	defer c.lifecycleMu.RUnlock()
 
-	c.lastHealthCheck = time.Now()
+	c.mu.RLock()
+	connected := c.connected
+	c.mu.RUnlock()
 
-	if !c.connected {
-		c.healthCheckStatus = "disconnected"
+	if !connected {
+		c.setHealth("disconnected")
 		return ErrConnectionClosed
 	}
 
 	if err := c.provider.HealthCheck(ctx); err != nil {
-		c.healthCheckStatus = "unhealthy: " + err.Error()
+		c.setHealth("unhealthy: " + err.Error())
 		return NewConnectionError(c.name, "health check", err)
 	}
 
-	c.healthCheckStatus = "healthy"
+	c.setHealth("healthy")
 	return nil
 }
 
-// Reconnect closes and re-establishes the MongoDB connection
-func (c *mongoConnection) Reconnect(ctx context.Context) error {
-	if err := c.Close(); err != nil {
+func (c *mongoConnection) setHealth(status string) {
+	c.mu.Lock()
+	c.lastHealthCheck = time.Now()
+	c.healthCheckStatus = status
+	c.mu.Unlock()
+}
+
+// Reconnect closes and re-establishes the MongoDB connection atomically.
+func (c *mongoConnection) Reconnect(ctx context.Context) (err error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	defer func() { RecordReconnectAttempt(c.name, DatabaseTypeMongoDB, err == nil) }()
+
+	if err := c.closeLocked(); err != nil {
 		return err
 	}
-	return c.Connect(ctx)
+	return c.connectLocked(ctx)
 }
 
 // MongoDB returns the MongoDB client

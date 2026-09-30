@@ -164,7 +164,7 @@ func TestExistingDBProvider_Stats(t *testing.T) {
 	}
 }
 
-func TestExistingDBProvider_Close(t *testing.T) {
+func TestExistingDBProvider_Close_LeavesDBOpen(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
@@ -177,10 +177,10 @@ func TestExistingDBProvider_Close(t *testing.T) {
 		t.Errorf("Expected Close to succeed, got error: %v", err)
 	}
 
-	// Verify the database is closed
-	err = db.Ping()
-	if err == nil {
-		t.Error("Expected database to be closed")
+	// The caller owns the database, so Close must leave it open
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		t.Errorf("Expected caller's database to stay open, got: %v", err)
 	}
 }
 

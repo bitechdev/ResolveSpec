@@ -2,6 +2,10 @@ package dbmanager
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/config"
@@ -57,9 +61,15 @@ type ManagerConfig struct {
 	RetryDelay    time.Duration `mapstructure:"retry_delay"`
 	RetryMaxDelay time.Duration `mapstructure:"retry_max_delay"`
 
-	// Health checks
+	// Health checks. A zero HealthCheckInterval selects the default (15s); a
+	// negative value disables the background health checker.
 	HealthCheckInterval time.Duration `mapstructure:"health_check_interval"`
-	EnableAutoReconnect bool          `mapstructure:"enable_auto_reconnect"`
+
+	// Deprecated: ignored. The manager never closes a pool to recover from an
+	// error because database/sql already replaces broken connections; closing
+	// it would invalidate every handle handed out. Use Connection.Reconnect for
+	// an explicit, handle-preserving refresh.
+	EnableAutoReconnect bool `mapstructure:"enable_auto_reconnect"`
 }
 
 // ConnectionConfig defines configuration for a single database connection
@@ -103,6 +113,11 @@ type ConnectionConfig struct {
 	ConnectTimeout time.Duration `mapstructure:"connect_timeout"`
 	QueryTimeout   time.Duration `mapstructure:"query_timeout"`
 
+	// Retry policy for the initial connect (inherited from the manager config)
+	RetryAttempts int           `mapstructure:"retry_attempts"`
+	RetryDelay    time.Duration `mapstructure:"retry_delay"`
+	RetryMaxDelay time.Duration `mapstructure:"retry_max_delay"`
+
 	// Features
 	EnableTracing bool `mapstructure:"enable_tracing"`
 	EnableMetrics bool `mapstructure:"enable_metrics"`
@@ -129,7 +144,6 @@ func DefaultManagerConfig() ManagerConfig {
 		RetryDelay:          1 * time.Second,
 		RetryMaxDelay:       10 * time.Second,
 		HealthCheckInterval: 15 * time.Second,
-		EnableAutoReconnect: true,
 	}
 }
 
@@ -160,11 +174,6 @@ func (c *ManagerConfig) ApplyDefaults() {
 	}
 	if c.HealthCheckInterval == 0 {
 		c.HealthCheckInterval = defaults.HealthCheckInterval
-	}
-	// EnableAutoReconnect defaults to true - apply if not explicitly set
-	// Since this is a boolean, we apply the default unconditionally when it's false
-	if !c.EnableAutoReconnect {
-		c.EnableAutoReconnect = defaults.EnableAutoReconnect
 	}
 }
 
@@ -222,9 +231,18 @@ func (cc *ConnectionConfig) ApplyDefaults(global *ManagerConfig) {
 	}
 	if cc.QueryTimeout == 0 {
 		cc.QueryTimeout = 2 * time.Minute // Default to 2 minutes
-	} else if cc.QueryTimeout < 2*time.Minute {
-		// Enforce minimum of 2 minutes
-		cc.QueryTimeout = 2 * time.Minute
+	}
+
+	if global != nil {
+		if cc.RetryAttempts == 0 {
+			cc.RetryAttempts = global.RetryAttempts
+		}
+		if cc.RetryDelay == 0 {
+			cc.RetryDelay = global.RetryDelay
+		}
+		if cc.RetryMaxDelay == 0 {
+			cc.RetryMaxDelay = global.RetryMaxDelay
+		}
 	}
 
 	// Default ORM
@@ -314,108 +332,122 @@ func (cc *ConnectionConfig) BuildDSN() (string, error) {
 	}
 }
 
+// buildPostgresDSN builds a postgres:// URL so credentials and other values are
+// escaped rather than spliced into a key=value string. statement_timeout is
+// applied by the provider as a runtime parameter.
 func (cc *ConnectionConfig) buildPostgresDSN() string {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s",
-		cc.Host, cc.Port, cc.User, cc.Password, cc.Database)
-
+	q := url.Values{}
 	if cc.SSLMode != "" {
-		dsn += fmt.Sprintf(" sslmode=%s", cc.SSLMode)
+		q.Set("sslmode", cc.SSLMode)
 	} else {
-		dsn += " sslmode=disable"
+		// prefer: use TLS when the server offers it, without failing on
+		// servers that do not.
+		q.Set("sslmode", "prefer")
 	}
-
 	if cc.Schema != "" {
-		dsn += fmt.Sprintf(" search_path=%s", cc.Schema)
+		q.Set("search_path", cc.Schema)
 	}
 
-	// Add statement_timeout for query execution timeout (in milliseconds)
-	if cc.QueryTimeout > 0 {
-		timeoutMs := int(cc.QueryTimeout.Milliseconds())
-		dsn += fmt.Sprintf(" statement_timeout=%d", timeoutMs)
+	u := url.URL{
+		Scheme:   "postgres",
+		Host:     hostPort(cc.Host, cc.Port),
+		Path:     "/" + cc.Database,
+		RawQuery: q.Encode(),
 	}
-
-	return dsn
+	if cc.User != "" || cc.Password != "" {
+		u.User = url.UserPassword(cc.User, cc.Password)
+	}
+	return u.String()
 }
 
+func hostPort(host string, port int) string {
+	if port == 0 {
+		return host
+	}
+	// JoinHostPort brackets IPv6 literals.
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// buildSQLiteDSN puts per-connection settings in the DSN as _pragma parameters
+// so every pooled connection gets them, not just the one that ran an Exec.
 func (cc *ConnectionConfig) buildSQLiteDSN() string {
 	filepath := cc.FilePath
 	if filepath == "" {
 		filepath = ":memory:"
 	}
 
-	// Add query parameters for timeouts
-	// Note: SQLite driver supports _timeout parameter (in milliseconds)
+	var pragmas []string
 	if cc.QueryTimeout > 0 {
-		timeoutMs := int(cc.QueryTimeout.Milliseconds())
-		filepath += fmt.Sprintf("?_timeout=%d", timeoutMs)
+		pragmas = append(pragmas, fmt.Sprintf("busy_timeout(%d)", cc.QueryTimeout.Milliseconds()))
+	}
+	if filepath != ":memory:" {
+		pragmas = append(pragmas, "journal_mode(WAL)")
+	}
+	if len(pragmas) == 0 {
+		return filepath
 	}
 
-	return filepath
+	q := url.Values{}
+	for _, p := range pragmas {
+		q.Add("_pragma", p)
+	}
+	sep := "?"
+	if strings.Contains(filepath, "?") {
+		sep = "&"
+	}
+	return filepath + sep + q.Encode()
 }
 
 func (cc *ConnectionConfig) buildMSSQLDSN() string {
 	// Format: sqlserver://username:password@host:port?database=dbname
-	dsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s",
-		cc.User, cc.Password, cc.Host, cc.Port, cc.Database)
-
+	q := url.Values{}
+	q.Set("database", cc.Database)
 	if cc.Schema != "" {
-		dsn += fmt.Sprintf("&schema=%s", cc.Schema)
+		q.Set("schema", cc.Schema)
 	}
-
-	// Add connection timeout (in seconds)
 	if cc.ConnectTimeout > 0 {
-		timeoutSec := int(cc.ConnectTimeout.Seconds())
-		dsn += fmt.Sprintf("&connection timeout=%d", timeoutSec)
+		sec := strconv.Itoa(int(cc.ConnectTimeout.Seconds()))
+		q.Set("connection timeout", sec)
+		q.Set("dial timeout", sec)
 	}
-
-	// Add dial timeout for TCP connection (in seconds)
-	if cc.ConnectTimeout > 0 {
-		dialTimeoutSec := int(cc.ConnectTimeout.Seconds())
-		dsn += fmt.Sprintf("&dial timeout=%d", dialTimeoutSec)
-	}
-
-	// Add read timeout (in seconds) - enforces timeout for reading data
 	if cc.QueryTimeout > 0 {
-		readTimeoutSec := int(cc.QueryTimeout.Seconds())
-		dsn += fmt.Sprintf("&read timeout=%d", readTimeoutSec)
+		q.Set("read timeout", strconv.Itoa(int(cc.QueryTimeout.Seconds())))
 	}
 
-	return dsn
+	u := url.URL{
+		Scheme:   "sqlserver",
+		Host:     hostPort(cc.Host, cc.Port),
+		RawQuery: q.Encode(),
+	}
+	if cc.User != "" || cc.Password != "" {
+		u.User = url.UserPassword(cc.User, cc.Password)
+	}
+	return u.String()
 }
 
 func (cc *ConnectionConfig) buildMongoDSN() string {
 	// Format: mongodb://username:password@host:port/database?authSource=admin
-	var dsn string
-
-	if cc.User != "" && cc.Password != "" {
-		dsn = fmt.Sprintf("mongodb://%s:%s@%s:%d/%s",
-			cc.User, cc.Password, cc.Host, cc.Port, cc.Database)
-	} else {
-		dsn = fmt.Sprintf("mongodb://%s:%d/%s", cc.Host, cc.Port, cc.Database)
-	}
-
-	params := ""
+	q := url.Values{}
 	if cc.AuthSource != "" {
-		params += fmt.Sprintf("authSource=%s", cc.AuthSource)
+		q.Set("authSource", cc.AuthSource)
 	}
 	if cc.ReplicaSet != "" {
-		if params != "" {
-			params += "&"
-		}
-		params += fmt.Sprintf("replicaSet=%s", cc.ReplicaSet)
+		q.Set("replicaSet", cc.ReplicaSet)
 	}
 	if cc.ReadPreference != "" {
-		if params != "" {
-			params += "&"
-		}
-		params += fmt.Sprintf("readPreference=%s", cc.ReadPreference)
+		q.Set("readPreference", cc.ReadPreference)
 	}
 
-	if params != "" {
-		dsn += "?" + params
+	u := url.URL{
+		Scheme:   "mongodb",
+		Host:     hostPort(cc.Host, cc.Port),
+		Path:     "/" + cc.Database,
+		RawQuery: q.Encode(),
 	}
-
-	return dsn
+	if cc.User != "" && cc.Password != "" {
+		u.User = url.UserPassword(cc.User, cc.Password)
+	}
+	return u.String()
 }
 
 // FromConfig converts config.DBManagerConfig to internal ManagerConfig
@@ -487,3 +519,6 @@ func (cc *ConnectionConfig) GetConnMaxIdleTime() *time.Duration { return cc.Conn
 func (cc *ConnectionConfig) GetQueryTimeout() time.Duration     { return cc.QueryTimeout }
 func (cc *ConnectionConfig) GetEnableMetrics() bool             { return cc.EnableMetrics }
 func (cc *ConnectionConfig) GetReadPreference() string          { return cc.ReadPreference }
+func (cc *ConnectionConfig) GetRetryAttempts() int              { return cc.RetryAttempts }
+func (cc *ConnectionConfig) GetRetryDelay() time.Duration       { return cc.RetryDelay }
+func (cc *ConnectionConfig) GetRetryMaxDelay() time.Duration    { return cc.RetryMaxDelay }

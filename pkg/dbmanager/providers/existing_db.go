@@ -7,6 +7,8 @@ import (
 	"sync"
 
 	"go.mongodb.org/mongo-driver/mongo"
+
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 // ExistingDBProvider wraps an existing *sql.DB connection
@@ -44,16 +46,27 @@ func (p *ExistingDBProvider) Connect(ctx context.Context, cfg ConnectionConfig) 
 	return nil
 }
 
-// Close closes the underlying database connection
-func (p *ExistingDBProvider) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// Refresh verifies the wrapped database is still reachable. The pool belongs to
+// the caller and cannot be re-dialed here, so it is never closed to "reconnect".
+func (p *ExistingDBProvider) Refresh(ctx context.Context) error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
 	if p.db == nil {
-		return nil
+		return fmt.Errorf("database connection is nil")
 	}
+	return p.db.PingContext(ctx)
+}
 
-	return p.db.Close()
+// OwnsDB reports whether Close releases the wrapped database. It never does:
+// the *sql.DB was opened by the caller, who is responsible for closing it.
+func (p *ExistingDBProvider) OwnsDB() bool { return false }
+
+// Close is a no-op for the wrapped database. The pool belongs to the caller, so
+// closing it here would break the caller's other users of it.
+func (p *ExistingDBProvider) Close() error {
+	logger.Warn("Not closing externally provided database: name=%s; the caller owns this *sql.DB and must close it", p.name)
+	return nil
 }
 
 // HealthCheck verifies the connection is alive

@@ -35,12 +35,11 @@ func (p *MSSQLProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 	var db *sql.DB
 	var lastErr error
 
-	retryAttempts := 3 // Default retry attempts
-	retryDelay := 1 * time.Second
+	retryAttempts, retryDelay, retryMaxDelay := retryPolicy(cfg)
 
 	for attempt := 0; attempt < retryAttempts; attempt++ {
 		if attempt > 0 {
-			delay := calculateBackoff(attempt, retryDelay, 10*time.Second)
+			delay := calculateBackoff(attempt, retryDelay, retryMaxDelay)
 			if cfg.GetEnableLogging() {
 				logger.Info("Retrying MSSQL connection: attempt=%d/%d, delay=%v", attempt+1, retryAttempts, delay)
 			}
@@ -57,7 +56,7 @@ func (p *MSSQLProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 		if err != nil {
 			lastErr = err
 			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to open MSSQL connection", "error", err)
+				logger.Warn("Failed to open MSSQL connection: %v", err)
 			}
 			continue
 		}
@@ -71,7 +70,7 @@ func (p *MSSQLProvider) Connect(ctx context.Context, cfg ConnectionConfig) error
 			lastErr = err
 			db.Close()
 			if cfg.GetEnableLogging() {
-				logger.Warn("Failed to ping MSSQL database", "error", err)
+				logger.Warn("Failed to ping MSSQL database: %v", err)
 			}
 			continue
 		}

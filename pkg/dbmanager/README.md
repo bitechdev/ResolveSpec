@@ -50,7 +50,6 @@ dbmanager:
 
   # Health checks
   health_check_interval: 30s
-  enable_auto_reconnect: true
 
   connections:
     # Primary PostgreSQL connection
@@ -256,7 +255,7 @@ db, _ := mgr.GetDefaultDatabase()
 | `retry_delay` | duration | 1s | Initial retry delay |
 | `retry_max_delay` | duration | 10s | Maximum retry delay |
 | `health_check_interval` | duration | 30s | Interval between health checks |
-| `enable_auto_reconnect` | bool | true | Auto-reconnect on health check failure |
+| `enable_auto_reconnect` | bool | - | Deprecated and ignored: the manager never closes the pool to recover from errors |
 
 ### Connection Configuration
 
@@ -451,7 +450,6 @@ db.NewSelect().Model(&User{}).Scan(ctx)
 3. **Enable Health Checks**: Catch connection issues early
    ```yaml
    health_check_interval: 30s
-   enable_auto_reconnect: true
    ```
 
 4. **Use Appropriate ORM**: Choose based on your needs

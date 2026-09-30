@@ -4,16 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )
-
-// isDBClosed reports whether err indicates the *sql.DB has been closed.
-func isDBClosed(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "sql: database is closed")
-}
 
 // Common errors
 var (
@@ -63,6 +57,31 @@ type ConnectionConfig interface {
 	GetConnMaxLifetime() *time.Duration
 	GetConnMaxIdleTime() *time.Duration
 	GetReadPreference() string
+	GetRetryAttempts() int
+	GetRetryDelay() time.Duration
+	GetRetryMaxDelay() time.Duration
+}
+
+// retryPolicy returns the configured retry settings, falling back to defaults.
+func retryPolicy(cfg ConnectionConfig) (attempts int, delay, maxDelay time.Duration) {
+	attempts, delay, maxDelay = cfg.GetRetryAttempts(), cfg.GetRetryDelay(), cfg.GetRetryMaxDelay()
+	if attempts <= 0 {
+		attempts = 3
+	}
+	if delay <= 0 {
+		delay = time.Second
+	}
+	if maxDelay <= 0 {
+		maxDelay = 10 * time.Second
+	}
+	return
+}
+
+// Refresher is implemented by providers that can retire their pooled
+// connections and dial fresh ones without closing the shared *sql.DB, so
+// handles already handed out keep working.
+type Refresher interface {
+	Refresh(ctx context.Context) error
 }
 
 // Provider creates and manages the underlying database connection

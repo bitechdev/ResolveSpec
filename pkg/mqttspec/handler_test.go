@@ -773,7 +773,7 @@ func TestHandler_HandleIncomingMessage_ValidMessage(t *testing.T) {
 }
 
 func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
-	newHook := func(id string, data map[string]interface{}) *HookContext {
+	newHook := func(handler *Handler, id string, data map[string]interface{}) *HookContext {
 		return &HookContext{
 			Context:   context.Background(),
 			TableName: "users",
@@ -784,6 +784,7 @@ func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
 			ID:        id,
 			Data:      data,
 			Options:   &common.RequestOptions{},
+			Tx:        handler.db,
 		}
 	}
 	seed := func(t *testing.T, db *gorm.DB) {
@@ -794,7 +795,7 @@ func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
 		handler, db := setupTestHandler(t)
 		seed(t, db)
 
-		_, err := handler.update(newHook("1", map[string]interface{}{"name": ""}))
+		err := handler.update(newHook(handler, "1", map[string]interface{}{"name": ""}))
 		require.NoError(t, err)
 
 		var got TestUser
@@ -808,7 +809,7 @@ func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
 		handler, db := setupTestHandler(t)
 		seed(t, db)
 
-		_, err := handler.update(newHook("1", map[string]interface{}{"status": "inactive"}))
+		err := handler.update(newHook(handler, "1", map[string]interface{}{"status": "inactive"}))
 		require.NoError(t, err)
 
 		var got TestUser
@@ -823,7 +824,7 @@ func TestHandler_Update_OnlyPresentKeysChange(t *testing.T) {
 		handler.SetDisallowNulls(true)
 		seed(t, db)
 
-		_, err := handler.update(newHook("1", map[string]interface{}{"name": nil, "status": ""}))
+		err := handler.update(newHook(handler, "1", map[string]interface{}{"name": nil, "status": ""}))
 		require.NoError(t, err)
 
 		var got TestUser

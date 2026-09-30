@@ -26,6 +26,12 @@ const (
 
 	BeforeDelete HookType = "before_delete"
 	AfterDelete  HookType = "after_delete"
+
+	// OnTxBegin fires once, first, inside every transaction the handler opens
+	// (including the second short transaction for post-commit work). hookCtx.Tx is
+	// the transaction; use it to stamp transaction-local state such as RLS
+	// settings. An error or abort rolls the transaction back.
+	OnTxBegin HookType = common.TxHookName
 )
 
 // HookContext contains all the data available to a hook
@@ -47,6 +53,9 @@ type HookContext struct {
 	AbortCode    int
 	Tx           common.Database
 }
+
+// SetTx points the context at the transaction in use (common.TxContext).
+func (c *HookContext) SetTx(tx common.Database) { c.Tx = tx }
 
 // HookFunc is the signature for hook functions
 type HookFunc func(*HookContext) error

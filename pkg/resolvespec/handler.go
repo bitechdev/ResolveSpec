@@ -666,6 +666,17 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			result = reflect.ValueOf(modelPtr).Elem().Interface()
 		}
 
+		// AfterRead runs inside the read transaction (e.g. column-level security
+		// masking). Result is the scanned slice for single and multi-record reads
+		// alike; hooks mutate the records in place, which `result` shares.
+		hookCtx.Result = modelPtr
+		hookCtx.Error = nil
+		if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
+			logger.Error("AfterRead hook failed: %v", err)
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "hook_error", "Hook execution failed"
+			return err
+		}
+
 		logger.Info("Successfully retrieved records")
 		return nil
 	})
@@ -762,7 +773,17 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 				var procErr error
 				nestedResult, procErr = h.nestedProcessor.ProcessNestedCUD(ctx, "insert", v, model, make(map[string]interface{}), tableName)
-				return procErr
+				if procErr != nil {
+					return procErr
+				}
+				res, err := h.afterCreate(hookCtx, nestedResult.Data)
+				if err != nil {
+					return err
+				}
+				if m, ok := res.(map[string]interface{}); ok {
+					nestedResult.Data = m
+				}
+				return nil
 			})
 			if err != nil {
 				logger.Error("Error in nested create: %v", err)
@@ -814,6 +835,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				logger.Info("Successfully created record, rows affected: %d", result.RowsAffected())
+				res, err := h.afterCreate(hookCtx, responseData)
+				if err != nil {
+					return err
+				}
+				responseData = res
 				return nil
 			}
 
@@ -830,6 +856,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			} else {
 				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, insertedID, fetchErr)
 			}
+			res, err := h.afterCreate(hookCtx, responseData)
+			if err != nil {
+				return err
+			}
+			responseData = res
 			return nil
 		})
 		if err != nil {
@@ -889,6 +920,13 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if err != nil {
 						return fmt.Errorf("failed to process item: %w", err)
 					}
+					res, err := h.afterCreate(hookCtx, result.Data)
+					if err != nil {
+						return err
+					}
+					if m, ok := res.(map[string]interface{}); ok {
+						result.Data = m
+					}
 					results = append(results, result.Data)
 				}
 				return nil
@@ -941,7 +979,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					responseItems = append(responseItems, item)
+					res, err := h.afterCreate(hookCtx, item)
+					if err != nil {
+						return err
+					}
+					responseItems = append(responseItems, res)
 					continue
 				}
 				var returnedID interface{}
@@ -949,14 +991,20 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				fetchedRecord := reflect.New(modelElemType).Interface()
+				var created interface{}
 				if fetchErr := tx.NewSelect().Model(fetchedRecord).
 					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
 					ScanModel(ctx); fetchErr == nil {
-					responseItems = append(responseItems, mergeWithInput(fetchedRecord, item))
+					created = mergeWithInput(fetchedRecord, item)
 				} else {
 					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
-					responseItems = append(responseItems, item)
+					created = item
 				}
+				res, err := h.afterCreate(hookCtx, created)
+				if err != nil {
+					return err
+				}
+				responseItems = append(responseItems, res)
 			}
 			return nil
 		})
@@ -1022,6 +1070,13 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 						if err != nil {
 							return fmt.Errorf("failed to process item: %w", err)
 						}
+						res, err := h.afterCreate(hookCtx, result.Data)
+						if err != nil {
+							return err
+						}
+						if m, ok := res.(map[string]interface{}); ok {
+							result.Data = m
+						}
 						results = append(results, result.Data)
 					}
 				}
@@ -1080,7 +1135,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					responseItems = append(responseItems, itemMap)
+					res, err := h.afterCreate(hookCtx, itemMap)
+					if err != nil {
+						return err
+					}
+					responseItems = append(responseItems, res)
 					continue
 				}
 				var returnedID interface{}
@@ -1088,14 +1147,20 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				fetchedRecord := reflect.New(modelElemType).Interface()
+				var created interface{}
 				if fetchErr := tx.NewSelect().Model(fetchedRecord).
 					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
 					ScanModel(ctx); fetchErr == nil {
-					responseItems = append(responseItems, mergeWithInput(fetchedRecord, itemMap))
+					created = mergeWithInput(fetchedRecord, itemMap)
 				} else {
 					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
-					responseItems = append(responseItems, itemMap)
+					created = itemMap
 				}
+				res, err := h.afterCreate(hookCtx, created)
+				if err != nil {
+					return err
+				}
+				responseItems = append(responseItems, res)
 			}
 			return nil
 		})
@@ -1677,6 +1742,15 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		if failure != nil {
 			return failure
 		}
+		// AfterDelete runs inside the delete transaction: a failing hook rolls the
+		// delete back. Result is the deleted record, or the batch summary.
+		hookCtx.Result = payload
+		if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
+			logger.Error("AfterDelete hook failed: %v", err)
+			failure = &deleteFailure{http.StatusInternalServerError, "hook_error", "Hook execution failed", err}
+			return failure
+		}
+		payload = hookCtx.Result
 		return nil
 	})
 	if failure != nil {
@@ -2597,4 +2671,14 @@ func (h *Handler) runInTx(ctx context.Context, hookCtx *HookContext, body func(t
 	return common.RunRequestTx(ctx, h.db, hookCtx, func() error {
 		return h.hooks.Execute(OnTxBegin, hookCtx)
 	}, body)
+}
+
+// afterCreate runs the AfterCreate hooks inside the create transaction with the
+// created record as Result and returns the (possibly replaced) result.
+func (h *Handler) afterCreate(hookCtx *HookContext, result interface{}) (interface{}, error) {
+	hookCtx.Result = result
+	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
+		return nil, fmt.Errorf("AfterCreate hook failed: %w", err)
+	}
+	return hookCtx.Result, nil
 }

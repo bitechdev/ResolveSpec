@@ -824,6 +824,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 				cacheKeyHash := buildExtendedQueryCacheKey(
 					tableName,
+					id,
 					options.Filters,
 					options.Sort,
 					options.CustomSQLWhere,

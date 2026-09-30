@@ -97,3 +97,48 @@ func TestSpecHandlersDoNotQueryThePoolDirectly(t *testing.T) {
 		}
 	}
 }
+
+// Hook types that are defined but deliberately or knowingly never executed.
+// Anything else defined in a spec's hooks.go must have an Execute call site: an
+// unwired hook silently disables whatever is registered on it (resolvespec's
+// AfterRead skipped column-level security masking until it was wired).
+var unwiredHooks = map[string]string{
+	"websocketspec/BeforeDisconnect": "connection close is not hooked yet",
+	"websocketspec/AfterDisconnect":  "connection close is not hooked yet",
+}
+
+var hookConstRE = regexp.MustCompile(`(?m)^\s*([A-Z][A-Za-z0-9]*)\s+HookType\s*=`)
+
+func TestEveryDefinedHookHasACallSite(t *testing.T) {
+	for _, spec := range []string{"resolvespec", "restheadspec", "websocketspec", "resolvemcp", "funcspec"} {
+		raw, err := os.ReadFile(filepath.Join("..", spec, "hooks.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var src strings.Builder
+		files, _ := filepath.Glob(filepath.Join("..", spec, "*.go"))
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") || strings.HasSuffix(f, "hooks.go") || strings.HasSuffix(f, "hooks_example.go") {
+				continue
+			}
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			src.Write(b)
+		}
+		for _, m := range hookConstRE.FindAllStringSubmatch(string(raw), -1) {
+			name := m[1]
+			if name == "BeforeOp" || name == "OnTxBegin" { // fired by the registry / runInTx
+				continue
+			}
+			if _, ok := unwiredHooks[spec+"/"+name]; ok {
+				continue
+			}
+			call := regexp.MustCompile(`Execute(BeforeOp)?\(` + name + `\b`)
+			if !call.MatchString(src.String()) {
+				t.Errorf("%s: hook %s is defined but never executed", spec, name)
+			}
+		}
+	}
+}

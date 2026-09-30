@@ -21,6 +21,8 @@ Every DB statement and every DB-touching hook of one request runs on one transac
 \* resolvespec, websocketspec, mqttspec, resolvemcp. restheadspec runs `AfterRead` in tx 2.
 † restheadspec, websocketspec, mqttspec run `AfterUpdate` in tx 2. resolvespec, resolvemcp run it in tx 1.
 
+resolvespec has no tx 2 for create: `AfterCreate` runs in tx 1, once per record (per item in a batch), after the insert and re-fetch. Its `AfterRead` gets the scanned slice (single and list reads) and may mask in place; a failing `AfterRead` fails the read (fail closed).
+
 Tx 2 exists so the re-fetch sees trigger changes from the committed write.
 
 ## Per spec

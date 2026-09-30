@@ -491,6 +491,19 @@ Execute SQL functions and queries through a simple HTTP API with header-based pa
 
 For complete documentation, see [pkg/funcspec/](pkg/funcspec/).
 
+#### Clients
+
+All clients are under [clients/](clients/README.md); wire behaviour is identical across them.
+
+| Client | Language | Specs | Docs |
+|---|---|---|---|
+| `resolvespec-js` | TypeScript | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-js/README.md) |
+| `resolvespec-python` | Python >= 3.11 | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-python/README.md) |
+| `resolvespec-go` | Go | ResolveSpec, FunctionSpec | [README](clients/resolvespec-go/README.md) |
+| `resolvespec-rs` | Rust | ResolveSpec, FunctionSpec | [README](clients/resolvespec-rs/README.md) |
+| `resolvespec-cs` | C# (.NET 8) | ResolveSpec, FunctionSpec | [README](clients/resolvespec-cs/README.md) |
+| `resolvespec-dart` | Dart / Flutter | ResolveSpec, FunctionSpec | [README](clients/resolvespec-dart/README.md) |
+
 #### ResolveSpec JS - TypeScript Client Library
 
 TypeScript/JavaScript client library supporting all three REST and WebSocket protocols.
@@ -668,6 +681,23 @@ For documentation, see [pkg/errortracking/README.md](pkg/errortracking/README.md
 Configuration management with support for multiple formats and environments.
 
 For documentation, see [pkg/config/README.md](pkg/config/README.md).
+
+#### DB Trace
+
+Per-request DB call counting (`tx`, `tx_queries`, `pooled`, `raw`) and pool logging. Off by default.
+
+For documentation, see [pkg/dbtrace/README.md](pkg/dbtrace/README.md).
+
+### Core Libraries
+
+| Package | Purpose |
+|---|---|
+| [`pkg/common`](pkg/common/) | Shared interfaces (database, request/response adapters), validation, recursive CRUD, request transactions ([TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)) |
+| [`pkg/modelregistry`](pkg/modelregistry/) | Model registration by schema/entity and per-model access rules |
+| [`pkg/reflection`](pkg/reflection/) | Model/struct reflection helpers (primary keys, columns, relations) |
+| [`pkg/spectypes`](pkg/spectypes/) | SQL-aware types (nullable, JSONB, PostGIS, vector) |
+| [`pkg/logger`](pkg/logger/) | Logging used by all packages |
+| [`pkg/testmodels`](pkg/testmodels/) | Shared test models and data for tests and the testserver |
 
 ## Security Considerations
 

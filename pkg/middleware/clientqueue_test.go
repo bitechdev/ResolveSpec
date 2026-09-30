@@ -279,6 +279,7 @@ func TestClientQueueMetrics(t *testing.T) {
 	q := newTestQueue(t, ClientQueueConfig{MaxConcurrent: 2})
 	imm0 := gaugeVal(t, queueRequests.WithLabelValues("immediate"))
 	que0 := gaugeVal(t, queueRequests.WithLabelValues("queued"))
+	enq0 := gaugeVal(t, queueEnqueued)
 	bc0, bs0 := histVal(t, queueBurst)
 	wc0, _ := histVal(t, queueWait)
 
@@ -317,6 +318,9 @@ func TestClientQueueMetrics(t *testing.T) {
 
 	if got := gaugeVal(t, queueRequests.WithLabelValues("immediate")) - imm0; got != 2 {
 		t.Errorf("immediate = %v, want 2", got)
+	}
+	if got := gaugeVal(t, queueEnqueued) - enq0; got != 3 {
+		t.Errorf("enqueued = %v, want 3", got)
 	}
 	if got := gaugeVal(t, queueRequests.WithLabelValues("queued")) - que0; got != 3 {
 		t.Errorf("queued = %v, want 3", got)
@@ -403,4 +407,28 @@ func TestClientQueueWaitingClientsGauge(t *testing.T) {
 	}
 	waitFor(0)
 	q.release("b")
+}
+
+func TestClientQueueEnqueuedCountsAllOutcomes(t *testing.T) {
+	q := newTestQueue(t, ClientQueueConfig{MaxConcurrent: 1, MaxQueue: 1, MaxWait: 50 * time.Millisecond})
+	base := gaugeVal(t, queueEnqueued)
+	if err := q.acquire(t.Context(), "k"); err != nil { // immediate: not enqueued
+		t.Fatal(err)
+	}
+	if err := q.acquire(t.Context(), "k"); !errors.Is(err, errQueueWait) { // enqueued, times out
+		t.Fatalf("err = %v, want timeout", err)
+	}
+	cctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- q.acquire(cctx, "k") }() // enqueued, cancelled
+	time.Sleep(10 * time.Millisecond)
+	if err := q.acquire(t.Context(), "k"); !errors.Is(err, errQueueFull) { // rejected: not enqueued
+		t.Fatalf("err = %v, want queue full", err)
+	}
+	cancel()
+	<-done
+	q.release("k")
+	if got := gaugeVal(t, queueEnqueued) - base; got != 2 {
+		t.Fatalf("enqueued = %v, want 2 (timeout + cancel; not immediate or rejected)", got)
+	}
 }

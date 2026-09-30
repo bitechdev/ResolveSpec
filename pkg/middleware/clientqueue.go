@@ -70,6 +70,11 @@ var (
 		Help: "Requests currently waiting for a slot",
 	})
 
+	queueEnqueued = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "clientqueue_enqueued_total",
+		Help: "Requests ever placed in a wait queue, whatever their outcome (ran, timed out or cancelled)",
+	})
+
 	queueWaitingClients = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "clientqueue_waiting_clients",
 		Help: "Clients currently with at least one request waiting for a slot",
@@ -286,6 +291,7 @@ func (q *ClientQueue) acquire(ctx context.Context, key string) error {
 	c.enter()
 	q.mu.Unlock()
 	queueDepth.Inc()
+	queueEnqueued.Inc()
 
 	timer := time.NewTimer(q.cfg.MaxWait)
 	defer timer.Stop()

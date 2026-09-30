@@ -449,6 +449,7 @@ no per-client labels so cardinality stays bounded.
 | Metric | Type | Meaning |
 |---|---|---|
 | `clientqueue_requests_total{result}` | counter | `immediate`, `queued`, `rejected_full`, `timeout`, `canceled` |
+| `clientqueue_enqueued_total` | counter | requests ever placed in a wait queue, whatever happened next (ran, timed out, cancelled) |
 | `clientqueue_wait_seconds` | histogram | wait for a slot; 0 for requests that ran immediately |
 | `clientqueue_wait_max_seconds` | gauge | longest wait since process start |
 | `clientqueue_burst_size` | histogram | peak outstanding requests per client busy period |

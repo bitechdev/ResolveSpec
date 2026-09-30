@@ -1459,10 +1459,8 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		}
 	}
 
-	// Execute AfterCreate hooks (runs after the transaction commits, against the
-	// pooled db — hookCtx.Tx was pointed at the now-closed transaction inside the
-	// RunInTransaction closure above and must not be reused here).
-	hookCtx.Tx = h.db
+	// Execute AfterCreate hooks in a second short transaction (the first has
+	// committed); OnTxBegin re-applies transaction-local state to it.
 	var responseData interface{}
 	if len(mergedResults) == 1 {
 		responseData = mergedResults[0]
@@ -1473,7 +1471,9 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 	}
 	hookCtx.Error = nil
 
-	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
+	if err := h.runInTx(ctx, hookCtx, func(common.Database) error {
+		return h.hooks.Execute(AfterCreate, hookCtx)
+	}); err != nil {
 		logger.Error("AfterCreate hook failed: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
 		return
@@ -1571,7 +1571,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Now read the existing record from the database
 		existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		selectQuery := h.db.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery := tx.NewSelect().Model(existingRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 		if err := selectQuery.ScanModel(ctx); err != nil {
 			if err == sql.ErrNoRows {
 				return fmt.Errorf("record not found with ID: %v", targetID)
@@ -1657,43 +1657,54 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Fetch the updated record after the transaction commits to capture any trigger changes
-	fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
-	selectQuery := h.db.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+	// Second short transaction: fetch the updated record after the first commit to
+	// capture any trigger changes, then run AfterUpdate. OnTxBegin re-applies
+	// transaction-local state (e.g. RLS settings) to this transaction.
+	var mergedData interface{}
+	var errCode, errMsg string
+	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {
+		fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
+		selectQuery := tx.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
-	// Execute BeforeScan hooks so row security is re-applied to the post-update
-	// re-fetch, same as it is for the initial read and the update query itself.
-	// Without this, the re-fetch can return a row the caller isn't authorized to see.
-	// The transaction has already committed by this point, so hooks must use the
-	// pooled connection rather than the now-dead tx.
-	hookCtx.Tx = h.db
-	hookCtx.Query = selectQuery
-	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
-		logger.Error("BeforeScan hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-		return
-	}
-	if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
-		selectQuery = modifiedQuery
-	}
+		// Execute BeforeScan hooks so row security is re-applied to the post-update
+		// re-fetch, same as it is for the initial read and the update query itself.
+		// Without this, the re-fetch can return a row the caller isn't authorized to see.
+		hookCtx.Query = selectQuery
+		if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+			logger.Error("BeforeScan hook failed: %v", err)
+			errCode, errMsg = "hook_error", "Hook execution failed"
+			return err
+		}
+		if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
+			selectQuery = modifiedQuery
+		}
 
-	if err := selectQuery.ScanModel(ctx); err != nil {
-		logger.Error("Failed to fetch updated record: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-		return
-	}
-	updatedRecord = fetchedRecord
+		if err := selectQuery.ScanModel(ctx); err != nil {
+			logger.Error("Failed to fetch updated record: %v", err)
+			errCode, errMsg = "fetch_error", "Failed to fetch updated record"
+			return err
+		}
+		updatedRecord = fetchedRecord
 
-	// Merge the updated record with the original request data
-	// This preserves extra keys from the request and updates values from the database
-	mergedData := h.mergeRecordWithRequest(updatedRecord, dataMap)
+		// Merge the updated record with the original request data
+		// This preserves extra keys from the request and updates values from the database
+		mergedData = h.mergeRecordWithRequest(updatedRecord, dataMap)
 
-	// Execute AfterUpdate hooks
-	hookCtx.Result = mergedData
-	hookCtx.Error = nil
-	if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
-		logger.Error("AfterUpdate hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+		// Execute AfterUpdate hooks
+		hookCtx.Result = mergedData
+		hookCtx.Error = nil
+		if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+			logger.Error("AfterUpdate hook failed: %v", err)
+			errCode, errMsg = "hook_error", "Hook execution failed"
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if errCode == "" {
+			errCode, errMsg = "fetch_error", "Failed to fetch updated record"
+		}
+		h.sendError(w, http.StatusInternalServerError, errCode, errMsg, err)
 		return
 	}
 

@@ -1210,7 +1210,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 			// Now read the existing record from the database
 			existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-			selectQuery := h.db.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...)
+			selectQuery := tx.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...)
 
 			// Apply conditions to select, based on the resolved target ID
 			// (URL ID, request ID, or the "id" field embedded in the data payload).
@@ -1292,22 +1292,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch the updated record after the transaction commits to capture any trigger changes
+		// Fetch the updated record in a second short transaction after the first
+		// commit to capture any trigger changes (OnTxBegin re-applies RLS state).
 		updatedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		fetchQuery := h.db.NewSelect().Model(updatedRecord).Column(reflection.GetSQLModelColumns(model)...)
-		if urlID != "" {
-			fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-		} else if reqID != nil {
-			switch id := reqID.(type) {
-			case string:
-				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-			case []string:
-				if len(id) > 0 {
-					fetchQuery = fetchQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			fetchQuery := tx.NewSelect().Model(updatedRecord).Column(reflection.GetSQLModelColumns(model)...)
+			if urlID != "" {
+				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					if len(id) > 0 {
+						fetchQuery = fetchQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+					}
 				}
 			}
-		}
-		if err := fetchQuery.ScanModel(ctx); err != nil {
+			return fetchQuery.ScanModel(ctx)
+		}); err != nil {
 			logger.Error("Failed to fetch updated record: %v", err)
 			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
 			return
@@ -1375,7 +1378,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 					// First, read the existing record
 					existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-					selectQuery := h.db.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					selectQuery := tx.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if err := selectQuery.ScanModel(ctx); err != nil {
 						if err == sql.ErrNoRows {
 							continue // Skip if record not found
@@ -1441,19 +1444,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch updated records after the transaction commits to capture any trigger changes
+		// Fetch updated records in a second short transaction after the first commit
+		// to capture any trigger changes (OnTxBegin re-applies RLS state).
 		fetchedUpdates := make([]interface{}, 0, len(updates))
-		for _, item := range updates {
-			if itemID, ok := item["id"]; ok && itemID != nil {
-				fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-				fetchQuery := h.db.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
-				if err := fetchQuery.ScanModel(ctx); err != nil {
-					logger.Error("Failed to fetch updated record with ID %v: %v", itemID, err)
-					h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-					return
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			for _, item := range updates {
+				if itemID, ok := item["id"]; ok && itemID != nil {
+					fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+					fetchQuery := tx.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					if err := fetchQuery.ScanModel(ctx); err != nil {
+						return fmt.Errorf("fetch updated record with ID %v: %w", itemID, err)
+					}
+					fetchedUpdates = append(fetchedUpdates, fetchedRecord)
 				}
-				fetchedUpdates = append(fetchedUpdates, fetchedRecord)
 			}
+			return nil
+		}); err != nil {
+			logger.Error("Failed to fetch updated records: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
+			return
 		}
 
 		logger.Info("Successfully updated %d records", len(fetchedUpdates))
@@ -1524,7 +1533,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 						// First, read the existing record
 						existingRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-						selectQuery := h.db.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						selectQuery := tx.NewSelect().Model(existingRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if err := selectQuery.ScanModel(ctx); err != nil {
 							if err == sql.ErrNoRows {
 								continue // Skip if record not found
@@ -1593,21 +1602,27 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch updated records after the transaction commits to capture any trigger changes
+		// Fetch updated records in a second short transaction after the first commit
+		// to capture any trigger changes (OnTxBegin re-applies RLS state).
 		fetchedList := make([]interface{}, 0, len(list))
-		for _, item := range list {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemID, ok := itemMap["id"]; ok && itemID != nil {
-					fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-					fetchQuery := h.db.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
-					if err := fetchQuery.ScanModel(ctx); err != nil {
-						logger.Error("Failed to fetch updated record with ID %v: %v", itemID, err)
-						h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-						return
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			for _, item := range list {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if itemID, ok := itemMap["id"]; ok && itemID != nil {
+						fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+						fetchQuery := tx.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						if err := fetchQuery.ScanModel(ctx); err != nil {
+							return fmt.Errorf("fetch updated record with ID %v: %w", itemID, err)
+						}
+						fetchedList = append(fetchedList, fetchedRecord)
 					}
-					fetchedList = append(fetchedList, fetchedRecord)
 				}
 			}
+			return nil
+		}); err != nil {
+			logger.Error("Failed to fetch updated records: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
+			return
 		}
 
 		logger.Info("Successfully updated %d records", len(fetchedList))

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ResolveSpec</RootNamespace>
+    <PackageId>ResolveSpec.Client</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Client for ResolveSpec (JSON body) and FunctionSpec endpoints</Description>
+  </PropertyGroup>
+</Project>

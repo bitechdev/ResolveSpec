@@ -105,10 +105,10 @@ that the race detector only reports races that **actually execute**, so X1 and X
 have to be fixed together: a race detector pointed at packages with no tests
 finds nothing.
 
-**Status (2026-09-30) — partially resolved.** `make test-race` now exists
+**Status (2026-09-30) — resolved for the packages with tests.** `make test-race` now exists
 (`go test -race -count=1 ./pkg/...`), `test-unit` covers `./pkg/...`, and `test`
-depends on both. The CI workflow (`.github/workflows/tests.yml`) still has no
-race job, so nothing enforces it yet. The first full run was not clean:
+depends on both. The CI workflow (`.github/workflows/tests.yml`) now has a `race-tests`
+job running the same command. The first full run was not clean:
 
 | Package | Race | Kind |
 |---|---|---|

@@ -32,6 +32,7 @@ type Handler struct {
 	fallbackHandler  FallbackHandler
 	openAPIGenerator func() (string, error)
 	defaultSort      map[string][]common.SortOption
+	disallowNulls    bool
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -50,6 +51,14 @@ func NewHandler(db common.Database, registry common.ModelRegistry) *Handler {
 // Use this to register custom hooks for operations
 func (h *Handler) Hooks() *HookRegistry {
 	return h.hooks
+}
+
+// SetDisallowNulls controls whether explicit null values in update payloads are
+// ignored. By default a key present in the payload overwrites the stored value,
+// including "" and null. When true, null values are skipped and the existing
+// value is kept ("" still overwrites).
+func (h *Handler) SetDisallowNulls(disallow bool) {
+	h.disallowNulls = disallow
 }
 
 // SetFallbackHandler sets a fallback handler to be called when no model is found
@@ -1236,21 +1245,8 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				return fmt.Errorf("error unmarshaling existing record: %w", err)
 			}
 
-			// Merge only non-null and non-empty values from the incoming request into the existing record
-			for key, newValue := range updates {
-				// Skip if the value is nil
-				if newValue == nil {
-					continue
-				}
-
-				// Skip if the value is an empty string
-				if strVal, ok := newValue.(string); ok && strVal == "" {
-					continue
-				}
-
-				// Update the existing map with the new value
-				existingMap[key] = newValue
-			}
+			// Overwrite with every key present in the request (including "" and null unless disallowed)
+			common.MergeUpdateValues(existingMap, updates, h.disallowNulls)
 
 			// Build update query with merged data
 			query := tx.NewUpdate().Table(tableName).SetMap(existingMap)
@@ -1421,16 +1417,8 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 						item = modifiedData
 					}
 
-					// Merge only non-null and non-empty values
-					for key, newValue := range item {
-						if newValue == nil {
-							continue
-						}
-						if strVal, ok := newValue.(string); ok && strVal == "" {
-							continue
-						}
-						existingMap[key] = newValue
-					}
+					// Overwrite with every key present in the request (including "" and null unless disallowed)
+					common.MergeUpdateValues(existingMap, item, h.disallowNulls)
 
 					txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if _, err := txQuery.Exec(ctx); err != nil {
@@ -1578,16 +1566,8 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 							itemMap = modifiedData
 						}
 
-						// Merge only non-null and non-empty values
-						for key, newValue := range itemMap {
-							if newValue == nil {
-								continue
-							}
-							if strVal, ok := newValue.(string); ok && strVal == "" {
-								continue
-							}
-							existingMap[key] = newValue
-						}
+						// Overwrite with every key present in the request (including "" and null unless disallowed)
+						common.MergeUpdateValues(existingMap, itemMap, h.disallowNulls)
 
 						txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if _, err := txQuery.Exec(ctx); err != nil {

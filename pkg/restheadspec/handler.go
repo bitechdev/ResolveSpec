@@ -33,6 +33,7 @@ type Handler struct {
 	fallbackHandler  FallbackHandler
 	openAPIGenerator func() (string, error)
 	defaultSort      map[string][]common.SortOption
+	disallowNulls    bool
 }
 
 // NewHandler creates a new API handler with database and registry abstractions
@@ -57,6 +58,14 @@ func (h *Handler) GetDatabase() common.Database {
 // Use this to register custom hooks for operations
 func (h *Handler) Hooks() *HookRegistry {
 	return h.hooks
+}
+
+// SetDisallowNulls controls whether explicit null values in update payloads are
+// ignored. By default a key present in the payload overwrites the stored value,
+// including "" and null. When true, null values are skipped and the existing
+// value is kept ("" still overwrites).
+func (h *Handler) SetDisallowNulls(disallow bool) {
+	h.disallowNulls = disallow
 }
 
 // SetFallbackHandler sets a fallback handler to be called when no model is found
@@ -1597,21 +1606,8 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			nestedRelations = relations
 		}
 
-		// Merge only non-null and non-empty values from the incoming request into the existing record
-		for key, newValue := range dataMap {
-			// Skip if the value is nil
-			if newValue == nil {
-				continue
-			}
-
-			// Skip if the value is an empty string
-			if strVal, ok := newValue.(string); ok && strVal == "" {
-				continue
-			}
-
-			// Update the existing map with the new value
-			existingMap[key] = newValue
-		}
+		// Overwrite with every key present in the request (including "" and null unless disallowed)
+		common.MergeUpdateValues(existingMap, dataMap, h.disallowNulls)
 
 		// Ensure ID is in the data map for the update
 		existingMap[pkName] = targetID

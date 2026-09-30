@@ -45,6 +45,9 @@ type Handler struct {
 	// Started flag
 	started bool
 	mu      sync.RWMutex
+
+	// disallowNulls skips null values in update payloads instead of applying them
+	disallowNulls bool
 }
 
 // NewHandler creates a new MQTT handler
@@ -812,6 +815,14 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 }
 
 // create creates a new record
+// SetDisallowNulls controls whether explicit null values in update payloads are
+// ignored. By default a key present in the payload overwrites the stored value,
+// including "" and null. When true, null values are skipped and the existing
+// value is kept ("" still overwrites).
+func (h *Handler) SetDisallowNulls(disallow bool) {
+	h.disallowNulls = disallow
+}
+
 func (h *Handler) create(hookCtx *HookContext) (interface{}, error) {
 	// Marshal and unmarshal data into model
 	dataBytes, err := json.Marshal(hookCtx.Data)
@@ -840,25 +851,33 @@ func (h *Handler) create(hookCtx *HookContext) (interface{}, error) {
 
 // update updates an existing record
 func (h *Handler) update(hookCtx *HookContext) (interface{}, error) {
-	// Marshal and unmarshal data into model
-	dataBytes, err := json.Marshal(hookCtx.Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal data: %w", err)
+	// Convert request data to a map
+	var updates map[string]interface{}
+	if m, ok := hookCtx.Data.(map[string]interface{}); ok {
+		updates = m
+	} else {
+		dataBytes, err := json.Marshal(hookCtx.Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal data: %w", err)
+		}
+		if err := json.Unmarshal(dataBytes, &updates); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal data into map: %w", err)
+		}
 	}
 
-	if err := json.Unmarshal(dataBytes, hookCtx.ModelPtr); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal data into model: %w", err)
-	}
-
-	// Update record
-	query := h.db.NewUpdate().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
-
-	// Add ID filter
 	pkName := reflection.GetPrimaryKeyName(hookCtx.Model)
-	query = query.Where(fmt.Sprintf("%s = ?", pkName), hookCtx.ID)
 
-	if _, err := query.Exec(hookCtx.Context); err != nil {
-		return nil, fmt.Errorf("failed to update record: %w", err)
+	// Only the keys present in the request are written. "" and null overwrite
+	// the stored value unless disallowNulls is set, in which case null is skipped.
+	values := common.MergeUpdateValues(make(map[string]interface{}, len(updates)), updates, h.disallowNulls)
+
+	if len(values) > 0 {
+		query := h.db.NewUpdate().Table(hookCtx.TableName).SetMap(values).
+			Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), hookCtx.ID)
+
+		if _, err := query.Exec(hookCtx.Context); err != nil {
+			return nil, fmt.Errorf("failed to update record: %w", err)
+		}
 	}
 
 	// Fetch updated record

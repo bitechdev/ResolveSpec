@@ -491,7 +491,7 @@ TypeScript/JavaScript client library supporting all three REST and WebSocket pro
 - Header-based REST client (`HeaderSpecClient`)
 - WebSocket client (`WebSocketClient`) with CRUD, subscriptions, heartbeat, reconnect
 
-For complete documentation, see [resolvespec-js/README.md](resolvespec-js/README.md).
+For complete documentation, see [clients/resolvespec-js/README.md](clients/resolvespec-js/README.md).
 
 ### Real-Time Communication
 

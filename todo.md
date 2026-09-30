@@ -23,23 +23,23 @@ This document tracks incomplete features and improvements for the ResolveSpec pr
 
 ### ResolveSpec JS Client Implementation & Testing
 
-1. **ResolveSpec Client API (resolvespec-js)**
+1. **ResolveSpec Client API (clients/resolvespec-js)**
    - [x] Core API implementation (read, create, update, delete, getMetadata)
    - [ ] Unit tests for API functions
    - [ ] Integration tests with server
    - [ ] Error handling and edge cases
 
-2. **HeaderSpec Client API (resolvespec-js)**
+2. **HeaderSpec Client API (clients/resolvespec-js)**
    - [ ] Client API implementation
    - [ ] Unit tests
    - [ ] Integration tests with server
 
-3. **FunctionSpec Client API (resolvespec-js)**
+3. **FunctionSpec Client API (clients/resolvespec-js)**
    - [ ] Client API implementation
    - [ ] Unit tests
    - [ ] Integration tests with server
 
-4. **WebSocketSpec Client API (resolvespec-js)**
+4. **WebSocketSpec Client API (clients/resolvespec-js)**
    - [x] WebSocketClient class implementation (read, create, update, delete, meta, subscribe, unsubscribe)
    - [ ] Unit tests for WebSocketClient
    - [ ] Connection handling tests
@@ -54,7 +54,7 @@ This document tracks incomplete features and improvements for the ResolveSpec pr
 
 ### ResolveSpec Python Client Implementation & Testing
 
-See [`resolvespec-python/todo.md`](./resolvespec-python/todo.md) for detailed Python client implementation tasks.
+See [`clients/resolvespec-python/todo.md`](./clients/resolvespec-python/todo.md) for detailed Python client implementation tasks.
 
 ### Core Functionality
 

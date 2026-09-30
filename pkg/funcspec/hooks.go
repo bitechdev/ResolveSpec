@@ -32,6 +32,12 @@ const (
 	// BeforeOp fires immediately before every SQL operation (query, query list, SQL exec).
 	// It fires at each individual SQL-operation hook point, so it runs once per statement executed.
 	BeforeOp HookType = "before_op"
+
+	// OnTxBegin fires once, first, inside every transaction the handler opens
+	// (the main transaction and the short one that runs BeforeResponse).
+	// hookCtx.Tx is the transaction; use it to stamp transaction-local state such
+	// as RLS settings. An error or abort rolls the transaction back.
+	OnTxBegin HookType = common.TxHookName
 )
 
 // HookContext contains all the data available to a hook
@@ -74,6 +80,9 @@ type HookContext struct {
 	AbortMessage string // Message to return if aborted
 	AbortCode    int    // HTTP status code if aborted
 }
+
+// SetTx points the context at the transaction in use (common.TxContext).
+func (c *HookContext) SetTx(tx common.Database) { c.Tx = tx }
 
 // HookFunc is the signature for hook functions
 // It receives a HookContext and can modify it or return an error

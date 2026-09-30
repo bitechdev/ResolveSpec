@@ -13,7 +13,7 @@ ResolveSpec is a flexible and powerful REST API specification and implementation
 
 All share the same core architecture and provide dynamic data querying, relationship preloading, and complex filtering.
 
-![1.00](./generated_slogan.webp)
+
 
 ## Table of Contents
 
@@ -43,6 +43,7 @@ All share the same core architecture and provide dynamic data querying, relation
 * **Pagination**: Built-in limit/offset and cursor-based pagination (both ResolveSpec and RestHeadSpec)
 * **Computed Columns**: Define virtual columns for complex calculations
 * **Custom Operators**: Add custom SQL conditions when needed
+* **🆕 One Transaction Per Request**: Every statement and DB-touching hook of a request runs on one transaction; `OnTxBegin` hook stamps transaction-local settings (RLS) first. See [pkg/common/TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)
 * **🆕 Recursive CRUD Handler**: Automatically handle nested object graphs with foreign key resolution and per-record operation control via `_request` field
 
 ### Architecture (v2.0+)
@@ -370,6 +371,14 @@ ResolveSpec is designed for testability with mockable interfaces. For testing ex
 - [RestHeadSpec Testing](pkg/restheadspec/README.md#testing)
 - [WebSocketSpec Testing](pkg/websocketspec/README.md)
 
+### Test Server (dbtrace, real PostgreSQL)
+
+* `make testserver-up` / `make testserver-down`: testserver + PostgreSQL via compose (host networking)
+* `make testserver-smoke`: create, read, update, delete, batch create/delete against the testserver
+* Ports: testserver `8123`, PostgreSQL `8124`
+* `dbtrace` logs per request `tx`, `tx_queries`, `pooled`, `raw`; `pooled=0` is the target
+* Integration tests default to PostgreSQL on `localhost:8124`
+
 ## Continuous Integration
 
 ResolveSpec uses GitHub Actions for automated testing and quality checks. The CI pipeline runs on every push and pull request.
@@ -482,6 +491,19 @@ Execute SQL functions and queries through a simple HTTP API with header-based pa
 
 For complete documentation, see [pkg/funcspec/](pkg/funcspec/).
 
+#### Clients
+
+All clients are under [clients/](clients/README.md); wire behaviour is identical across them.
+
+| Client | Language | Specs | Docs |
+|---|---|---|---|
+| `resolvespec-js` | TypeScript | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-js/README.md) |
+| `resolvespec-python` | Python >= 3.11 | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-python/README.md) |
+| `resolvespec-go` | Go | ResolveSpec, FunctionSpec | [README](clients/resolvespec-go/README.md) |
+| `resolvespec-rs` | Rust | ResolveSpec, FunctionSpec | [README](clients/resolvespec-rs/README.md) |
+| `resolvespec-cs` | C# (.NET 8) | ResolveSpec, FunctionSpec | [README](clients/resolvespec-cs/README.md) |
+| `resolvespec-dart` | Dart / Flutter | ResolveSpec, FunctionSpec | [README](clients/resolvespec-dart/README.md) |
+
 #### ResolveSpec JS - TypeScript Client Library
 
 TypeScript/JavaScript client library supporting all three REST and WebSocket protocols.
@@ -491,7 +513,7 @@ TypeScript/JavaScript client library supporting all three REST and WebSocket pro
 - Header-based REST client (`HeaderSpecClient`)
 - WebSocket client (`WebSocketClient`) with CRUD, subscriptions, heartbeat, reconnect
 
-For complete documentation, see [resolvespec-js/README.md](resolvespec-js/README.md).
+For complete documentation, see [clients/resolvespec-js/README.md](clients/resolvespec-js/README.md).
 
 ### Real-Time Communication
 
@@ -660,6 +682,23 @@ Configuration management with support for multiple formats and environments.
 
 For documentation, see [pkg/config/README.md](pkg/config/README.md).
 
+#### DB Trace
+
+Per-request DB call counting (`tx`, `tx_queries`, `pooled`, `raw`) and pool logging. Off by default.
+
+For documentation, see [pkg/dbtrace/README.md](pkg/dbtrace/README.md).
+
+### Core Libraries
+
+| Package | Purpose |
+|---|---|
+| [`pkg/common`](pkg/common/) | Shared interfaces (database, request/response adapters), validation, recursive CRUD, request transactions ([TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)) |
+| [`pkg/modelregistry`](pkg/modelregistry/) | Model registration by schema/entity and per-model access rules |
+| [`pkg/reflection`](pkg/reflection/) | Model/struct reflection helpers (primary keys, columns, relations) |
+| [`pkg/spectypes`](pkg/spectypes/) | SQL-aware types (nullable, JSONB, PostGIS, vector) |
+| [`pkg/logger`](pkg/logger/) | Logging used by all packages |
+| [`pkg/testmodels`](pkg/testmodels/) | Shared test models and data for tests and the testserver |
+
 ## Security Considerations
 
 * Implement proper authentication and authorization
@@ -682,6 +721,24 @@ For documentation, see [pkg/config/README.md](pkg/config/README.md).
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## What's New
+
+### Unreleased
+
+**Single transaction per request**:
+
+* **One tx per request**: hooks get the transaction in `hookCtx.Tx`, never the pool (`BeforeHandle` runs before any tx and must not touch the DB)
+* **`OnTxBegin` hook**: all specs (mqttspec re-exports websocketspec's); fires once, first, in every tx; error or abort rolls back with no detail to the client
+* **Second short tx**: create/update re-fetch, `BeforeScan` and post-commit hooks (`AfterCreate`, `AfterUpdate`, restheadspec `AfterRead`, funcspec `BeforeResponse`) run on a new tx after the first commits
+* **Delete**: single and batch delete, hooks included, in one tx
+* **websocketspec / mqttspec**: one tx per message; begin/commit failures answer `transaction_error`
+* **resolvemcp**: read, create, update, delete transactional
+* **RLS stamping**: `SecurityList.SetTxSettings(fn)`; `RegisterSecurityHooks` of every spec stamps `set_config(name, value, true)` on `OnTxBegin`; fails closed
+* **New**: `common.RunRequestTx`, `common.TxContext`, `common.TxHookName`
+* **Behavior changes**: `AfterDelete` failure now rolls the delete back; funcspec begin/commit failure answers 500 `transaction_error`
+
+**Clients**: Go, Rust, C# and Dart clients for ResolveSpec and FunctionSpec under `clients/`.
+
+**Test server**: compose uses host networking; ports `8123` (testserver) and `8124` (PostgreSQL), previously `8080` and `5434`.
 
 ### v3.2 (Latest - March 2026)
 
@@ -802,3 +859,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 * Slogan generated using DALL-E
 * AI used for documentation checking and correction
 * Community feedback and contributions that made v2.0 and v2.1 possible
+
+
+![1.00](./generated_slogan.webp)

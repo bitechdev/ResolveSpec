@@ -313,7 +313,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		errMsg     string
 	)
 
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	txErr := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "read", options, w), func(tx common.Database) error {
 		hookCtx := &HookContext{
 			Context:   ctx,
 			Handler:   h,
@@ -666,6 +666,17 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			result = reflect.ValueOf(modelPtr).Elem().Interface()
 		}
 
+		// AfterRead runs inside the read transaction (e.g. column-level security
+		// masking). Result is the scanned slice for single and multi-record reads
+		// alike; hooks mutate the records in place, which `result` shares.
+		hookCtx.Result = modelPtr
+		hookCtx.Error = nil
+		if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
+			logger.Error("AfterRead hook failed: %v", err)
+			statusCode, errCode, errMsg = http.StatusInternalServerError, "hook_error", "Hook execution failed"
+			return err
+		}
+
 		logger.Info("Successfully retrieved records")
 		return nil
 	})
@@ -734,7 +745,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if h.shouldUseNestedProcessor(v, model) {
 			logger.Info("Using nested CUD processor for create operation")
 			var nestedResult *common.ProcessResult
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				hookCtx := &HookContext{
 					Context:   ctx,
 					Handler:   h,
@@ -762,7 +773,17 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 				var procErr error
 				nestedResult, procErr = h.nestedProcessor.ProcessNestedCUD(ctx, "insert", v, model, make(map[string]interface{}), tableName)
-				return procErr
+				if procErr != nil {
+					return procErr
+				}
+				res, err := h.afterCreate(hookCtx, nestedResult.Data)
+				if err != nil {
+					return err
+				}
+				if m, ok := res.(map[string]interface{}); ok {
+					nestedResult.Data = m
+				}
+				return nil
 			})
 			if err != nil {
 				logger.Error("Error in nested create: %v", err)
@@ -782,7 +803,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		// Standard processing without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		var responseData interface{} = v
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			hookCtx := &HookContext{
 				Context:   ctx,
 				Handler:   h,
@@ -814,6 +835,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				logger.Info("Successfully created record, rows affected: %d", result.RowsAffected())
+				res, err := h.afterCreate(hookCtx, responseData)
+				if err != nil {
+					return err
+				}
+				responseData = res
 				return nil
 			}
 
@@ -830,6 +856,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			} else {
 				logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, insertedID, fetchErr)
 			}
+			res, err := h.afterCreate(hookCtx, responseData)
+			if err != nil {
+				return err
+			}
+			responseData = res
 			return nil
 		})
 		if err != nil {
@@ -857,7 +888,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch create with nested data")
 			results := make([]map[string]interface{}, 0, len(v))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -889,6 +920,13 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if err != nil {
 						return fmt.Errorf("failed to process item: %w", err)
 					}
+					res, err := h.afterCreate(hookCtx, result.Data)
+					if err != nil {
+						return err
+					}
+					if m, ok := res.(map[string]interface{}); ok {
+						result.Data = m
+					}
 					results = append(results, result.Data)
 				}
 				return nil
@@ -912,7 +950,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
 		responseItems := make([]interface{}, 0, len(v))
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			for _, item := range v {
 				hookCtx := &HookContext{
 					Context:   ctx,
@@ -941,7 +979,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					responseItems = append(responseItems, item)
+					res, err := h.afterCreate(hookCtx, item)
+					if err != nil {
+						return err
+					}
+					responseItems = append(responseItems, res)
 					continue
 				}
 				var returnedID interface{}
@@ -949,14 +991,20 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				fetchedRecord := reflect.New(modelElemType).Interface()
+				var created interface{}
 				if fetchErr := tx.NewSelect().Model(fetchedRecord).
 					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
 					ScanModel(ctx); fetchErr == nil {
-					responseItems = append(responseItems, mergeWithInput(fetchedRecord, item))
+					created = mergeWithInput(fetchedRecord, item)
 				} else {
 					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
-					responseItems = append(responseItems, item)
+					created = item
 				}
+				res, err := h.afterCreate(hookCtx, created)
+				if err != nil {
+					return err
+				}
+				responseItems = append(responseItems, res)
 			}
 			return nil
 		})
@@ -989,7 +1037,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch create with nested data ([]interface{})")
 			results := make([]interface{}, 0, len(v))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1022,6 +1070,13 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 						if err != nil {
 							return fmt.Errorf("failed to process item: %w", err)
 						}
+						res, err := h.afterCreate(hookCtx, result.Data)
+						if err != nil {
+							return err
+						}
+						if m, ok := res.(map[string]interface{}); ok {
+							result.Data = m
+						}
 						results = append(results, result.Data)
 					}
 				}
@@ -1046,7 +1101,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		pkName := reflection.GetPrimaryKeyName(model)
 		modelElemType := reflection.GetPointerElement(reflect.TypeOf(model))
 		responseItems := make([]interface{}, 0, len(v))
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "create", options, w), func(tx common.Database) error {
 			for _, item := range v {
 				itemMap, ok := item.(map[string]interface{})
 				if !ok {
@@ -1080,7 +1135,11 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					if _, err := txQuery.Exec(ctx); err != nil {
 						return err
 					}
-					responseItems = append(responseItems, itemMap)
+					res, err := h.afterCreate(hookCtx, itemMap)
+					if err != nil {
+						return err
+					}
+					responseItems = append(responseItems, res)
 					continue
 				}
 				var returnedID interface{}
@@ -1088,14 +1147,20 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					return err
 				}
 				fetchedRecord := reflect.New(modelElemType).Interface()
+				var created interface{}
 				if fetchErr := tx.NewSelect().Model(fetchedRecord).
 					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), returnedID).
 					ScanModel(ctx); fetchErr == nil {
-					responseItems = append(responseItems, mergeWithInput(fetchedRecord, itemMap))
+					created = mergeWithInput(fetchedRecord, itemMap)
 				} else {
 					logger.Warn("Failed to re-fetch created record with %s=%v: %v", pkName, returnedID, fetchErr)
-					responseItems = append(responseItems, itemMap)
+					created = itemMap
 				}
+				res, err := h.afterCreate(hookCtx, created)
+				if err != nil {
+					return err
+				}
+				responseItems = append(responseItems, res)
 			}
 			return nil
 		})
@@ -1180,7 +1245,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		}
 
 		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			// Execute BeforeUpdate hooks inside transaction, before any queries run.
 			// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
 			// they must run before the existence-check select so that select is
@@ -1292,22 +1357,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch the updated record after the transaction commits to capture any trigger changes
+		// Fetch the updated record in a second short transaction after the first
+		// commit to capture any trigger changes (OnTxBegin re-applies RLS state).
 		updatedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-		fetchQuery := h.db.NewSelect().Model(updatedRecord).Column(reflection.GetSQLModelColumns(model)...)
-		if urlID != "" {
-			fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
-		} else if reqID != nil {
-			switch id := reqID.(type) {
-			case string:
-				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-			case []string:
-				if len(id) > 0 {
-					fetchQuery = fetchQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			fetchQuery := tx.NewSelect().Model(updatedRecord).Column(reflection.GetSQLModelColumns(model)...)
+			if urlID != "" {
+				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
+			} else if reqID != nil {
+				switch id := reqID.(type) {
+				case string:
+					fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+				case []string:
+					if len(id) > 0 {
+						fetchQuery = fetchQuery.Where(fmt.Sprintf("%s IN (?)", common.QuoteIdent(pkName)), id)
+					}
 				}
 			}
-		}
-		if err := fetchQuery.ScanModel(ctx); err != nil {
+			return fetchQuery.ScanModel(ctx)
+		}); err != nil {
 			logger.Error("Failed to fetch updated record: %v", err)
 			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
 			return
@@ -1334,7 +1402,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch update with nested data")
 			results := make([]map[string]interface{}, 0, len(updates))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1368,7 +1436,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 		// Standard batch update without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			for _, item := range updates {
 				if itemID, ok := item["id"]; ok {
 					itemIDStr := fmt.Sprintf("%v", itemID)
@@ -1441,19 +1509,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch updated records after the transaction commits to capture any trigger changes
+		// Fetch updated records in a second short transaction after the first commit
+		// to capture any trigger changes (OnTxBegin re-applies RLS state).
 		fetchedUpdates := make([]interface{}, 0, len(updates))
-		for _, item := range updates {
-			if itemID, ok := item["id"]; ok && itemID != nil {
-				fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-				fetchQuery := h.db.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
-				if err := fetchQuery.ScanModel(ctx); err != nil {
-					logger.Error("Failed to fetch updated record with ID %v: %v", itemID, err)
-					h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-					return
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			for _, item := range updates {
+				if itemID, ok := item["id"]; ok && itemID != nil {
+					fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+					fetchQuery := tx.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+					if err := fetchQuery.ScanModel(ctx); err != nil {
+						return fmt.Errorf("fetch updated record with ID %v: %w", itemID, err)
+					}
+					fetchedUpdates = append(fetchedUpdates, fetchedRecord)
 				}
-				fetchedUpdates = append(fetchedUpdates, fetchedRecord)
 			}
+			return nil
+		}); err != nil {
+			logger.Error("Failed to fetch updated records: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
+			return
 		}
 
 		logger.Info("Successfully updated %d records", len(fetchedUpdates))
@@ -1479,7 +1553,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		if hasNestedData {
 			logger.Info("Using nested CUD processor for batch update with nested data ([]interface{})")
 			results := make([]interface{}, 0, len(updates))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 				// Temporarily swap the database to use transaction
 				originalDB := h.nestedProcessor
 				h.nestedProcessor = common.NewNestedCUDProcessor(tx, h.registry, h)
@@ -1516,7 +1590,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		// Standard batch update without nested relations
 		pkName := reflection.GetPrimaryKeyName(model)
 		list := make([]interface{}, 0)
-		err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			for _, item := range updates {
 				if itemMap, ok := item.(map[string]interface{}); ok {
 					if itemID, ok := itemMap["id"]; ok {
@@ -1593,21 +1667,27 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
-		// Fetch updated records after the transaction commits to capture any trigger changes
+		// Fetch updated records in a second short transaction after the first commit
+		// to capture any trigger changes (OnTxBegin re-applies RLS state).
 		fetchedList := make([]interface{}, 0, len(list))
-		for _, item := range list {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemID, ok := itemMap["id"]; ok && itemID != nil {
-					fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
-					fetchQuery := h.db.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
-					if err := fetchQuery.ScanModel(ctx); err != nil {
-						logger.Error("Failed to fetch updated record with ID %v: %v", itemID, err)
-						h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-						return
+		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
+			for _, item := range list {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if itemID, ok := itemMap["id"]; ok && itemID != nil {
+						fetchedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
+						fetchQuery := tx.NewSelect().Model(fetchedRecord).Column(reflection.GetSQLModelColumns(model)...).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
+						if err := fetchQuery.ScanModel(ctx); err != nil {
+							return fmt.Errorf("fetch updated record with ID %v: %w", itemID, err)
+						}
+						fetchedList = append(fetchedList, fetchedRecord)
 					}
-					fetchedList = append(fetchedList, fetchedRecord)
 				}
 			}
+			return nil
+		}); err != nil {
+			logger.Error("Failed to fetch updated records: %v", err)
+			h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
+			return
 		}
 
 		logger.Info("Successfully updated %d records", len(fetchedList))
@@ -1640,7 +1720,6 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	logger.Info("Deleting records from %s.%s", schema, entity)
 
-	// Execute BeforeDelete hooks (covers model-rule checks before any deletion)
 	hookCtx := &HookContext{
 		Context:   ctx,
 		Handler:   h,
@@ -1653,118 +1732,131 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Writer:    w,
 		Tx:        h.db,
 	}
+
+	// Hook, lookup and delete(s) share one transaction so transaction-local
+	// state set by hooks (e.g. RLS settings) applies to every statement.
+	var payload interface{}
+	var failure *deleteFailure
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
+		payload, failure = h.executeDelete(ctx, tx, hookCtx, schema, tableName, model, id, data)
+		if failure != nil {
+			return failure
+		}
+		// AfterDelete runs inside the delete transaction: a failing hook rolls the
+		// delete back. Result is the deleted record, or the batch summary.
+		hookCtx.Result = payload
+		if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
+			logger.Error("AfterDelete hook failed: %v", err)
+			failure = &deleteFailure{http.StatusInternalServerError, "hook_error", "Hook execution failed", err}
+			return failure
+		}
+		payload = hookCtx.Result
+		return nil
+	})
+	if failure != nil {
+		h.sendError(w, failure.status, failure.code, failure.message, failure.err)
+		return
+	}
+	if txErr != nil {
+		logger.Error("Error in delete transaction: %v", txErr)
+		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting records", txErr)
+		return
+	}
+
+	// Invalidate cache for this table after commit
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
+	h.sendResponse(w, payload, nil)
+}
+
+// deleteFailure describes an error response for a delete; returning it from the
+// transaction closure rolls the transaction back.
+type deleteFailure struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+func (f *deleteFailure) Error() string { return f.message }
+
+// executeDelete runs the BeforeDelete hook and the delete(s) on tx and returns
+// the response payload.
+func (h *Handler) executeDelete(ctx context.Context, tx common.Database, hookCtx *HookContext, schema, tableName string, model interface{}, id string, data interface{}) (interface{}, *deleteFailure) {
+	// Execute BeforeDelete hooks (covers model-rule checks before any deletion)
 	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)
-		h.sendError(w, http.StatusForbidden, "delete_forbidden", "Delete operation not allowed", err)
-		return
+		return nil, &deleteFailure{http.StatusForbidden, "delete_forbidden", "Delete operation not allowed", err}
+	}
+
+	pkName := reflection.GetPrimaryKeyName(model)
+	deleteByID := func(itemID interface{}) (int, error) {
+		result, err := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID).Exec(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("failed to delete record %v: %w", itemID, err)
+		}
+		return int(result.RowsAffected()), nil
+	}
+	batchFailure := func(err error) *deleteFailure {
+		logger.Error("Error in batch delete: %v", err)
+		return &deleteFailure{http.StatusInternalServerError, "delete_error", "Error deleting records", err}
 	}
 
 	// Handle batch delete from request data
 	if data != nil {
 		switch v := data.(type) {
 		case []string:
-			// Array of IDs as strings
 			logger.Info("Batch delete with %d IDs ([]string)", len(v))
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-				for _, itemID := range v {
-
-					query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
-					if _, err := query.Exec(ctx); err != nil {
-						return fmt.Errorf("failed to delete record %s: %w", itemID, err)
-					}
+			for _, itemID := range v {
+				if _, err := deleteByID(itemID); err != nil {
+					return nil, batchFailure(err)
 				}
-				return nil
-			})
-			if err != nil {
-				logger.Error("Error in batch delete: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting records", err)
-				return
 			}
 			logger.Info("Successfully deleted %d records", len(v))
-			// Invalidate cache for this table
-			cacheTags := buildCacheTags(schema, tableName)
-			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-			}
-			h.sendResponse(w, map[string]interface{}{"deleted": len(v)}, nil)
-			return
+			return map[string]interface{}{"deleted": len(v)}, nil
 
 		case []interface{}:
 			// Array of IDs or objects with ID field
 			logger.Info("Batch delete with %d items ([]interface{})", len(v))
 			deletedCount := 0
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-				for _, item := range v {
-					var itemID interface{}
-
-					// Check if item is a string ID or object with id field
-					switch v := item.(type) {
-					case string:
-						itemID = v
-					case map[string]interface{}:
-						itemID = v["id"]
-					default:
-						// Try to use the item directly as ID
-						itemID = item
-					}
-
-					if itemID == nil {
-						continue // Skip items without ID
-					}
-
-					query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
-					result, err := query.Exec(ctx)
-					if err != nil {
-						return fmt.Errorf("failed to delete record %v: %w", itemID, err)
-					}
-					deletedCount += int(result.RowsAffected())
+			for _, item := range v {
+				var itemID interface{}
+				switch iv := item.(type) {
+				case string:
+					itemID = iv
+				case map[string]interface{}:
+					itemID = iv["id"]
+				default:
+					itemID = item
 				}
-				return nil
-			})
-			if err != nil {
-				logger.Error("Error in batch delete: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting records", err)
-				return
+				if itemID == nil {
+					continue // Skip items without ID
+				}
+				n, err := deleteByID(itemID)
+				if err != nil {
+					return nil, batchFailure(err)
+				}
+				deletedCount += n
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
-			// Invalidate cache for this table
-			cacheTags := buildCacheTags(schema, tableName)
-			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-			}
-			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
-			return
+			return map[string]interface{}{"deleted": deletedCount}, nil
 
 		case []map[string]interface{}:
-			// Array of objects with id field
 			logger.Info("Batch delete with %d items ([]map[string]interface{})", len(v))
 			deletedCount := 0
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-				for _, item := range v {
-					if itemID, ok := item["id"]; ok && itemID != nil {
-						query := tx.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(reflection.GetPrimaryKeyName(model))), itemID)
-						result, err := query.Exec(ctx)
-						if err != nil {
-							return fmt.Errorf("failed to delete record %v: %w", itemID, err)
-						}
-						deletedCount += int(result.RowsAffected())
+			for _, item := range v {
+				if itemID, ok := item["id"]; ok && itemID != nil {
+					n, err := deleteByID(itemID)
+					if err != nil {
+						return nil, batchFailure(err)
 					}
+					deletedCount += n
 				}
-				return nil
-			})
-			if err != nil {
-				logger.Error("Error in batch delete: %v", err)
-				h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting records", err)
-				return
 			}
 			logger.Info("Successfully deleted %d records", deletedCount)
-			// Invalidate cache for this table
-			cacheTags := buildCacheTags(schema, tableName)
-			if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-				logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-			}
-			h.sendResponse(w, map[string]interface{}{"deleted": deletedCount}, nil)
-			return
+			return map[string]interface{}{"deleted": deletedCount}, nil
 
 		case map[string]interface{}:
 			// Single object with id field
@@ -1777,12 +1869,8 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	// Single delete with URL ID
 	if id == "" {
 		logger.Error("Delete operation requires an ID")
-		h.sendError(w, http.StatusBadRequest, "missing_id", "Delete operation requires an ID", nil)
-		return
+		return nil, &deleteFailure{http.StatusBadRequest, "missing_id", "Delete operation requires an ID", nil}
 	}
-
-	// Get primary key name
-	pkName := reflection.GetPrimaryKeyName(model)
 
 	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
@@ -1791,42 +1879,28 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	}
 	recordToDelete := reflect.New(modelType).Interface()
 
-	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	selectQuery := tx.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 	if err := selectQuery.ScanModel(ctx); err != nil {
 		if err == sql.ErrNoRows {
 			logger.Warn("Record not found for delete: %s = %s", pkName, id)
-			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
-			return
+			return nil, &deleteFailure{http.StatusNotFound, "not_found", "Record not found", err}
 		}
 		logger.Error("Error fetching record for delete: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
-		return
+		return nil, &deleteFailure{http.StatusInternalServerError, "fetch_error", "Error fetching record", err}
 	}
 
-	query := h.db.NewDelete().Table(tableName).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
-
-	result, err := query.Exec(ctx)
+	n, err := deleteByID(id)
 	if err != nil {
 		logger.Error("Error deleting record: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting record", err)
-		return
+		return nil, &deleteFailure{http.StatusInternalServerError, "delete_error", "Error deleting record", err}
 	}
-
-	// Check if the record was actually deleted
-	if result.RowsAffected() == 0 {
+	if n == 0 {
 		logger.Warn("No rows deleted for ID: %s", id)
-		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
-		return
+		return nil, &deleteFailure{http.StatusNotFound, "not_found", "Record not found or already deleted", nil}
 	}
 
 	logger.Info("Successfully deleted record with ID: %s", id)
-	// Return the deleted record data
-	// Invalidate cache for this table
-	cacheTags := buildCacheTags(schema, tableName)
-	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-	}
-	h.sendResponse(w, recordToDelete, nil)
+	return recordToDelete, nil
 }
 
 // applyFilters applies all filters with proper grouping for OR logic
@@ -2574,4 +2648,37 @@ func mergeWithInput(dbRecord interface{}, input map[string]interface{}) map[stri
 		result[k] = v
 	}
 	return result
+}
+
+// newTxHookContext builds the context OnTxBegin hooks receive for paths that
+// create their per-item hook contexts inside the transaction.
+func (h *Handler) newTxHookContext(ctx context.Context, schema, entity string, model interface{}, operation string, options common.RequestOptions, w common.ResponseWriter) *HookContext {
+	return &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		Model:     model,
+		Operation: operation,
+		Options:   options,
+		Writer:    w,
+	}
+}
+
+// runInTx runs body in a transaction with hookCtx.Tx set to it and OnTxBegin
+// fired first. Every transaction the handler opens goes through here.
+func (h *Handler) runInTx(ctx context.Context, hookCtx *HookContext, body func(tx common.Database) error) error {
+	return common.RunRequestTx(ctx, h.db, hookCtx, func() error {
+		return h.hooks.Execute(OnTxBegin, hookCtx)
+	}, body)
+}
+
+// afterCreate runs the AfterCreate hooks inside the create transaction with the
+// created record as Result and returns the (possibly replaced) result.
+func (h *Handler) afterCreate(hookCtx *HookContext, result interface{}) (interface{}, error) {
+	hookCtx.Result = result
+	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
+		return nil, fmt.Errorf("AfterCreate hook failed: %w", err)
+	}
+	return hookCtx.Result, nil
 }

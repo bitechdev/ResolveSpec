@@ -12,6 +12,12 @@ import (
 // Note: funcspec operates on SQL queries directly, so row-level security is not directly applicable
 // We provide auth enforcement and audit logging for data access tracking
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// OnTxBegin: stamp transaction-local settings (e.g. RLS GUCs) before any SQL.
+	// Looked up per call so SetTxSettings may come after registration.
+	handler.Hooks().Register(OnTxBegin, func(hookCtx *HookContext) error {
+		return security.StampTxSettings(newFuncSpecSecurityContext(hookCtx), securityList, hookCtx.Tx)
+	})
+
 	// Hook 0: BeforeQueryList - Auth check before list query execution
 	handler.Hooks().Register(BeforeQueryList, func(hookCtx *HookContext) error {
 		if hookCtx.UserContext == nil || hookCtx.UserContext.UserID == 0 {

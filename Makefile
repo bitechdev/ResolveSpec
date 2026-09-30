@@ -1,4 +1,7 @@
-.PHONY: test test-unit test-race test-integration docker-up docker-down clean
+# Container compose command: podman if installed, else docker
+COMPOSE ?= $(shell command -v podman >/dev/null 2>&1 && echo "podman compose" || echo "docker compose")
+
+.PHONY: testserver-up testserver-down testserver-smoke test test-unit test-race test-integration docker-up docker-down clean
 
 GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
 
@@ -82,7 +85,7 @@ lintfix: ## Run linter
 # Start PostgreSQL for integration tests
 docker-up:
 	@echo "Starting PostgreSQL container..."
-	@podman compose up -d postgres-test
+	@$(COMPOSE) up -d postgres-test
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
 	@echo "PostgreSQL is ready!"
@@ -90,12 +93,23 @@ docker-up:
 # Stop PostgreSQL container
 docker-down:
 	@echo "Stopping PostgreSQL container..."
-	@podman compose down
+	@$(COMPOSE) down
+
+# Test server + PostgreSQL in containers (dbtrace enabled)
+
+testserver-up:
+	@$(COMPOSE) up -d --build postgres-test testserver
+
+testserver-down:
+	@$(COMPOSE) down
+
+testserver-smoke:
+	@COMPOSE="$(COMPOSE)" scripts/testserver-smoke.sh
 
 # Clean up Docker volumes and test data
 clean:
 	@echo "Cleaning up..."
-	@podman compose down -v
+	@$(COMPOSE) down -v
 	@echo "Cleanup complete!"
 
 # Run integration tests with Docker (full workflow)

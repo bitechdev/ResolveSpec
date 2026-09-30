@@ -67,7 +67,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	// Get connection string from environment or use default
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "host=localhost user=postgres password=postgres dbname=restheadspec_test port=5434 sslmode=disable"
+		dsn = "host=localhost user=postgres password=postgres dbname=restheadspec_test port=8124 sslmode=disable"
 	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{

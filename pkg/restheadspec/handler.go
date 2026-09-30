@@ -460,8 +460,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		errMsg           string
 	)
 
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-		hookCtx.Tx = tx
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 
 		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
@@ -825,6 +824,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 				cacheKeyHash := buildExtendedQueryCacheKey(
 					tableName,
+					id,
 					options.Filters,
 					options.Sort,
 					options.CustomSQLWhere,
@@ -1001,12 +1001,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		logger.Debug("FetchRowNumber: Row number %d set in metadata", *fetchedRowNumber)
 	}
 
-	// Execute AfterRead hooks (runs after the transaction commits, against the pooled db)
-	hookCtx.Tx = h.db
+	// Execute AfterRead hooks in a second short transaction: the read tx has
+	// already committed, and hooks must never get the pooled connection.
 	hookCtx.Result = modelPtr
 	hookCtx.Error = nil
 
-	if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
+	if err := h.runInTx(ctx, hookCtx, func(common.Database) error {
+		return h.hooks.Execute(AfterRead, hookCtx)
+	}); err != nil {
 		logger.Error("AfterRead hook failed: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
 		return
@@ -1322,8 +1324,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 
 	// Process all items in a transaction
 	results := make([]interface{}, 0)
-	txErr := h.db.RunInTransaction(ctx, func(tx common.Database) error {
-		hookCtx.Tx = tx
+	txErr := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
 			statusCode, errCode, errMsg = http.StatusBadRequest, "hook_error", "Hook execution failed"
 			return err
@@ -1461,10 +1462,8 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 		}
 	}
 
-	// Execute AfterCreate hooks (runs after the transaction commits, against the
-	// pooled db — hookCtx.Tx was pointed at the now-closed transaction inside the
-	// RunInTransaction closure above and must not be reused here).
-	hookCtx.Tx = h.db
+	// Execute AfterCreate hooks in a second short transaction (the first has
+	// committed); OnTxBegin re-applies transaction-local state to it.
 	var responseData interface{}
 	if len(mergedResults) == 1 {
 		responseData = mergedResults[0]
@@ -1475,7 +1474,9 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 	}
 	hookCtx.Error = nil
 
-	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
+	if err := h.runInTx(ctx, hookCtx, func(common.Database) error {
+		return h.hooks.Execute(AfterCreate, hookCtx)
+	}); err != nil {
 		logger.Error("AfterCreate hook failed: %v", err)
 		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
 		return
@@ -1538,11 +1539,23 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Variable to store the updated record
 	var updatedRecord interface{}
 
-	// Declare hook context to be used inside and outside transaction
-	var hookCtx *HookContext
+	// Hook context used inside and outside transaction
+	hookCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		TableName: tableName,
+		Model:     model,
+		Operation: "update",
+		Options:   options,
+		ID:        id,
+		Data:      dataMap,
+		Writer:    w,
+	}
 
 	// Process nested relations if present
-	err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+	err := h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		// Create temporary nested processor with transaction
 		txNestedProcessor := common.NewNestedCUDProcessor(tx, h.registry, h)
 
@@ -1550,21 +1563,6 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		// BeforeUpdate hooks may set session-scoped RLS GUCs (via SET LOCAL);
 		// they must run before the existence-check select so that select is
 		// also subject to RLS on this connection/transaction.
-		hookCtx = &HookContext{
-			Context:   ctx,
-			Handler:   h,
-			Schema:    schema,
-			Entity:    entity,
-			TableName: tableName,
-			Tx:        tx,
-			Model:     model,
-			Operation: "update",
-			Options:   options,
-			ID:        id,
-			Data:      dataMap,
-			Writer:    w,
-		}
-
 		if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
 			return fmt.Errorf("BeforeUpdate hook failed: %w", err)
 		}
@@ -1662,43 +1660,54 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Fetch the updated record after the transaction commits to capture any trigger changes
-	fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
-	selectQuery := h.db.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+	// Second short transaction: fetch the updated record after the first commit to
+	// capture any trigger changes, then run AfterUpdate. OnTxBegin re-applies
+	// transaction-local state (e.g. RLS settings) to this transaction.
+	var mergedData interface{}
+	var errCode, errMsg string
+	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {
+		fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
+		selectQuery := tx.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
-	// Execute BeforeScan hooks so row security is re-applied to the post-update
-	// re-fetch, same as it is for the initial read and the update query itself.
-	// Without this, the re-fetch can return a row the caller isn't authorized to see.
-	// The transaction has already committed by this point, so hooks must use the
-	// pooled connection rather than the now-dead tx.
-	hookCtx.Tx = h.db
-	hookCtx.Query = selectQuery
-	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
-		logger.Error("BeforeScan hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-		return
-	}
-	if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
-		selectQuery = modifiedQuery
-	}
+		// Execute BeforeScan hooks so row security is re-applied to the post-update
+		// re-fetch, same as it is for the initial read and the update query itself.
+		// Without this, the re-fetch can return a row the caller isn't authorized to see.
+		hookCtx.Query = selectQuery
+		if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
+			logger.Error("BeforeScan hook failed: %v", err)
+			errCode, errMsg = "hook_error", "Hook execution failed"
+			return err
+		}
+		if modifiedQuery, ok := hookCtx.Query.(common.SelectQuery); ok {
+			selectQuery = modifiedQuery
+		}
 
-	if err := selectQuery.ScanModel(ctx); err != nil {
-		logger.Error("Failed to fetch updated record: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Failed to fetch updated record", err)
-		return
-	}
-	updatedRecord = fetchedRecord
+		if err := selectQuery.ScanModel(ctx); err != nil {
+			logger.Error("Failed to fetch updated record: %v", err)
+			errCode, errMsg = "fetch_error", "Failed to fetch updated record"
+			return err
+		}
+		updatedRecord = fetchedRecord
 
-	// Merge the updated record with the original request data
-	// This preserves extra keys from the request and updates values from the database
-	mergedData := h.mergeRecordWithRequest(updatedRecord, dataMap)
+		// Merge the updated record with the original request data
+		// This preserves extra keys from the request and updates values from the database
+		mergedData = h.mergeRecordWithRequest(updatedRecord, dataMap)
 
-	// Execute AfterUpdate hooks
-	hookCtx.Result = mergedData
-	hookCtx.Error = nil
-	if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
-		logger.Error("AfterUpdate hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
+		// Execute AfterUpdate hooks
+		hookCtx.Result = mergedData
+		hookCtx.Error = nil
+		if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+			logger.Error("AfterUpdate hook failed: %v", err)
+			errCode, errMsg = "hook_error", "Hook execution failed"
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if errCode == "" {
+			errCode, errMsg = "fetch_error", "Failed to fetch updated record"
+		}
+		h.sendError(w, http.StatusInternalServerError, errCode, errMsg, err)
 		return
 	}
 
@@ -1733,7 +1742,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			// Array of IDs as strings
 			logger.Info("Batch delete with %d IDs ([]string)", len(v))
 			deletedCount := 0
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, itemID := range v {
 					// Execute hooks for each item
 					hookCtx := &HookContext{
@@ -1790,7 +1799,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			logger.Info("Batch delete with %d items ([]interface{})", len(v))
 			deletedCount := 0
 			pkName := reflection.GetPrimaryKeyName(model)
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, item := range v {
 					var itemID interface{}
 
@@ -1864,7 +1873,7 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 			logger.Info("Batch delete with %d items ([]map[string]interface{})", len(v))
 			deletedCount := 0
 			pkName := reflection.GetPrimaryKeyName(model)
-			err := h.db.RunInTransaction(ctx, func(tx common.Database) error {
+			err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
 				for _, item := range v {
 					if itemID, ok := item[pkName]; ok && itemID != nil {
 						itemIDStr := fmt.Sprintf("%v", itemID)
@@ -1934,24 +1943,62 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	// Get primary key name
 	pkName := reflection.GetPrimaryKeyName(model)
 
-	// First, fetch the record that will be deleted
 	modelType := reflect.TypeOf(model)
 	modelType = reflection.GetPointerElement(modelType)
 	recordToDelete := reflect.New(modelType).Interface()
 
-	selectQuery := h.db.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
+	// Lookup, hooks and delete share one transaction so transaction-local
+	// state set by hooks (e.g. RLS settings) applies to every statement.
+	var failure *deleteFailure
+	txErr := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, tableName, model, "delete", w), func(tx common.Database) error {
+		failure = h.deleteSingleInTx(ctx, tx, w, schema, entity, tableName, model, pkName, id, recordToDelete)
+		if failure != nil {
+			return failure
+		}
+		return nil
+	})
+	if failure != nil {
+		h.sendError(w, failure.status, failure.code, failure.message, failure.err)
+		return
+	}
+	if txErr != nil {
+		logger.Error("Error in delete transaction: %v", txErr)
+		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting record", txErr)
+		return
+	}
+
+	// Invalidate cache for this table after commit
+	cacheTags := buildCacheTags(schema, tableName)
+	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
+		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
+	}
+	h.sendResponse(w, recordToDelete, nil)
+}
+
+// deleteFailure describes an error response for a delete; returning it from the
+// transaction closure rolls the transaction back.
+type deleteFailure struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+func (f *deleteFailure) Error() string { return f.message }
+
+// deleteSingleInTx fetches the record, runs the delete hooks and deletes it, all on tx.
+func (h *Handler) deleteSingleInTx(ctx context.Context, tx common.Database, w common.ResponseWriter, schema, entity, tableName string, model interface{}, pkName, id string, recordToDelete interface{}) *deleteFailure {
+	// First, fetch the record that will be deleted
+	selectQuery := tx.NewSelect().Model(recordToDelete).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 	if err := selectQuery.ScanModel(ctx); err != nil {
 		if err == sql.ErrNoRows {
 			logger.Warn("Record not found for delete: %s = %s", pkName, id)
-			h.sendError(w, http.StatusNotFound, "not_found", "Record not found", err)
-			return
+			return &deleteFailure{http.StatusNotFound, "not_found", "Record not found", err}
 		}
 		logger.Error("Error fetching record for delete: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "fetch_error", "Error fetching record", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "fetch_error", "Error fetching record", err}
 	}
 
 	// Execute BeforeDelete hooks with the record data
@@ -1965,25 +2012,23 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 		Operation: "delete",
 		ID:        id,
 		Writer:    w,
-		Tx:        h.db,
+		Tx:        tx,
 		Data:      recordToDelete,
 	}
 
 	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
 		logger.Error("BeforeDelete hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusBadRequest, "hook_error", "Hook execution failed", err}
 	}
 
-	query := h.db.NewDelete().Table(tableName)
+	query := tx.NewDelete().Table(tableName)
 	query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 
 	// Execute BeforeScan hooks - pass query chain so hooks can modify it
 	hookCtx.Query = query
 	if err := h.hooks.ExecuteBeforeOp(BeforeScan, hookCtx); err != nil {
 		logger.Error("BeforeScan hook failed: %v", err)
-		h.sendError(w, http.StatusBadRequest, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusBadRequest, "hook_error", "Hook execution failed", err}
 	}
 
 	// Use potentially modified query from hook context
@@ -1994,15 +2039,13 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 	result, err := query.Exec(ctx)
 	if err != nil {
 		logger.Error("Error deleting record: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "delete_error", "Error deleting record", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "delete_error", "Error deleting record", err}
 	}
 
 	// Check if the record was actually deleted
 	if result.RowsAffected() == 0 {
 		logger.Warn("No rows deleted for ID: %s", id)
-		h.sendError(w, http.StatusNotFound, "not_found", "Record not found or already deleted", nil)
-		return
+		return &deleteFailure{http.StatusNotFound, "not_found", "Record not found or already deleted", nil}
 	}
 
 	// Execute AfterDelete hooks with the deleted record data
@@ -2011,17 +2054,9 @@ func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id 
 
 	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
 		logger.Error("AfterDelete hook failed: %v", err)
-		h.sendError(w, http.StatusInternalServerError, "hook_error", "Hook execution failed", err)
-		return
+		return &deleteFailure{http.StatusInternalServerError, "hook_error", "Hook execution failed", err}
 	}
-
-	// Return the deleted record data
-	// Invalidate cache for this table
-	cacheTags := buildCacheTags(schema, tableName)
-	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
-		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
-	}
-	h.sendResponse(w, recordToDelete, nil)
+	return nil
 }
 
 // mergeRecordWithRequest merges a database record with the original request data
@@ -3505,4 +3540,27 @@ func (h *Handler) HandleOpenAPI(w common.ResponseWriter, r common.Request) {
 // This allows avoiding circular dependencies
 func (h *Handler) SetOpenAPIGenerator(generator func() (string, error)) {
 	h.openAPIGenerator = generator
+}
+
+// newTxHookContext builds the context OnTxBegin hooks receive for paths that
+// create their per-item hook contexts inside the transaction.
+func (h *Handler) newTxHookContext(ctx context.Context, schema, entity, tableName string, model interface{}, operation string, w common.ResponseWriter) *HookContext {
+	return &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Schema:    schema,
+		Entity:    entity,
+		TableName: tableName,
+		Model:     model,
+		Operation: operation,
+		Writer:    w,
+	}
+}
+
+// runInTx runs body in a transaction with hookCtx.Tx set to it and OnTxBegin
+// fired first. Every transaction the handler opens goes through here.
+func (h *Handler) runInTx(ctx context.Context, hookCtx *HookContext, body func(tx common.Database) error) error {
+	return common.RunRequestTx(ctx, h.db, hookCtx, func() error {
+		return h.hooks.Execute(OnTxBegin, hookCtx)
+	}, body)
 }

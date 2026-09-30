@@ -64,6 +64,13 @@ const (
 	// Unlike BeforeHandle, which fires once before operation dispatch, BeforeOp fires at each
 	// individual SQL-operation hook point, so it runs once per statement executed.
 	BeforeOp HookType = "before_op"
+
+	// OnTxBegin fires once, first, inside every transaction the handler opens for a
+	// read/create/update/delete message (including the second short transaction for
+	// post-commit work). hookCtx.Tx is the transaction; use it to stamp
+	// transaction-local state such as RLS settings. An error or abort rolls the
+	// transaction back.
+	OnTxBegin HookType = common.TxHookName
 )
 
 // HookContext contains context information for hook execution
@@ -127,6 +134,9 @@ type HookContext struct {
 	// Metadata is additional context data
 	Metadata map[string]interface{}
 }
+
+// SetTx points the context at the transaction in use (common.TxContext).
+func (c *HookContext) SetTx(tx common.Database) { c.Tx = tx }
 
 // HookFunc is a function that processes a hook
 type HookFunc func(*HookContext) error

@@ -8,7 +8,7 @@ import (
 
 // Department represents a company department
 type Department struct {
-	ID          string    `json:"id" gorm:"primaryKey;type:string"`
+	ID          int32     `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name        string    `json:"name"`
 	Code        string    `json:"code" gorm:"uniqueIndex"`
 	Description string    `json:"description"`
@@ -26,13 +26,13 @@ func (Department) TableName() string {
 
 // Employee represents a company employee
 type Employee struct {
-	ID           string    `json:"id" gorm:"primaryKey;type:string"`
+	ID           int32     `json:"id" gorm:"primaryKey;autoIncrement"`
 	FirstName    string    `json:"first_name"`
 	LastName     string    `json:"last_name"`
 	Email        string    `json:"email" gorm:"uniqueIndex"`
 	Title        string    `json:"title"`
-	DepartmentID string    `json:"department_id" gorm:"type:string"`
-	ManagerID    *string   `json:"manager_id" gorm:"type:string"`
+	DepartmentID int32     `json:"department_id"`
+	ManagerID    *int32    `json:"manager_id"`
 	HireDate     time.Time `json:"hire_date"`
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -52,7 +52,7 @@ func (Employee) TableName() string {
 
 // Project represents a company project
 type Project struct {
-	ID          string    `json:"id" gorm:"primaryKey;type:string"`
+	ID          int32     `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name        string    `json:"name"`
 	Code        string    `json:"code" gorm:"uniqueIndex"`
 	Description string    `json:"description"`
@@ -76,9 +76,9 @@ func (Project) TableName() string {
 
 // ProjectTask represents a task within a project
 type ProjectTask struct {
-	ID          string    `json:"id" gorm:"primaryKey;type:string"`
-	ProjectID   string    `json:"project_id" gorm:"type:string"`
-	AssigneeID  string    `json:"assignee_id" gorm:"type:string"`
+	ID          int32     `json:"id" gorm:"primaryKey;autoIncrement"`
+	ProjectID   int32     `json:"project_id"`
+	AssigneeID  int32     `json:"assignee_id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	Status      string    `json:"status"`
@@ -99,14 +99,14 @@ func (ProjectTask) TableName() string {
 
 // Document represents any document in the system
 type Document struct {
-	ID          string    `json:"id" gorm:"primaryKey;type:string"`
+	ID          int32     `json:"id" gorm:"primaryKey;autoIncrement"`
 	Name        string    `json:"name"`
 	Type        string    `json:"type"`
 	ContentType string    `json:"content_type"`
 	Size        int64     `json:"size"`
 	Path        string    `json:"path"`
-	OwnerID     string    `json:"owner_id" gorm:"type:string"`
-	ProjectID   *string   `json:"project_id" gorm:"type:string"`
+	OwnerID     int32     `json:"owner_id"`
+	ProjectID   *int32    `json:"project_id"`
 	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -122,9 +122,9 @@ func (Document) TableName() string {
 
 // Comment represents a comment on a task
 type Comment struct {
-	ID        string    `json:"id" gorm:"primaryKey;type:string"`
-	TaskID    string    `json:"task_id" gorm:"type:string"`
-	AuthorID  string    `json:"author_id" gorm:"type:string"`
+	ID        int32     `json:"id" gorm:"primaryKey;autoIncrement"`
+	TaskID    int32     `json:"task_id"`
+	AuthorID  int32     `json:"author_id"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

@@ -168,15 +168,14 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 
 	// Generate unique IDs for this test run
 	timestamp := time.Now().Unix()
-	deptID := fmt.Sprintf("dept_rs_%d", timestamp)
-	empID := fmt.Sprintf("emp_rs_%d", timestamp)
+	// IDs are assigned by the database (serial) and captured on create
+	var deptID, empID int64
 
 	// Test CREATE operation
 	t.Run("Create_Department", func(t *testing.T) {
 		payload := map[string]interface{}{
 			"operation": "create",
 			"data": map[string]interface{}{
-				"id":          deptID,
 				"name":        "Engineering Department",
 				"code":        fmt.Sprintf("ENG_%d", timestamp),
 				"description": "Software Engineering",
@@ -188,15 +187,15 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
+		deptID = createdID(result)
 		assert.True(t, result["success"].(bool), "Create department should succeed")
-		logger.Info("Department created successfully: %s", deptID)
+		logger.Info("Department created successfully: %d", deptID)
 	})
 
 	t.Run("Create_Employee", func(t *testing.T) {
 		payload := map[string]interface{}{
 			"operation": "create",
 			"data": map[string]interface{}{
-				"id":            empID,
 				"first_name":    "John",
 				"last_name":     "Doe",
 				"email":         fmt.Sprintf("john.doe.rs.%d@example.com", timestamp),
@@ -212,8 +211,9 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
+		empID = createdID(result)
 		assert.True(t, result["success"].(bool), "Create employee should succeed")
-		logger.Info("Employee created successfully: %s", empID)
+		logger.Info("Employee created successfully: %d", empID)
 	})
 
 	// Test READ operation
@@ -222,7 +222,7 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 			"operation": "read",
 		}
 
-		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%s", deptID), payload)
+		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%d", deptID), payload)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -230,9 +230,9 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 		assert.True(t, result["success"].(bool), "Read department should succeed")
 
 		data := result["data"].(map[string]interface{})
-		assert.Equal(t, deptID, data["id"])
+		assert.EqualValues(t, deptID, data["id"])
 		assert.Equal(t, "Engineering Department", data["name"])
-		logger.Info("Department read successfully: %s", deptID)
+		logger.Info("Department read successfully: %d", deptID)
 	})
 
 	t.Run("Read_Employees_With_Filters", func(t *testing.T) {
@@ -270,17 +270,17 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 			},
 		}
 
-		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%s", deptID), payload)
+		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%d", deptID), payload)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
 		assert.True(t, result["success"].(bool), "Update department should succeed")
-		logger.Info("Department updated successfully: %s", deptID)
+		logger.Info("Department updated successfully: %d", deptID)
 
 		// Verify update
 		readPayload := map[string]interface{}{"operation": "read"}
-		resp = makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%s", deptID), readPayload)
+		resp = makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%d", deptID), readPayload)
 		json.NewDecoder(resp.Body).Decode(&result)
 		data := result["data"].(map[string]interface{})
 		assert.Equal(t, "Updated Software Engineering Department", data["description"])
@@ -294,13 +294,13 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 			},
 		}
 
-		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%s", empID), payload)
+		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%d", empID), payload)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
 		assert.True(t, result["success"].(bool), "Update employee should succeed")
-		logger.Info("Employee updated successfully: %s", empID)
+		logger.Info("Employee updated successfully: %d", empID)
 	})
 
 	// Test DELETE operation
@@ -309,17 +309,17 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 			"operation": "delete",
 		}
 
-		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%s", empID), payload)
+		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%d", empID), payload)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
 		assert.True(t, result["success"].(bool), "Delete employee should succeed")
-		logger.Info("Employee deleted successfully: %s", empID)
+		logger.Info("Employee deleted successfully: %d", empID)
 
 		// Verify deletion - after delete, reading should return empty/zero-value record or error
 		readPayload := map[string]interface{}{"operation": "read"}
-		resp = makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%s", empID), readPayload)
+		resp = makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/employees/%d", empID), readPayload)
 		json.NewDecoder(resp.Body).Decode(&result)
 		// After deletion, the record should either not exist or have empty/zero ID
 		if result["success"] != nil && result["success"].(bool) {
@@ -337,13 +337,13 @@ func testResolveSpecCRUD(t *testing.T, serverURL string) {
 			"operation": "delete",
 		}
 
-		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%s", deptID), payload)
+		resp := makeResolveSpecRequest(t, serverURL, fmt.Sprintf("/resolvespec/departments/%d", deptID), payload)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
 		assert.True(t, result["success"].(bool), "Delete department should succeed")
-		logger.Info("Department deleted successfully: %s", deptID)
+		logger.Info("Department deleted successfully: %d", deptID)
 	})
 
 	logger.Info("ResolveSpec API CRUD tests completed")
@@ -355,13 +355,12 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 
 	// Generate unique IDs for this test run
 	timestamp := time.Now().Unix()
-	deptID := fmt.Sprintf("dept_rhs_%d", timestamp)
-	empID := fmt.Sprintf("emp_rhs_%d", timestamp)
+	// IDs are assigned by the database (serial) and captured on create
+	var deptID, empID int64
 
 	// Test CREATE operation (POST)
 	t.Run("Create_Department", func(t *testing.T) {
 		data := map[string]interface{}{
-			"id":          deptID,
 			"name":        "Marketing Department",
 			"code":        fmt.Sprintf("MKT_%d", timestamp),
 			"description": "Marketing and Communications",
@@ -372,20 +371,20 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
+		deptID = createdID(result)
 		// Check if response has "success" field (wrapped format) or direct data (unwrapped format)
 		if success, ok := result["success"]; ok && success != nil {
 			assert.True(t, success.(bool), "Create department should succeed")
 		} else {
 			// Unwrapped format - verify we got the created data back
 			assert.NotEmpty(t, result, "Create department should return data")
-			assert.Equal(t, deptID, result["id"], "Created department should have correct ID")
+			assert.EqualValues(t, deptID, result["id"], "Created department should have correct ID")
 		}
-		logger.Info("Department created successfully: %s", deptID)
+		logger.Info("Department created successfully: %d", deptID)
 	})
 
 	t.Run("Create_Employee", func(t *testing.T) {
 		data := map[string]interface{}{
-			"id":            empID,
 			"first_name":    "Jane",
 			"last_name":     "Smith",
 			"email":         fmt.Sprintf("jane.smith.rhs.%d@example.com", timestamp),
@@ -400,20 +399,21 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 
 		var result map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&result)
+		empID = createdID(result)
 		// Check if response has "success" field (wrapped format) or direct data (unwrapped format)
 		if success, ok := result["success"]; ok && success != nil {
 			assert.True(t, success.(bool), "Create employee should succeed")
 		} else {
 			// Unwrapped format - verify we got the created data back
 			assert.NotEmpty(t, result, "Create employee should return data")
-			assert.Equal(t, empID, result["id"], "Created employee should have correct ID")
+			assert.EqualValues(t, empID, result["id"], "Created employee should have correct ID")
 		}
-		logger.Info("Employee created successfully: %s", empID)
+		logger.Info("Employee created successfully: %d", empID)
 	})
 
 	// Test READ operation (GET)
 	t.Run("Read_Department", func(t *testing.T) {
-		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%s", deptID), "GET", nil, nil)
+		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%d", deptID), "GET", nil, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		// RestHeadSpec may return data directly as array/object or wrapped in response object
@@ -424,7 +424,7 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 		var dataArray []interface{}
 		if err := json.Unmarshal(body, &dataArray); err == nil {
 			assert.GreaterOrEqual(t, len(dataArray), 1, "Should find department")
-			logger.Info("Department read successfully (simple format - array): %s", deptID)
+			logger.Info("Department read successfully (simple format - array): %d", deptID)
 			return
 		}
 
@@ -435,7 +435,7 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			if _, hasSuccess := singleObj["success"]; !hasSuccess {
 				// This is a direct data object (simple format, single record)
 				assert.NotEmpty(t, singleObj, "Should find department")
-				logger.Info("Department read successfully (simple format - single object): %s", deptID)
+				logger.Info("Department read successfully (simple format - single object): %d", deptID)
 				return
 			}
 
@@ -444,13 +444,13 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 				// Check if data is an array
 				if data, ok := singleObj["data"].([]interface{}); ok {
 					assert.GreaterOrEqual(t, len(data), 1, "Should find department")
-					logger.Info("Department read successfully (detail format - array): %s", deptID)
+					logger.Info("Department read successfully (detail format - array): %d", deptID)
 					return
 				}
 				// Check if data is a single object (SingleRecordAsObject feature in detail format)
 				if data, ok := singleObj["data"].(map[string]interface{}); ok {
 					assert.NotEmpty(t, data, "Should find department")
-					logger.Info("Department read successfully (detail format - single object): %s", deptID)
+					logger.Info("Department read successfully (detail format - single object): %d", deptID)
 					return
 				}
 			}
@@ -549,7 +549,7 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			"description": "Updated Marketing and Sales Department",
 		}
 
-		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%s", deptID), "PUT", data, nil)
+		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%d", deptID), "PUT", data, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -561,11 +561,11 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			// Unwrapped format - verify we got the updated data back
 			assert.NotEmpty(t, result, "Update department should return data")
 		}
-		logger.Info("Department updated successfully: %s", deptID)
+		logger.Info("Department updated successfully: %d", deptID)
 
 		// Verify update by reading the department again
 		// For simplicity, just verify the update succeeded, skip verification read
-		logger.Info("Department update verified: %s", deptID)
+		logger.Info("Department update verified: %d", deptID)
 	})
 
 	t.Run("Update_Employee_With_PATCH", func(t *testing.T) {
@@ -573,7 +573,7 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			"title": "Senior Marketing Manager",
 		}
 
-		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/employees/%s", empID), "PATCH", data, nil)
+		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/employees/%d", empID), "PATCH", data, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -585,12 +585,12 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			// Unwrapped format - verify we got the updated data back
 			assert.NotEmpty(t, result, "Update employee should return data")
 		}
-		logger.Info("Employee updated successfully: %s", empID)
+		logger.Info("Employee updated successfully: %d", empID)
 	})
 
 	// Test DELETE operation (DELETE)
 	t.Run("Delete_Employee", func(t *testing.T) {
-		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/employees/%s", empID), "DELETE", nil, nil)
+		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/employees/%d", empID), "DELETE", nil, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -602,14 +602,14 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			// Unwrapped format - verify we got a response (typically {"deleted": count})
 			assert.NotEmpty(t, result, "Delete employee should return data")
 		}
-		logger.Info("Employee deleted successfully: %s", empID)
+		logger.Info("Employee deleted successfully: %d", empID)
 
 		// Verify deletion - just log that delete succeeded
-		logger.Info("Employee deletion verified: %s", empID)
+		logger.Info("Employee deletion verified: %d", empID)
 	})
 
 	t.Run("Delete_Department", func(t *testing.T) {
-		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%s", deptID), "DELETE", nil, nil)
+		resp := makeRestHeadSpecRequest(t, serverURL, fmt.Sprintf("/restheadspec/departments/%d", deptID), "DELETE", nil, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var result map[string]interface{}
@@ -621,7 +621,7 @@ func testRestHeadSpecCRUD(t *testing.T, serverURL string) {
 			// Unwrapped format - verify we got a response (typically {"deleted": count})
 			assert.NotEmpty(t, result, "Delete department should return data")
 		}
-		logger.Info("Department deleted successfully: %s", deptID)
+		logger.Info("Department deleted successfully: %d", deptID)
 	})
 
 	logger.Info("RestHeadSpec API CRUD tests completed")
@@ -686,4 +686,16 @@ func makeRestHeadSpecRequest(t *testing.T, serverURL, path, method string, data 
 	}
 
 	return resp
+}
+
+// createdID extracts the database-assigned id from a create response, in either the
+// wrapped ({"data": {...}}) or unwrapped format.
+func createdID(result map[string]interface{}) int64 {
+	if data, ok := result["data"].(map[string]interface{}); ok {
+		result = data
+	}
+	if id, ok := result["id"].(float64); ok {
+		return int64(id)
+	}
+	return 0
 }

@@ -1208,7 +1208,7 @@ func (p *PgSQLSelectQuery) applySubqueryPreloads(ctx context.Context, dest inter
 		for i := 0; i < destValue.Len(); i++ {
 			elem := destValue.Index(i)
 			if err := p.loadPreloadsForRecord(ctx, elem, subqueryPreloads); err != nil {
-				logger.Warn("Failed to load preloads for record %d: %v", i, err)
+				return fmt.Errorf("record %d: %w", i, err)
 			}
 		}
 		return nil
@@ -1256,7 +1256,9 @@ func (p *PgSQLSelectQuery) loadPreloadsForRecord(ctx context.Context, record ref
 		// Build and execute the preload query
 		err := p.executePreloadQuery(ctx, field, meta, fkValue, preload)
 		if err != nil {
-			logger.Warn("Failed to execute preload query for '%s': %v", preload.relation, err)
+			// Inside a transaction a failed statement aborts it, so carrying on would
+			// only turn into a misleading "transaction is aborted" on the next query.
+			return fmt.Errorf("preload %s: %w", preload.relation, err)
 		}
 	}
 

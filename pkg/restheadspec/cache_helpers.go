@@ -22,6 +22,7 @@ type expandOptionKey struct {
 // queryCacheKey represents the components used to build a cache key for query total count
 type queryCacheKey struct {
 	TableName      string                `json:"table_name"`
+	ID             string                `json:"id,omitempty"`
 	Filters        []common.FilterOption `json:"filters"`
 	Sort           []common.SortOption   `json:"sort"`
 	CustomSQLWhere string                `json:"custom_sql_where,omitempty"`
@@ -39,12 +40,15 @@ type cachedTotal struct {
 }
 
 // buildExtendedQueryCacheKey builds a cache key for extended query options (restheadspec)
-// Includes expand, distinct, and cursor pagination options
-func buildExtendedQueryCacheKey(tableName string, filters []common.FilterOption, sort []common.SortOption,
+// Includes expand, distinct, and cursor pagination options. id is the record id of a
+// single-record read: it constrains the counted query, so a count cached for one id
+// (or for the whole list) must never be served for another.
+func buildExtendedQueryCacheKey(tableName, id string, filters []common.FilterOption, sort []common.SortOption,
 	customWhere, customOr string, customJoin []string, expandOpts []interface{}, distinct bool, cursorFwd, cursorBwd string) string {
 
 	key := queryCacheKey{
 		TableName:      tableName,
+		ID:             id,
 		Filters:        filters,
 		Sort:           sort,
 		CustomSQLWhere: customWhere,
@@ -77,8 +81,8 @@ func buildExtendedQueryCacheKey(tableName string, filters []common.FilterOption,
 	jsonData, err := json.Marshal(key)
 	if err != nil {
 		// Fallback to simple string concatenation if JSON fails
-		return hashString(fmt.Sprintf("%s_%v_%v_%s_%s_%v_%v_%v_%s_%s",
-			tableName, filters, sort, customWhere, customOr, customJoin, expandOpts, distinct, cursorFwd, cursorBwd))
+		return hashString(fmt.Sprintf("%s_%s_%v_%v_%s_%s_%v_%v_%v_%s_%s",
+			tableName, id, filters, sort, customWhere, customOr, customJoin, expandOpts, distinct, cursorFwd, cursorBwd))
 	}
 
 	return hashString(string(jsonData))

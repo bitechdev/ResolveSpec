@@ -3,6 +3,7 @@ package mqttspec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -313,42 +314,73 @@ func (h *Handler) handleRequest(client *Client, msg *Message) {
 	}
 }
 
-// handleRead processes a read operation
+// stageError marks which stage of an operation failed inside a transaction so the
+// right error response is sent once the transaction has rolled back.
+type stageError struct {
+	code string
+	err  error
+}
+
+func (e *stageError) Error() string { return e.err.Error() }
+func (e *stageError) Unwrap() error { return e.err }
+
+func hookStage(err error) error            { return &stageError{code: "hook_error", err: err} }
+func opStage(code string, err error) error { return &stageError{code: code, err: err} }
+
+// runInTx runs body in a transaction with hookCtx.Tx set to it and OnTxBegin fired
+// first. Transactions are per message, never per client connection.
+func (h *Handler) runInTx(hookCtx *HookContext, body func(tx common.Database) error) error {
+	return common.RunRequestTx(hookCtx.Context, h.db, hookCtx, func() error {
+		return h.hooks.Execute(OnTxBegin, hookCtx)
+	}, body)
+}
+
+// sendTxError sends the response for an error returned by runInTx. Errors that are
+// not stage errors (begin, OnTxBegin, commit) carry no detail to the client.
+func (h *Handler) sendTxError(client *Client, msgID string, err error) {
+	var stage *stageError
+	if errors.As(err, &stage) {
+		logger.Error("[MQTTSpec] %s: %v", stage.code, stage.err)
+		h.sendError(client.ID, msgID, stage.code, stage.err.Error())
+		return
+	}
+	logger.Error("[MQTTSpec] Transaction failed: %v", err)
+	h.sendError(client.ID, msgID, "transaction_error", "Transaction failed")
+}
+
+// handleRead processes a read operation; hooks and queries share one transaction.
 func (h *Handler) handleRead(client *Client, msg *Message, hookCtx *HookContext) {
-	// Execute before hook
-	if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] BeforeRead hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
-		return
-	}
-
-	// Perform read operation
-	var data interface{}
 	var metadata map[string]interface{}
-	var err error
 
-	if hookCtx.ID != "" {
-		// Read single record by ID
-		data, err = h.readByID(hookCtx)
-		metadata = map[string]interface{}{"total": 1}
-	} else {
-		// Read multiple records
-		data, metadata, err = h.readMultiple(hookCtx)
-	}
+	err := h.runInTx(hookCtx, func(tx common.Database) error {
+		if err := h.hooks.ExecuteBeforeOp(BeforeRead, hookCtx); err != nil {
+			return hookStage(err)
+		}
 
+		var data interface{}
+		var err error
+		if hookCtx.ID != "" {
+			// Read single record by ID
+			data, err = h.readByID(hookCtx)
+			metadata = map[string]interface{}{"total": 1}
+		} else {
+			// Read multiple records
+			data, metadata, err = h.readMultiple(hookCtx)
+		}
+		if err != nil {
+			return opStage("read_error", err)
+		}
+
+		// Update hook context
+		hookCtx.Result = data
+
+		if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		return nil
+	})
 	if err != nil {
-		logger.Error("[MQTTSpec] Read operation failed: %v", err)
-		h.sendError(client.ID, msg.ID, "read_error", err.Error())
-		return
-	}
-
-	// Update hook context
-	hookCtx.Result = data
-
-	// Execute after hook
-	if err := h.hooks.Execute(AfterRead, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] AfterRead hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
@@ -356,30 +388,49 @@ func (h *Handler) handleRead(client *Client, msg *Message, hookCtx *HookContext)
 	h.sendResponse(client.ID, msg.ID, hookCtx.Result, metadata)
 }
 
-// handleCreate processes a create operation
+// handleCreate processes a create operation. The insert runs in the first
+// transaction; the re-fetch (to capture DB defaults/triggers) and AfterCreate run
+// in a second short transaction.
 func (h *Handler) handleCreate(client *Client, msg *Message, hookCtx *HookContext) {
-	// Execute before hook
-	if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] BeforeCreate hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
-		return
-	}
+	var data interface{}
 
-	// Perform create operation
-	data, err := h.create(hookCtx)
+	err := h.runInTx(hookCtx, func(tx common.Database) error {
+		if err := h.hooks.ExecuteBeforeOp(BeforeCreate, hookCtx); err != nil {
+			return hookStage(err)
+		}
+
+		var err error
+		data, err = h.create(hookCtx)
+		if err != nil {
+			return opStage("create_error", err)
+		}
+		return nil
+	})
 	if err != nil {
-		logger.Error("[MQTTSpec] Create operation failed: %v", err)
-		h.sendError(client.ID, msg.ID, "create_error", err.Error())
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
-	// Update hook context
-	hookCtx.Result = data
+	err = h.runInTx(hookCtx, func(tx common.Database) error {
+		if pkVal := reflection.GetPrimaryKeyValue(hookCtx.ModelPtr); pkVal != nil {
+			hookCtx.ID = fmt.Sprintf("%v", pkVal)
+			var err error
+			data, err = h.readByID(hookCtx)
+			if err != nil {
+				return opStage("create_error", err)
+			}
+		}
 
-	// Execute after hook
-	if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] AfterCreate hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
+		// Update hook context
+		hookCtx.Result = data
+
+		if err := h.hooks.Execute(AfterCreate, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		return nil
+	})
+	if err != nil {
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
@@ -390,30 +441,42 @@ func (h *Handler) handleCreate(client *Client, msg *Message, hookCtx *HookContex
 	h.notifySubscribers(hookCtx.Schema, hookCtx.Entity, OperationCreate, data)
 }
 
-// handleUpdate processes an update operation
+// handleUpdate processes an update operation. The update runs in the first
+// transaction; the re-fetch and AfterUpdate run in a second short transaction.
 func (h *Handler) handleUpdate(client *Client, msg *Message, hookCtx *HookContext) {
-	// Execute before hook
-	if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] BeforeUpdate hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
-		return
-	}
+	var data interface{}
 
-	// Perform update operation
-	data, err := h.update(hookCtx)
+	err := h.runInTx(hookCtx, func(tx common.Database) error {
+		if err := h.hooks.ExecuteBeforeOp(BeforeUpdate, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		if err := h.update(hookCtx); err != nil {
+			return opStage("update_error", err)
+		}
+		return nil
+	})
 	if err != nil {
-		logger.Error("[MQTTSpec] Update operation failed: %v", err)
-		h.sendError(client.ID, msg.ID, "update_error", err.Error())
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
-	// Update hook context
-	hookCtx.Result = data
+	err = h.runInTx(hookCtx, func(tx common.Database) error {
+		var err error
+		data, err = h.readByID(hookCtx)
+		if err != nil {
+			return opStage("update_error", err)
+		}
 
-	// Execute after hook
-	if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] AfterUpdate hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
+		// Update hook context
+		hookCtx.Result = data
+
+		if err := h.hooks.Execute(AfterUpdate, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		return nil
+	})
+	if err != nil {
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
@@ -424,26 +487,22 @@ func (h *Handler) handleUpdate(client *Client, msg *Message, hookCtx *HookContex
 	h.notifySubscribers(hookCtx.Schema, hookCtx.Entity, OperationUpdate, data)
 }
 
-// handleDelete processes a delete operation
+// handleDelete processes a delete operation; hooks and delete share one transaction.
 func (h *Handler) handleDelete(client *Client, msg *Message, hookCtx *HookContext) {
-	// Execute before hook
-	if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] BeforeDelete hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
-		return
-	}
-
-	// Perform delete operation
-	if err := h.delete(hookCtx); err != nil {
-		logger.Error("[MQTTSpec] Delete operation failed: %v", err)
-		h.sendError(client.ID, msg.ID, "delete_error", err.Error())
-		return
-	}
-
-	// Execute after hook
-	if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
-		logger.Error("[MQTTSpec] AfterDelete hook failed: %v", err)
-		h.sendError(client.ID, msg.ID, "hook_error", err.Error())
+	err := h.runInTx(hookCtx, func(tx common.Database) error {
+		if err := h.hooks.ExecuteBeforeOp(BeforeDelete, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		if err := h.delete(hookCtx); err != nil {
+			return opStage("delete_error", err)
+		}
+		if err := h.hooks.Execute(AfterDelete, hookCtx); err != nil {
+			return hookStage(err)
+		}
+		return nil
+	})
+	if err != nil {
+		h.sendTxError(client, msg.ID, err)
 		return
 	}
 
@@ -671,7 +730,7 @@ func (h *Handler) getTableName(schema, entity string, model interface{}) string 
 
 // readByID reads a single record by ID
 func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
-	query := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	query := hookCtx.Tx.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Add ID filter
 	pkName := reflection.GetPrimaryKeyName(hookCtx.Model)
@@ -711,7 +770,7 @@ func (h *Handler) readByID(hookCtx *HookContext) (interface{}, error) {
 
 // readMultiple reads multiple records
 func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata map[string]interface{}, err error) {
-	query := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	query := hookCtx.Tx.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Apply options
 	if hookCtx.Options != nil {
@@ -786,7 +845,7 @@ func (h *Handler) readMultiple(hookCtx *HookContext) (data interface{}, metadata
 
 	// Get count
 	metadata = make(map[string]interface{})
-	countQuery := h.db.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	countQuery := hookCtx.Tx.NewSelect().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if hookCtx.Options != nil {
 		for _, filter := range hookCtx.Options.Filters {
 			if cond, jargs, ok := common.BuildJSONFilterCondition(hookCtx.Model, "", filter.Column, filter.Operator, filter.Value); ok {
@@ -835,22 +894,16 @@ func (h *Handler) create(hookCtx *HookContext) (interface{}, error) {
 	}
 
 	// Insert record
-	query := h.db.NewInsert().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	query := hookCtx.Tx.NewInsert().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 	if _, err := query.Exec(hookCtx.Context); err != nil {
 		return nil, fmt.Errorf("failed to create record: %w", err)
-	}
-
-	// Re-fetch the created record to capture DB-generated defaults/triggers.
-	if pkVal := reflection.GetPrimaryKeyValue(hookCtx.ModelPtr); pkVal != nil {
-		hookCtx.ID = fmt.Sprintf("%v", pkVal)
-		return h.readByID(hookCtx)
 	}
 
 	return hookCtx.ModelPtr, nil
 }
 
 // update updates an existing record
-func (h *Handler) update(hookCtx *HookContext) (interface{}, error) {
+func (h *Handler) update(hookCtx *HookContext) error {
 	// Convert request data to a map
 	var updates map[string]interface{}
 	if m, ok := hookCtx.Data.(map[string]interface{}); ok {
@@ -858,10 +911,10 @@ func (h *Handler) update(hookCtx *HookContext) (interface{}, error) {
 	} else {
 		dataBytes, err := json.Marshal(hookCtx.Data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal data: %w", err)
+			return fmt.Errorf("failed to marshal data: %w", err)
 		}
 		if err := json.Unmarshal(dataBytes, &updates); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal data into map: %w", err)
+			return fmt.Errorf("failed to unmarshal data into map: %w", err)
 		}
 	}
 
@@ -872,21 +925,20 @@ func (h *Handler) update(hookCtx *HookContext) (interface{}, error) {
 	values := common.MergeUpdateValues(make(map[string]interface{}, len(updates)), updates, h.disallowNulls)
 
 	if len(values) > 0 {
-		query := h.db.NewUpdate().Table(hookCtx.TableName).SetMap(values).
+		query := hookCtx.Tx.NewUpdate().Table(hookCtx.TableName).SetMap(values).
 			Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), hookCtx.ID)
 
 		if _, err := query.Exec(hookCtx.Context); err != nil {
-			return nil, fmt.Errorf("failed to update record: %w", err)
+			return fmt.Errorf("failed to update record: %w", err)
 		}
 	}
 
-	// Fetch updated record
-	return h.readByID(hookCtx)
+	return nil
 }
 
 // delete deletes a record
 func (h *Handler) delete(hookCtx *HookContext) error {
-	query := h.db.NewDelete().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	query := hookCtx.Tx.NewDelete().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
 
 	// Add ID filter
 	pkName := reflection.GetPrimaryKeyName(hookCtx.Model)

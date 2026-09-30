@@ -6,22 +6,33 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
-    ports:
-      - "5434:5432"
+    # Host networking (bridge networks are unavailable in some environments):
+    # postgres listens directly on host port 8124.
+    network_mode: host
+    command: ["postgres", "-p", "8124"]
     volumes:
       - postgres-test-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -p 8124"]
       interval: 5s
       timeout: 5s
       retries: 5
-    networks:
-      - resolvespec-test
+
+  testserver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.testserver
+    container_name: resolvespec-testserver
+    environment:
+      RESOLVESPEC_DB_TRACE_ENABLED: "true"
+      RESOLVESPEC_DB_TRACE_MIN_CALLS: "1"
+      RESOLVESPEC_DB_TRACE_POOL_LOG: "true"
+    # Serves on host port 8123 (docker/testserver.config.yaml).
+    network_mode: host
+    depends_on:
+      postgres-test:
+        condition: service_healthy
 
 volumes:
   postgres-test-data:
     driver: local
-
-networks:
-  resolvespec-test:
-    driver: bridge

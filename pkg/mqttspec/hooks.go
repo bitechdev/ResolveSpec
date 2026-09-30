@@ -50,6 +50,11 @@ const (
 
 	// BeforeOp fires immediately before every SQL operation (read, create, update, delete)
 	BeforeOp = websocketspec.BeforeOp
+
+	// OnTxBegin fires once, first, inside every transaction the handler opens for a
+	// read/create/update/delete message (including the second short transaction for
+	// post-commit work). hookCtx.Tx is the transaction.
+	OnTxBegin = websocketspec.OnTxBegin
 )
 
 // NewHookRegistry creates a new hook registry

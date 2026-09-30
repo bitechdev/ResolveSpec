@@ -19,6 +19,12 @@ import (
 //   - Column-level security: sensitive columns masked/hidden in read results.
 //   - Audit logging after each read.
 func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList) {
+	// OnTxBegin: stamp transaction-local settings (e.g. RLS GUCs) before any SQL.
+	// Looked up per call so SetTxSettings may come after registration.
+	handler.Hooks().Register(OnTxBegin, func(hookCtx *HookContext) error {
+		return security.StampTxSettings(newSecurityContext(hookCtx), securityList, hookCtx.Tx)
+	})
+
 	// BeforeHandle: enforce model-level operation rules (auth check).
 	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
 		if err := security.CheckModelAuthAllowed(newSecurityContext(hookCtx), hookCtx.Operation); err != nil {
@@ -28,6 +34,21 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 			return err
 		}
 		return nil
+	})
+
+	// BeforeHandle: preload column rules for writes before the handler opens its
+	// transaction; the write hooks below only read the cache.
+	handler.Hooks().Register(BeforeHandle, func(hookCtx *HookContext) error {
+		return security.PreloadSecurityRules(newSecurityContext(hookCtx), securityList, hookCtx.Operation)
+	})
+
+	// BeforeCreate/BeforeUpdate: drop columns hidden or masked for the user from the
+	// write payload, so they cannot be inserted or updated.
+	handler.Hooks().Register(BeforeCreate, func(hookCtx *HookContext) error {
+		return security.ApplyWriteColumnSecurity(newSecurityContext(hookCtx), securityList)
+	})
+	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
+		return security.ApplyWriteColumnSecurity(newSecurityContext(hookCtx), securityList)
 	})
 
 	// BeforeRead (1st): load RLS + CLS rules from the provider into SecurityList.
@@ -115,6 +136,14 @@ func (s *securityContext) SetQuery(query interface{}) {
 	if q, ok := query.(common.SelectQuery); ok {
 		s.ctx.Query = q
 	}
+}
+
+func (s *securityContext) GetData() interface{} {
+	return s.ctx.Data
+}
+
+func (s *securityContext) SetData(data interface{}) {
+	s.ctx.Data = data
 }
 
 func (s *securityContext) GetResult() interface{} {

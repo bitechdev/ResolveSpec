@@ -10,6 +10,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/config"
 	"github.com/bitechdev/ResolveSpec/pkg/dbmanager"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
+	"github.com/bitechdev/ResolveSpec/pkg/middleware"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/server"
 	"github.com/bitechdev/ResolveSpec/pkg/testmodels"
@@ -67,8 +68,13 @@ func main() {
 		handler.RegisterModel("public", modelNames[i], model)
 	}
 
+	// Queue requests per client (X-Client-Id, Authorization, session, then IP)
+	// so a burst such as a page load cannot flood the database pool.
+	queue := middleware.NewClientQueue(middleware.ClientQueueConfig{MaxConcurrent: 10})
+	defer queue.Close()
+
 	// Setup routes using new SetupMuxRoutes function (without authentication)
-	resolvespec.SetupMuxRoutes(r, handler, nil)
+	resolvespec.SetupMuxRoutes(r, handler, middleware.Chain(queue.Middleware))
 
 	// Create server manager
 	mgr := server.NewManager()

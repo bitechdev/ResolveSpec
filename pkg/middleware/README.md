@@ -5,8 +5,9 @@ HTTP middleware utilities for security and performance.
 ## Table of Contents
 
 1. [Rate Limiting](#rate-limiting)
-2. [Request Size Limits](#request-size-limits)
-3. [Input Sanitization](#input-sanitization)
+2. [Client Request Queue](#client-request-queue)
+3. [Request Size Limits](#request-size-limits)
+4. [Input Sanitization](#input-sanitization)
 
 ---
 
@@ -380,6 +381,109 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
    ```
 
 ---
+
+## Client Request Queue
+
+`ClientQueue` smooths bursts (for example a page load that fires ~15 requests at once) by
+limiting how many requests each client runs concurrently and queueing the rest first-in-first-out.
+Unlike the rate limiter it never rejects a request that can be served shortly.
+
+```go
+q := middleware.NewClientQueue(middleware.ClientQueueConfig{
+    MaxConcurrent: 4,                // running at once, per client
+    MaxQueue:      50,               // waiting, per client; beyond this -> 429
+    MaxWait:       30 * time.Second, // waiting too long -> 503 + Retry-After
+})
+defer q.Close()
+
+router.Use(q.Middleware) // gorilla/mux; or wrap any http.Handler
+```
+
+### Adding it to restheadspec / resolvespec
+
+Both packages' `SetupMuxRoutes` and `SetupBunRouterRoutes` take one middleware and apply it to every
+route, so pass the queue there. Use `Chain` to combine it with auth (first is outermost, so requests
+are authenticated before they can take a queue slot):
+
+```go
+q := middleware.NewClientQueue(middleware.ClientQueueConfig{MaxConcurrent: 4})
+defer q.Close()
+
+mw := middleware.Chain(authMiddleware, q.Middleware) // authMiddleware may be nil
+
+restheadspec.SetupMuxRoutes(muxRouter, headHandler, mw)
+resolvespec.SetupMuxRoutes(muxRouter, resolveHandler, mw)
+// or SetupBunRouterRoutes(router, handler, mw)
+```
+
+Share one `ClientQueue` across packages to give a client a single limit over all of them.
+
+### Client identification
+
+The first of these that is present is used, in order:
+
+1. `X-Client-Id` header
+2. `Authorization` header
+3. the built-in server session (`security.GetSessionID` from the request context, else the session cookie)
+4. the client IP
+
+Nothing is required from the client: without an id it falls back to the session, then to the IP.
+Secrets are hashed and never stored. Ids longer than 128 characters are ignored.
+
+The session is only in the request context if the `security` auth middleware has run first, so put
+auth before the queue with `Chain` (below). Without it the cookie is still used.
+
+To get one queue per browser tab (rather than per session), have the client send an id generated once
+per tab; the server cannot read `sessionStorage` itself:
+
+```js
+const id = sessionStorage.clientId ??= crypto.randomUUID();
+fetch(url, { headers: { "X-Client-Id": id } });
+```
+
+### Metrics
+
+Registered on the default Prometheus registry (the same one `pkg/metrics` and `dbmanager` use), with
+no per-client labels so cardinality stays bounded.
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `clientqueue_requests_total{result}` | counter | `immediate`, `queued`, `rejected_full`, `timeout`, `canceled` |
+| `clientqueue_wait_seconds` | histogram | wait for a slot; 0 for requests that ran immediately |
+| `clientqueue_wait_max_seconds` | gauge | longest wait since process start |
+| `clientqueue_burst_size` | histogram | peak outstanding requests per client busy period |
+| `clientqueue_burst_max` | gauge | largest burst since process start |
+| `clientqueue_active` / `clientqueue_queue_depth` | gauge | running / waiting now |
+| `clientqueue_clients` | gauge | clients currently tracked |
+
+A **burst** is one client's busy period: the peak number of its requests running plus waiting between
+going from idle to busy and back to idle. A page load firing 15 requests at once is a burst of 15.
+
+```promql
+# average burst size
+rate(clientqueue_burst_size_sum[5m]) / rate(clientqueue_burst_size_count[5m])
+# bursts larger than the concurrency limit (need queueing)
+1 - (sum(rate(clientqueue_burst_size_bucket{le="10"}[5m])) / sum(rate(clientqueue_burst_size_count[5m])))
+# average and p95 wait
+rate(clientqueue_wait_seconds_sum[5m]) / rate(clientqueue_wait_seconds_count[5m])
+histogram_quantile(0.95, sum(rate(clientqueue_wait_seconds_bucket[5m])) by (le))
+# share of requests that had to queue
+sum(rate(clientqueue_requests_total{result="queued"}[5m])) / sum(rate(clientqueue_requests_total[5m]))
+```
+
+Use these to pick `MaxConcurrent`: if the p95 burst is well above it and waits are short, it is doing its
+job; if waits grow, the limit is too low or the database is the bottleneck. The `_max` gauges reset on
+restart; use the histograms for anything over time. A client that never goes idle produces one long
+busy period, so its burst is only recorded when it finally drains.
+
+### Behaviour
+
+- Queued requests are dropped if the client disconnects, so abandoned requests never run.
+- CORS preflights (`OPTIONS`) and connection upgrades (websockets) bypass the queue.
+- Idle clients are forgotten after `IdleTimeout` (default 5m).
+- The client id is client-supplied, so a hostile client can rotate ids to get more slots. It smooths
+  well-behaved clients; it is not an abuse control. Combine it with `RateLimiter` for that.
+- Queue time counts against your own request timeouts; keep `MaxWait` below them.
 
 ## Request Size Limits
 

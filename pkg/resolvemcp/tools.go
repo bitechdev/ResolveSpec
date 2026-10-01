@@ -324,7 +324,7 @@ func registerReadTool(h *Handler, schema, entity string, info modelInfo) {
 
 		data, metadata, err := h.executeRead(ctx, schema, entity, id, options)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError("tool", err), nil
 		}
 
 		return marshalResult(map[string]interface{}{
@@ -394,7 +394,7 @@ func registerCreateTool(h *Handler, schema, entity string, info modelInfo) {
 
 		result, err := h.executeCreate(ctx, schema, entity, data)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError("tool", err), nil
 		}
 
 		return marshalResult(map[string]interface{}{
@@ -463,7 +463,7 @@ func registerUpdateTool(h *Handler, schema, entity string, info modelInfo) {
 
 		result, err := h.executeUpdate(ctx, schema, entity, id, dataMap)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError("tool", err), nil
 		}
 
 		return marshalResult(map[string]interface{}{
@@ -504,7 +504,7 @@ func registerDeleteTool(h *Handler, schema, entity string, info modelInfo) {
 
 		result, err := h.executeDelete(ctx, schema, entity, id)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return toolError("tool", err), nil
 		}
 
 		return marshalResult(map[string]interface{}{

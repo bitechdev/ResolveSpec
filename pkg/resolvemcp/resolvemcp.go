@@ -18,6 +18,7 @@ package resolvemcp
 import (
 	"net/http"
 	"runtime/debug"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/uptrace/bun"
@@ -41,6 +42,25 @@ type Config struct {
 	// If empty, the path is detected from each incoming request automatically.
 	BasePath string
 
+	// Limits. Zero values take the defaults shown.
+
+	// DefaultLimit is the page size when a read gives no limit (50).
+	DefaultLimit int
+	// MaxLimit caps a read's limit; larger values are clamped (1000).
+	MaxLimit int
+	// MaxOffset rejects a read whose offset is larger (100000).
+	MaxOffset int
+	// MaxBatch caps the items in one batch create (100).
+	MaxBatch int
+	// MaxPreloadDepth caps the depth of a preload path such as "a.b.c" (2).
+	MaxPreloadDepth int
+	// MaxWriteRows caps the rows a filter-based update or delete may touch (100).
+	MaxWriteRows int
+	// QueryTimeout bounds one tool call, hooks and queries included (30s).
+	QueryTimeout time.Duration
+	// ConfirmTTL is how long a confirmation token for a filter write stays valid (5m).
+	ConfirmTTL time.Duration
+
 	// AllowedHosts restricts the Host header accepted by the SSE transport when BaseURL is
 	// empty (the message endpoint URL sent to clients is built from it). Empty accepts any
 	// host, with at most 32 distinct base URLs cached; prefer setting BaseURL.
@@ -51,6 +71,31 @@ type Config struct {
 	// agent-visible text. When on, every call runs the BeforeHandle hooks (operation
 	// "annotate_set" / "annotate_get") and the writes run in a transaction with OnTxBegin.
 	EnableAnnotations bool
+}
+
+// withDefaults fills the zero limit fields.
+func (c Config) withDefaults() Config {
+	def := func(v *int, d int) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	def(&c.DefaultLimit, 50)
+	def(&c.MaxLimit, 1000)
+	def(&c.MaxOffset, 100000)
+	def(&c.MaxBatch, 100)
+	def(&c.MaxPreloadDepth, 2)
+	def(&c.MaxWriteRows, 100)
+	if c.DefaultLimit > c.MaxLimit {
+		c.DefaultLimit = c.MaxLimit
+	}
+	if c.QueryTimeout <= 0 {
+		c.QueryTimeout = 30 * time.Second
+	}
+	if c.ConfirmTTL <= 0 {
+		c.ConfirmTTL = 5 * time.Minute
+	}
+	return c
 }
 
 // NewHandlerWithGORM creates a Handler backed by a GORM database connection.

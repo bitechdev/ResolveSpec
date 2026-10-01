@@ -31,7 +31,7 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 			hookCtx.Abort = true
 			hookCtx.AbortMessage = err.Error()
 			hookCtx.AbortCode = http.StatusUnauthorized
-			return err
+			return NewClientError(CodeForbidden, err.Error())
 		}
 		return nil
 	})
@@ -83,17 +83,17 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 
 	// BeforeCreate: enforce CanCreate rule.
 	handler.Hooks().Register(BeforeCreate, func(hookCtx *HookContext) error {
-		return security.CheckModelCreateAllowed(newSecurityContext(hookCtx))
+		return forbidden(security.CheckModelCreateAllowed(newSecurityContext(hookCtx)))
 	})
 
 	// BeforeUpdate: enforce CanUpdate rule.
 	handler.Hooks().Register(BeforeUpdate, func(hookCtx *HookContext) error {
-		return security.CheckModelUpdateAllowed(newSecurityContext(hookCtx))
+		return forbidden(security.CheckModelUpdateAllowed(newSecurityContext(hookCtx)))
 	})
 
 	// BeforeDelete: enforce CanDelete rule.
 	handler.Hooks().Register(BeforeDelete, func(hookCtx *HookContext) error {
-		return security.CheckModelDeleteAllowed(newSecurityContext(hookCtx))
+		return forbidden(security.CheckModelDeleteAllowed(newSecurityContext(hookCtx)))
 	})
 
 	logger.Info("Security hooks registered for resolvemcp handler")
@@ -166,4 +166,12 @@ func (s *securityContext) GetResult() interface{} {
 
 func (s *securityContext) SetResult(result interface{}) {
 	s.ctx.Result = result
+}
+
+// forbidden marks a rule denial as safe to show the client; nil passes through.
+func forbidden(err error) error {
+	if err == nil {
+		return nil
+	}
+	return NewClientError(CodeForbidden, err.Error())
 }

@@ -1,7 +1,6 @@
 package resolvemcp
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -23,7 +22,7 @@ func writeColumns(model interface{}, data map[string]interface{}) (map[string]in
 		modelType = modelType.Elem()
 	}
 	if modelType == nil || modelType.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("invalid model")
+		return nil, errInternal
 	}
 
 	accepted := make(map[string]string)
@@ -44,13 +43,13 @@ func writeColumns(model interface{}, data map[string]interface{}) (map[string]in
 			continue
 		}
 		if _, dup := out[col]; dup {
-			return nil, fmt.Errorf("column %q given more than once", col)
+			return nil, invalidArg("column %q given more than once", col)
 		}
 		out[col] = value
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
-		return nil, fmt.Errorf("unknown or read-only fields: %s", strings.Join(unknown, ", "))
+		return nil, invalidArg("unknown or read-only fields: %s", strings.Join(unknown, ", "))
 	}
 	return out, nil
 }

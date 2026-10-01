@@ -3,6 +3,7 @@ package resolvemcp
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
@@ -107,18 +108,30 @@ func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 	logger.Debug("Executing %d resolvemcp hook(s) for %s", len(hooks), hookType)
 
 	for i, hook := range hooks {
-		if err := hook(ctx); err != nil {
+		if err := runHook(hook, ctx); err != nil {
 			logger.Error("resolvemcp hook %d for %s failed: %v", i+1, hookType, err)
 			return fmt.Errorf("hook execution failed: %w", err)
 		}
 
 		if ctx.Abort {
 			logger.Warn("resolvemcp hook %d for %s requested abort: %s", i+1, hookType, ctx.AbortMessage)
-			return fmt.Errorf("operation aborted by hook: %s", ctx.AbortMessage)
+			return fmt.Errorf("operation aborted by hook: %w", NewClientError(CodeForbidden, ctx.AbortMessage))
 		}
 	}
 
 	return nil
+}
+
+// runHook calls hook and turns a panic into an error, so a faulty hook fails the request
+// instead of unwinding through the transaction machinery. The stack is logged, not returned.
+func runHook(hook HookFunc, ctx *HookContext) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("resolvemcp hook panic: %v\n%s", r, debug.Stack())
+			err = errInternal
+		}
+	}()
+	return hook(ctx)
 }
 
 func (r *HookRegistry) Clear(hookType HookType) {

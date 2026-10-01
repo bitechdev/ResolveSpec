@@ -193,12 +193,17 @@ func (cm *ConnectionManager) GetConnection(id string) (*Connection, bool) {
 func (cm *ConnectionManager) Shutdown() {
 	cm.cancel()
 
-	// Close all connections
-	cm.mu.Lock()
+	// Close all connections outside the lock: disconnect hooks may call back
+	// into the manager (Count, GetConnection).
+	cm.mu.RLock()
+	conns := make([]*Connection, 0, len(cm.connections))
 	for _, conn := range cm.connections {
+		conns = append(conns, conn)
+	}
+	cm.mu.RUnlock()
+	for _, conn := range conns {
 		conn.Close()
 	}
-	cm.mu.Unlock()
 }
 
 // ReadPump reads messages from the WebSocket connection
@@ -300,6 +305,14 @@ func (c *Connection) SendJSON(v interface{}) error {
 // Close closes the connection
 func (c *Connection) Close() {
 	c.closedOnce.Do(func() {
+		// Disconnect hooks fire once per connection, however it closes. They
+		// are best-effort: a failure is logged and never blocks the close.
+		hookCtx := c.disconnectHookContext()
+		c.logDisconnectHook(BeforeDisconnect, c.executeHook(func(r *HookRegistry) error { return r.Execute(BeforeDisconnect, hookCtx) }))
+		defer func() {
+			c.logDisconnectHook(AfterDisconnect, c.executeHook(func(r *HookRegistry) error { return r.Execute(AfterDisconnect, hookCtx) }))
+		}()
+
 		if c.cancel != nil {
 			c.cancel()
 		}
@@ -319,6 +332,34 @@ func (c *Connection) Close() {
 
 		logger.Info("[WebSocketSpec] Connection %s closed", c.ID)
 	})
+}
+
+// disconnectHookContext builds the hook context for the disconnect hooks. The
+// context is detached from the connection's cancellation so hooks that touch
+// the database still run after the connection context is cancelled.
+func (c *Connection) disconnectHookContext() *HookContext {
+	parent := c.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return &HookContext{
+		Context:    context.WithoutCancel(parent),
+		Handler:    c.handler,
+		Connection: c,
+	}
+}
+
+func (c *Connection) executeHook(run func(*HookRegistry) error) error {
+	if c.handler == nil || c.handler.hooks == nil {
+		return nil
+	}
+	return run(c.handler.hooks)
+}
+
+func (c *Connection) logDisconnectHook(hook HookType, err error) {
+	if err != nil {
+		logger.Warn("[WebSocketSpec] %s hook failed for connection %s: %v", hook, c.ID, err)
+	}
 }
 
 // AddSubscription adds a subscription to this connection

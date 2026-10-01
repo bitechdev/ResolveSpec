@@ -594,3 +594,57 @@ func TestConnectionManager_CompleteLifecycle(t *testing.T) {
 	_, exists = cm.GetConnection("conn-1")
 	assert.False(t, exists)
 }
+
+func TestConnection_Close_FiresDisconnectHooksOnce(t *testing.T) {
+	h := &Handler{hooks: NewHookRegistry()}
+	var order []string
+	var ctxErrAfter error
+	h.hooks.Register(BeforeDisconnect, func(hc *HookContext) error {
+		order = append(order, "before")
+		assert.NoError(t, hc.Context.Err())
+		return nil
+	})
+	h.hooks.Register(AfterDisconnect, func(hc *HookContext) error {
+		order = append(order, "after")
+		ctxErrAfter = hc.Context.Err()
+		return nil
+	})
+
+	conn := createTestConnection("c1")
+	conn.handler = h
+
+	conn.Close()
+	conn.Close() // second close must not re-fire
+
+	assert.Equal(t, []string{"before", "after"}, order)
+	assert.NoError(t, ctxErrAfter, "hook context must survive the connection cancel")
+}
+
+func TestConnection_Close_HookErrorDoesNotBlockClose(t *testing.T) {
+	h := &Handler{hooks: NewHookRegistry()}
+	h.hooks.Register(BeforeDisconnect, func(*HookContext) error { return assert.AnError })
+
+	conn := createTestConnection("c2")
+	conn.handler = h
+	conn.Close()
+
+	assert.Error(t, conn.ctx.Err(), "connection must still be cancelled")
+}
+
+func TestConnectionManager_Shutdown_HookMayCallManager(t *testing.T) {
+	cm := NewConnectionManager(context.Background())
+	h := &Handler{hooks: NewHookRegistry(), connManager: cm}
+	h.hooks.Register(BeforeDisconnect, func(*HookContext) error { cm.Count(); return nil })
+
+	conn := createTestConnection("c3")
+	conn.handler = h
+	cm.connections[conn.ID] = conn
+
+	done := make(chan struct{})
+	go func() { cm.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown deadlocked on a hook calling the manager")
+	}
+}

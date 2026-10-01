@@ -102,10 +102,7 @@ func TestSpecHandlersDoNotQueryThePoolDirectly(t *testing.T) {
 // Anything else defined in a spec's hooks.go must have an Execute call site: an
 // unwired hook silently disables whatever is registered on it (resolvespec's
 // AfterRead skipped column-level security masking until it was wired).
-var unwiredHooks = map[string]string{
-	"websocketspec/BeforeDisconnect": "connection close is not hooked yet",
-	"websocketspec/AfterDisconnect":  "connection close is not hooked yet",
-}
+var unwiredHooks = map[string]string{}
 
 var hookConstRE = regexp.MustCompile(`(?m)^\s*([A-Z][A-Za-z0-9]*)\s+HookType\s*=`)
 

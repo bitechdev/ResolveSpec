@@ -1013,8 +1013,8 @@ func (h *Handler) validatePreloads(model interface{}, preloads []common.PreloadO
 	for _, name := range buildModelInfo("", "", model).relationNames {
 		relations[strings.ToLower(name)] = true
 	}
-	for _, p := range preloads {
-		segments := strings.Split(p.Relation, ".")
+	for i := range preloads {
+		segments := strings.Split(preloads[i].Relation, ".")
 		if len(segments) > h.config.MaxPreloadDepth {
 			return NewClientError(CodeLimitExceeded, fmt.Sprintf("preload depth exceeds the maximum of %d", h.config.MaxPreloadDepth))
 		}

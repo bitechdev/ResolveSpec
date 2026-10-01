@@ -201,26 +201,6 @@ func buildSchemaDoc(info modelInfo) string {
 	return sb.String()
 }
 
-// columnNameList returns a comma-separated list of JSON column names (for descriptions).
-func columnNameList(cols []columnInfo) string {
-	names := make([]string, len(cols))
-	for i, c := range cols {
-		names[i] = c.jsonName
-	}
-	return strings.Join(names, ", ")
-}
-
-// writableColumnNames returns JSON names for all non-primary-key columns.
-func writableColumnNames(cols []columnInfo) []string {
-	var names []string
-	for _, c := range cols {
-		if !c.isPrimary {
-			names = append(names, c.jsonName)
-		}
-	}
-	return names
-}
-
 // parseRequestOptions reads the paging, filter, sort, column and preload arguments shared
 // by the read tools.
 func parseRequestOptions(args map[string]interface{}) common.RequestOptions {

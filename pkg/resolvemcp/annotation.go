@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/bitechdev/ResolveSpec/pkg/common"
 )
 
 const annotationToolName = "resolvespec_annotate"
@@ -50,13 +52,42 @@ func registerAnnotationTool(h *Handler) {
 	})
 }
 
+// maxAnnotationKey caps tool_name so the key space cannot be abused as storage.
+const maxAnnotationKey = 200
+
+// annotationGate runs the BeforeHandle hooks for an annotation call and returns the hook
+// context. A hook error (e.g. authentication required) is returned to the caller.
+func annotationGate(ctx context.Context, h *Handler, operation, toolName string) (*HookContext, error) {
+	if len(toolName) > maxAnnotationKey {
+		return nil, fmt.Errorf("tool_name too long")
+	}
+	hookCtx := &HookContext{
+		Context:   ctx,
+		Handler:   h,
+		Entity:    toolName,
+		Operation: operation,
+		Tx:        h.db,
+	}
+	if err := h.hooks.Execute(BeforeHandle, hookCtx); err != nil {
+		return nil, err
+	}
+	return hookCtx, nil
+}
+
 func executeSetAnnotation(ctx context.Context, h *Handler, toolName string, annotations interface{}) (*mcp.CallToolResult, error) {
+	hookCtx, err := annotationGate(ctx, h, "annotate_set", toolName)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	jsonBytes, err := json.Marshal(annotations)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to marshal annotations: %v", err)), nil
 	}
 
-	_, err = h.db.Exec(ctx, "SELECT resolvespec_set_annotation($1, $2)", toolName, string(jsonBytes))
+	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {
+		_, err := tx.Exec(ctx, "SELECT resolvespec_set_annotation($1, $2)", toolName, string(jsonBytes))
+		return err
+	})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to set annotation: %v", err)), nil
 	}
@@ -69,8 +100,14 @@ func executeSetAnnotation(ctx context.Context, h *Handler, toolName string, anno
 }
 
 func executeGetAnnotation(ctx context.Context, h *Handler, toolName string) (*mcp.CallToolResult, error) {
+	hookCtx, err := annotationGate(ctx, h, "annotate_get", toolName)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	var rows []map[string]interface{}
-	err := h.db.Query(ctx, &rows, "SELECT resolvespec_get_annotation($1)", toolName)
+	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {
+		return tx.Query(ctx, &rows, "SELECT resolvespec_get_annotation($1)", toolName)
+	})
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get annotation: %v", err)), nil
 	}

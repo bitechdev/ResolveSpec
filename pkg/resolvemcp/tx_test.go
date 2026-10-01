@@ -297,6 +297,10 @@ func (stubProvider) GetColumnSecurity(context.Context, int, string, string) ([]s
 	return nil, nil
 }
 
+func (stubProvider) GetRowSecurity(context.Context, any, string, string) (security.RowSecurity, error) {
+	return security.RowSecurity{}, nil
+}
+
 func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
 	h, mock, ctx := newTxHarness(t)
 	list, err := security.NewSecurityList(stubProvider{})

@@ -114,25 +114,12 @@ func (h *Handler) mountOAuth2Routes(mux *http.ServeMux) {
 // context into the request context, making it available to BeforeHandle security hooks.
 // Unauthenticated requests receive 401 before reaching any MCP tool.
 func (h *Handler) AuthedSSEServer(securityList *security.SecurityList) http.Handler {
-	return security.NewAuthMiddleware(securityList)(h.SSEServer())
-}
-
-// OptionalAuthSSEServer wraps SSEServer with optional authentication middleware.
-// Unauthenticated requests continue as guest rather than returning 401.
-// Use together with RegisterSecurityHooks and per-model CanPublicRead/Write rules
-// to allow mixed public/private access.
-func (h *Handler) OptionalAuthSSEServer(securityList *security.SecurityList) http.Handler {
-	return security.NewOptionalAuthMiddleware(securityList)(h.SSEServer())
+	return Guard(securityList)(h.SSEServer())
 }
 
 // AuthedStreamableHTTPServer wraps StreamableHTTPServer with required authentication middleware.
 func (h *Handler) AuthedStreamableHTTPServer(securityList *security.SecurityList) http.Handler {
-	return security.NewAuthMiddleware(securityList)(h.StreamableHTTPServer())
-}
-
-// OptionalAuthStreamableHTTPServer wraps StreamableHTTPServer with optional authentication middleware.
-func (h *Handler) OptionalAuthStreamableHTTPServer(securityList *security.SecurityList) http.Handler {
-	return security.NewOptionalAuthMiddleware(securityList)(h.StreamableHTTPServer())
+	return Guard(securityList)(h.StreamableHTTPServer())
 }
 
 // --------------------------------------------------------------------------
@@ -242,23 +229,4 @@ func SetupMuxOAuth2Routes(muxRouter *mux.Router, auth *security.DatabaseAuthenti
 	muxRouter.Handle(cfg.CallbackPath,
 		OAuth2CallbackHandler(auth, cfg.ProviderName, cfg.AfterLoginRedirect, cookieOpts...),
 	).Methods(http.MethodGet)
-}
-
-// SetupMuxRoutesWithAuth mounts the MCP SSE endpoints on a Gorilla Mux router
-// with required authentication middleware applied.
-func SetupMuxRoutesWithAuth(muxRouter *mux.Router, handler *Handler, securityList *security.SecurityList) {
-	basePath := handler.config.BasePath
-	h := handler.AuthedSSEServer(securityList)
-
-	muxRouter.Handle(basePath+"/sse", h).Methods(http.MethodGet, http.MethodOptions)
-	muxRouter.Handle(basePath+"/message", h).Methods(http.MethodPost, http.MethodOptions)
-	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, h))
-}
-
-// SetupMuxStreamableHTTPRoutesWithAuth mounts the MCP streamable HTTP endpoint on a
-// Gorilla Mux router with required authentication middleware applied.
-func SetupMuxStreamableHTTPRoutesWithAuth(muxRouter *mux.Router, handler *Handler, securityList *security.SecurityList) {
-	basePath := handler.config.BasePath
-	h := handler.AuthedStreamableHTTPServer(securityList)
-	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, h))
 }

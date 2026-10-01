@@ -62,6 +62,15 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 		return security.ApplyRowSecurity(newSecurityContext(hookCtx), securityList)
 	})
 
+	// BeforeScan: row-level security on the row an update or delete targets. A row the user
+	// cannot see is "not found" and is never written.
+	handler.Hooks().Register(BeforeScan, func(hookCtx *HookContext) error {
+		if err := security.LoadSecurityRules(newSecurityContext(hookCtx), securityList); err != nil {
+			return err
+		}
+		return security.ApplyRowSecurity(newSecurityContext(hookCtx), securityList)
+	})
+
 	// AfterRead (1st): apply column-level security — mask/hide columns in the result.
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		return security.ApplyColumnSecurity(newSecurityContext(hookCtx), securityList)
@@ -70,6 +79,11 @@ func RegisterSecurityHooks(handler *Handler, securityList *security.SecurityList
 	// AfterRead (2nd): audit log.
 	handler.Hooks().Register(AfterRead, func(hookCtx *HookContext) error {
 		return security.LogDataAccess(newSecurityContext(hookCtx))
+	})
+
+	// BeforeCreate: enforce CanCreate rule.
+	handler.Hooks().Register(BeforeCreate, func(hookCtx *HookContext) error {
+		return security.CheckModelCreateAllowed(newSecurityContext(hookCtx))
 	})
 
 	// BeforeUpdate: enforce CanUpdate rule.

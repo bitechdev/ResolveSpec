@@ -1,6 +1,11 @@
 package resolvemcp
 
-import "context"
+import (
+	"context"
+
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/security"
+)
 
 type contextKey string
 
@@ -68,4 +73,19 @@ func withRequestData(ctx context.Context, schema, entity, tableName string, mode
 	ctx = WithModel(ctx, model)
 	ctx = WithModelPtr(ctx, modelPtr)
 	return ctx
+}
+
+// withModelRules puts the handler registry's rules for the model into the context, where the
+// security hooks look them up first. The handler registry is private, so without this the
+// hooks would not see rules set by RegisterModelWithRules / SetModelRules.
+func (h *Handler) withModelRules(ctx context.Context, schema, entity string) context.Context {
+	reg, ok := h.registry.(*modelregistry.DefaultModelRegistry)
+	if !ok {
+		return ctx
+	}
+	rules, err := reg.GetModelRules(buildModelName(schema, entity))
+	if err != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, security.ModelRulesKey, rules)
 }

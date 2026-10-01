@@ -441,6 +441,19 @@ func resolveModelRules(secCtx SecurityContext) (modelregistry.ModelRules, bool) 
 	return rules, true
 }
 
+// CheckModelCreateAllowed returns an error if CanCreate is false for the model. Rules are read
+// from context with a fallback to the model registry; an unregistered model is allowed.
+func CheckModelCreateAllowed(secCtx SecurityContext) error {
+	rules, ok := resolveModelRules(secCtx)
+	if !ok {
+		return nil // model not registered, allow by default
+	}
+	if !rules.CanCreate {
+		return fmt.Errorf("create not allowed for %s", secCtx.GetEntity())
+	}
+	return nil
+}
+
 // CheckModelUpdateAllowed is the public wrapper for checkModelUpdateAllowed.
 func CheckModelUpdateAllowed(secCtx SecurityContext) error {
 	return checkModelUpdateAllowed(secCtx)

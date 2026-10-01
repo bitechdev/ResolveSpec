@@ -12,7 +12,7 @@
 //	handler.RegisterModel("public", "users", &User{})
 //
 //	r := mux.NewRouter()
-//	resolvemcp.SetupMuxRoutes(r, handler)
+//	resolvemcp.SetupMuxRoutes(r, handler, securityList) // requires an authenticated caller
 package resolvemcp
 
 import (
@@ -28,6 +28,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/common/adapters/database"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
+	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
 // Config holds configuration for the resolvemcp handler.
@@ -39,6 +40,12 @@ type Config struct {
 	// BasePath is the URL path prefix where the MCP endpoints are mounted (e.g. "/mcp").
 	// If empty, the path is detected from each incoming request automatically.
 	BasePath string
+
+	// EnableAnnotations registers the resolvespec_annotate tool. Off by default: annotations
+	// are free text that agents read back, so enabling the tool opens a write channel into
+	// agent-visible text. When on, every call runs the BeforeHandle hooks (operation
+	// "annotate_set" / "annotate_get") and the writes run in a transaction with OnTxBegin.
+	EnableAnnotations bool
 }
 
 // NewHandlerWithGORM creates a Handler backed by a GORM database connection.
@@ -57,18 +64,29 @@ func NewHandlerWithDB(db common.Database, cfg Config) *Handler {
 }
 
 // SetupMuxRoutes mounts the MCP HTTP/SSE endpoints on the given Gorilla Mux router
-// using the base path from Config.BasePath (falls back to "/mcp" if empty).
+// using the base path from Config.BasePath, behind Guard(securityList).
 //
-// Two routes are registered:
+// Routes registered:
 //   - GET  {basePath}/sse     — SSE connection endpoint (client subscribes here)
 //   - POST {basePath}/message — JSON-RPC message endpoint (client sends requests here)
 //
-// To protect these routes with authentication, wrap the mux router or apply middleware
-// before calling SetupMuxRoutes.
-func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
-	basePath := handler.config.BasePath
-	h := handler.SSEServer()
+// Nothing is mounted (and an error is logged) when securityList has no provider.
+func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler, securityList *security.SecurityList) {
+	if !requireGuard("SetupMuxRoutes", securityList) {
+		return
+	}
+	mountMuxSSE(muxRouter, handler, handler.AuthedSSEServer(securityList))
+}
 
+// SetupMuxRoutesUnauthenticated is SetupMuxRoutes without the guard. Every caller reaches every
+// registered model, so use it only behind another trusted layer. A warning is logged.
+func SetupMuxRoutesUnauthenticated(muxRouter *mux.Router, handler *Handler) {
+	warnUnauthenticated("SetupMuxRoutesUnauthenticated")
+	mountMuxSSE(muxRouter, handler, handler.SSEServer())
+}
+
+func mountMuxSSE(muxRouter *mux.Router, handler *Handler, h http.Handler) {
+	basePath := handler.config.BasePath
 	muxRouter.Handle(basePath+"/sse", h).Methods("GET", "OPTIONS")
 	muxRouter.Handle(basePath+"/message", h).Methods("POST", "OPTIONS")
 
@@ -78,21 +96,32 @@ func SetupMuxRoutes(muxRouter *mux.Router, handler *Handler) {
 }
 
 // SetupBunRouterRoutes mounts the MCP HTTP/SSE endpoints on a bunrouter router
-// using the base path from Config.BasePath.
+// using the base path from Config.BasePath, behind Guard(securityList).
 //
-// Two routes are registered:
+// Routes registered:
 //   - GET  {basePath}/sse     — SSE connection endpoint
 //   - POST {basePath}/message — JSON-RPC message endpoint
-func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler) {
+func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler, securityList *security.SecurityList) {
+	if !requireGuard("SetupBunRouterRoutes", securityList) {
+		return
+	}
+	mountBunSSE(router, handler, handler.AuthedSSEServer(securityList))
+}
+
+// SetupBunRouterRoutesUnauthenticated is SetupBunRouterRoutes without the guard. A warning is logged.
+func SetupBunRouterRoutesUnauthenticated(router *bunrouter.Router, handler *Handler) {
+	warnUnauthenticated("SetupBunRouterRoutesUnauthenticated")
+	mountBunSSE(router, handler, handler.SSEServer())
+}
+
+func mountBunSSE(router *bunrouter.Router, handler *Handler, h http.Handler) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			logger.Error("panic in resolvemcp.SetupBunRouterRoutes: %v\n%s", rec, debug.Stack())
+			logger.Error("panic mounting resolvemcp bunrouter routes: %v\n%s", rec, debug.Stack())
 		}
 	}()
 
 	basePath := handler.config.BasePath
-	h := handler.SSEServer()
-
 	router.GET(basePath+"/sse", bunrouter.HTTPHandler(h))
 	logger.Info("Registered resolvemcp bunrouter route GET %s/sse", basePath)
 
@@ -100,45 +129,68 @@ func SetupBunRouterRoutes(router *bunrouter.Router, handler *Handler) {
 	logger.Info("Registered resolvemcp bunrouter route POST %s/message", basePath)
 }
 
-// NewSSEServer returns an http.Handler that serves MCP over SSE.
+// NewSSEServer returns an http.Handler that serves MCP over SSE behind Guard(securityList).
 // If Config.BasePath is set it is used directly; otherwise the base path is
 // detected from each incoming request (by stripping the "/sse" or "/message" suffix).
 //
-//	h := resolvemcp.NewSSEServer(handler)
+//	h := resolvemcp.NewSSEServer(handler, securityList)
 //	http.Handle("/api/mcp/", h)
-func NewSSEServer(handler *Handler) http.Handler {
-	return handler.SSEServer()
+func NewSSEServer(handler *Handler, securityList *security.SecurityList) http.Handler {
+	return handler.AuthedSSEServer(securityList)
 }
 
-// SetupMuxStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on the given Gorilla Mux router.
-// The streamable HTTP transport uses a single endpoint (Config.BasePath) for all communication:
-// POST for client→server messages, GET for server→client streaming.
+// SetupMuxStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on the given Gorilla Mux
+// router, behind Guard(securityList). The streamable HTTP transport uses a single endpoint
+// (Config.BasePath) for all communication: POST for client→server messages, GET for
+// server→client streaming.
 //
-// Example:
-//
-//	resolvemcp.SetupMuxStreamableHTTPRoutes(r, handler) // mounts at Config.BasePath
-func SetupMuxStreamableHTTPRoutes(muxRouter *mux.Router, handler *Handler) {
+// Nothing is mounted (and an error is logged) when securityList has no provider.
+func SetupMuxStreamableHTTPRoutes(muxRouter *mux.Router, handler *Handler, securityList *security.SecurityList) {
+	if !requireGuard("SetupMuxStreamableHTTPRoutes", securityList) {
+		return
+	}
 	basePath := handler.config.BasePath
-	h := handler.StreamableHTTPServer()
-	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, h))
+	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, handler.AuthedStreamableHTTPServer(securityList)))
 }
 
-// SetupBunRouterStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on a bunrouter router.
-// The streamable HTTP transport uses a single endpoint (Config.BasePath).
-func SetupBunRouterStreamableHTTPRoutes(router *bunrouter.Router, handler *Handler) {
+// SetupMuxStreamableHTTPRoutesUnauthenticated is SetupMuxStreamableHTTPRoutes without the guard.
+// A warning is logged.
+func SetupMuxStreamableHTTPRoutesUnauthenticated(muxRouter *mux.Router, handler *Handler) {
+	warnUnauthenticated("SetupMuxStreamableHTTPRoutesUnauthenticated")
 	basePath := handler.config.BasePath
-	h := handler.StreamableHTTPServer()
+	muxRouter.PathPrefix(basePath).Handler(http.StripPrefix(basePath, handler.StreamableHTTPServer()))
+}
+
+// SetupBunRouterStreamableHTTPRoutes mounts the MCP streamable HTTP endpoint on a bunrouter
+// router, behind Guard(securityList). The transport uses a single endpoint (Config.BasePath).
+func SetupBunRouterStreamableHTTPRoutes(router *bunrouter.Router, handler *Handler, securityList *security.SecurityList) {
+	if !requireGuard("SetupBunRouterStreamableHTTPRoutes", securityList) {
+		return
+	}
+	mountBunStreamable(router, handler, handler.AuthedStreamableHTTPServer(securityList))
+}
+
+// SetupBunRouterStreamableHTTPRoutesUnauthenticated is SetupBunRouterStreamableHTTPRoutes
+// without the guard. A warning is logged.
+func SetupBunRouterStreamableHTTPRoutesUnauthenticated(router *bunrouter.Router, handler *Handler) {
+	warnUnauthenticated("SetupBunRouterStreamableHTTPRoutesUnauthenticated")
+	mountBunStreamable(router, handler, handler.StreamableHTTPServer())
+}
+
+func mountBunStreamable(router *bunrouter.Router, handler *Handler, h http.Handler) {
+	basePath := handler.config.BasePath
 	router.GET(basePath, bunrouter.HTTPHandler(h))
 	router.POST(basePath, bunrouter.HTTPHandler(h))
 	router.DELETE(basePath, bunrouter.HTTPHandler(h))
 }
 
-// NewStreamableHTTPHandler returns an http.Handler that serves MCP over the streamable HTTP transport.
-// Mount it at the desired path; that path becomes the MCP endpoint.
+// NewStreamableHTTPHandler returns an http.Handler that serves MCP over the streamable HTTP
+// transport behind Guard(securityList). Mount it at the desired path; that path becomes the
+// MCP endpoint.
 //
-//	h := resolvemcp.NewStreamableHTTPHandler(handler)
+//	h := resolvemcp.NewStreamableHTTPHandler(handler, securityList)
 //	http.Handle("/mcp", h)
 //	engine.Any("/mcp", gin.WrapH(h))
-func NewStreamableHTTPHandler(handler *Handler) http.Handler {
-	return handler.StreamableHTTPServer()
+func NewStreamableHTTPHandler(handler *Handler, securityList *security.SecurityList) http.Handler {
+	return handler.AuthedStreamableHTTPServer(securityList)
 }

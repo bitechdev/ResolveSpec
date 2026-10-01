@@ -21,6 +21,11 @@ const (
 	BeforeCreate HookType = "before_create"
 	AfterCreate  HookType = "after_create"
 
+	// BeforeScan fires on update and delete, with hookCtx.Query set to the select that loads the
+	// target row. Hooks that narrow the query (row security) run here; a row the query does
+	// not return is reported as not found and never written.
+	BeforeScan HookType = "before_scan"
+
 	BeforeUpdate HookType = "before_update"
 	AfterUpdate  HookType = "after_update"
 

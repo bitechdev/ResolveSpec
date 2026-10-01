@@ -11,9 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/bitechdev/ResolveSpec/pkg/cache"
 	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
-	"golang.org/x/sync/singleflight"
 )
 
 // DatabaseKeyStoreOptions configures DatabaseKeyStore.

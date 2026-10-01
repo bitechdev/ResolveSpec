@@ -3,10 +3,11 @@ package providers
 import (
 	"context"
 	"fmt"
-	"github.com/bitechdev/ResolveSpec/pkg/security"
-	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 	"net/http"
 	"strings"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security"
+	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 
 // KeyStoreAuthenticator implements the Authenticator interface using a KeyStore.

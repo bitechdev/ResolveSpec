@@ -4,8 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 	"sync"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 
 // MemoryProvider is an in-memory implementation of AuthProvider for testing/examples

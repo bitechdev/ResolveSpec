@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+
 	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 

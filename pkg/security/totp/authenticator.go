@@ -3,8 +3,9 @@ package totp
 import (
 	"context"
 	"fmt"
-	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 	"net/http"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 
 // BaseAuthenticator is the subset of security.Authenticator that Authenticator wraps.

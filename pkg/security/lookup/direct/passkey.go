@@ -68,10 +68,9 @@ func (p *Passkey) Store(ctx context.Context, rec lookup.PasskeyCredentialRecord)
 }
 
 // Get implements lookup.PasskeyStore.
-func (p *Passkey) Get(ctx context.Context, credentialID string) (int, uint32, error) {
-	var userID int
+func (p *Passkey) Get(ctx context.Context, credentialID string) (userID int, signCount uint32, err error) {
 	var count int64
-	err := p.do(func(q Querier) error {
+	err = p.do(func(q Querier) error {
 		return p.From(lookup.EntityUserPasskeyCredentials).Cols(lookup.PasskeyUserID, lookup.PasskeySignCount).
 			Where(Eq(lookup.PasskeyCredentialID, credentialID)).QueryRow(ctx, q, &userID, &count)
 	})

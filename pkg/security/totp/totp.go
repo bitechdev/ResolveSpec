@@ -9,12 +9,13 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 	"hash"
 	"math"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 
 // AuthProvider defines interface for 2FA operations

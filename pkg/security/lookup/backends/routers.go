@@ -261,7 +261,7 @@ func (r *passkeyRouter) Store(ctx context.Context, rec lookup.PasskeyCredentialR
 	return st.Store(ctx, rec)
 }
 
-func (r *passkeyRouter) Get(ctx context.Context, credentialID string) (int, uint32, error) {
+func (r *passkeyRouter) Get(ctx context.Context, credentialID string) (userID int, signCount uint32, err error) {
 	st, err := pick[lookup.PasskeyStore](r.c, ctx, lookup.OpPasskeyGet, r.c.procs.PasskeyGetCredential, r.proc, r.direct)
 	if err != nil {
 		return 0, 0, err

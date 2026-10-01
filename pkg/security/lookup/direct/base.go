@@ -429,9 +429,9 @@ func (b *Base) Insert(e lookup.Entity) *Insert { return &Insert{b: b, e: e} }
 // Set adds assignments.
 func (i *Insert) Set(as ...Assignment) *Insert { i.sets = append(i.sets, as...); return i }
 
-func (i *Insert) colsAndArgs() ([]string, []any) {
-	cols := make([]string, len(i.sets))
-	args := make([]any, len(i.sets))
+func (i *Insert) colsAndArgs() (cols []string, args []any) {
+	cols = make([]string, len(i.sets))
+	args = make([]any, len(i.sets))
 	for n, a := range i.sets {
 		cols[n] = i.b.colName(a.Col)
 		args[n] = i.b.arg(a.Val)

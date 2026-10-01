@@ -159,11 +159,3 @@ func (ks *DatabaseKeyStore) validateKeyLoad(ctx context.Context, hash, cacheKey 
 func keystoreCacheKey(hash string) string {
 	return "keystore:validate:" + hash
 }
-
-// nullStringOr returns s.String if valid, otherwise the fallback.
-func nullStringOr(s sql.NullString, fallback string) string {
-	if s.Valid && s.String != "" {
-		return s.String
-	}
-	return fallback
-}

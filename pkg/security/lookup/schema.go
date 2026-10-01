@@ -22,7 +22,7 @@ const (
 	EntityUserSessions           Entity = "user_sessions"
 	EntityTokenBlacklist         Entity = "token_blacklist"
 	EntityUserTOTPBackupCodes    Entity = "user_totp_backup_codes"
-	EntityUserPasskeyCredentials Entity = "user_passkey_credentials"
+	EntityUserPasskeyCredentials Entity = "user_passkey_credentials" //nolint:gosec // table name, not a credential
 	EntityUserPasswordResets     Entity = "user_password_resets"
 	EntityOAuthClients           Entity = "oauth_clients"
 	EntityOAuthCodes             Entity = "oauth_codes"

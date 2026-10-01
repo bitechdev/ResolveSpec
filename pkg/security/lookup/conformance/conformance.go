@@ -499,7 +499,7 @@ func (s *suite) seed(t *testing.T, table string, cols []string, vals ...any) {
 		}
 		args[i] = v
 	}
-	q := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(ph, ", "))
+	q := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(cols, ", "), strings.Join(ph, ", ")) //nolint:gosec // test seeding with fixed table names
 	if _, err := s.DB.ExecContext(ctx, q, args...); err != nil {
 		t.Fatalf("seed %s: %v", table, err)
 	}
@@ -526,8 +526,8 @@ func (s *suite) policy(t *testing.T) {
 		t.Fatalf("column rules (user + group, exact table, active only): %d %v %+v", len(rules), err, rules)
 	}
 	paths := map[string]bool{}
-	for _, r := range rules {
-		paths[strings.Join(r.Path, ".")] = true
+	for i := range rules {
+		paths[strings.Join(rules[i].Path, ".")] = true
 	}
 	if !paths["email"] || !paths["profile.ssn"] {
 		t.Fatalf("paths: %v", paths)

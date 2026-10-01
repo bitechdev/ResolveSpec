@@ -38,7 +38,7 @@ func normalizeTimes(raw []byte) []byte {
 func fixTimes(m map[string]any) {
 	for k, v := range m {
 		s, ok := v.(string)
-		if !ok || !(strings.HasSuffix(k, "_at") || k == "expiry") {
+		if !ok || (!strings.HasSuffix(k, "_at") && k != "expiry") {
 			continue
 		}
 		if _, err := time.Parse(time.RFC3339Nano, s); err == nil {

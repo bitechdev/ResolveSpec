@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
 	"github.com/bitechdev/ResolveSpec/pkg/security/totp"
 )

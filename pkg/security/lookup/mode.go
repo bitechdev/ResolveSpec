@@ -44,7 +44,7 @@ const (
 	OpSession       Op = "session"
 	OpTouchSession  Op = "touch_session"
 	OpRefresh       Op = "refresh"
-	OpLoginAPIKey   Op = "login_api_key"
+	OpLoginAPIKey   Op = "login_api_key" //nolint:gosec // operation name, not a credential
 	OpJWTLogin      Op = "jwt_login"
 	OpJWTLogout     Op = "jwt_logout"
 	OpResetRequest  Op = "reset_request"
@@ -64,8 +64,8 @@ const (
 
 	OpOAuthGetOrCreateUser    Op = "oauth_get_or_create_user"
 	OpOAuthCreateSession      Op = "oauth_create_session"
-	OpOAuthGetRefreshToken    Op = "oauth_get_refresh_token"
-	OpOAuthUpdateRefreshToken Op = "oauth_update_refresh_token"
+	OpOAuthGetRefreshToken    Op = "oauth_get_refresh_token"    //nolint:gosec // operation name, not a credential
+	OpOAuthUpdateRefreshToken Op = "oauth_update_refresh_token" //nolint:gosec // operation name, not a credential
 	OpOAuthGetUser            Op = "oauth_get_user"
 
 	OpPasskeyStore         Op = "passkey_store"
@@ -74,7 +74,7 @@ const (
 	OpPasskeyList          Op = "passkey_list"
 	OpPasskeyDelete        Op = "passkey_delete"
 	OpPasskeyRename        Op = "passkey_rename"
-	OpPasskeyByUsername    Op = "passkey_by_username"
+	OpPasskeyByUsername    Op = "passkey_by_username" //nolint:gosec // operation name, not a credential
 	OpPasskeyLogin         Op = "passkey_login"
 
 	OpTOTPEnable             Op = "totp_enable"

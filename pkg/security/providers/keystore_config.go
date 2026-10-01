@@ -7,10 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/sectypes"
 )
 
 // ConfigKeyStore is an in-memory keystore backed by a static slice of UserKey values.

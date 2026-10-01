@@ -68,7 +68,7 @@ func (p *Passkey) Store(ctx context.Context, rec lookup.PasskeyCredentialRecord)
 }
 
 // Get implements lookup.PasskeyStore.
-func (p *Passkey) Get(ctx context.Context, credentialID string) (int, uint32, error) {
+func (p *Passkey) Get(ctx context.Context, credentialID string) (userID int, signCount uint32, err error) {
 	raw, err := decodeCredentialID(credentialID)
 	if err != nil {
 		return 0, 0, err

@@ -166,7 +166,7 @@ func TestLoginAPIKey(t *testing.T) {
 	insert("generic", "api", 1, nil)
 	insert("jwt", "jwt_secret", 1, nil)
 	insert("off", "api", 0, nil)
-	insert("old", "api", 1, time.Now().Add(-time.Hour))
+	insert("old", "api", 1, time.Now().UTC().Add(-time.Hour))
 
 	for _, k := range []string{"good", "generic"} {
 		resp, err := a.LoginAPIKey(ctx, k, map[string]any{"ip_address": "9.9.9.9"})

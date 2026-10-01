@@ -33,6 +33,8 @@ type Handler struct {
 	version    string
 	oauth2Regs []oauth2Registration
 	oauthSrv   *security.OAuthServer
+	functions  functionRegistry
+	confirms   *confirmStore
 }
 
 // NewHandler creates a Handler with the given database, model registry, and config.
@@ -43,9 +45,11 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		hooks:     NewHookRegistry(),
 		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0"),
 		config:    cfg.withDefaults(),
+		confirms:  newConfirmStore(),
 		name:      "resolvemcp",
 		version:   "1.0.0",
 	}
+	registerMetaTools(h)
 	if cfg.EnableAnnotations {
 		registerAnnotationTool(h)
 	}
@@ -165,13 +169,13 @@ func requestBaseURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// RegisterModel registers a model and immediately exposes it as MCP tools and a resource.
+// RegisterModel registers a model. It becomes visible to the fixed meta tools (list_tables,
+// select_table, ...); no per-model tools are created.
 func (h *Handler) RegisterModel(schema, entity string, model interface{}) error {
 	fullName := buildModelName(schema, entity)
 	if err := h.registry.RegisterModel(fullName, model); err != nil {
 		return err
 	}
-	registerModelTools(h, schema, entity, model)
 	return nil
 }
 
@@ -187,7 +191,6 @@ func (h *Handler) RegisterModelWithRules(schema, entity string, model interface{
 	if err := reg.RegisterModelWithRules(fullName, model, rules); err != nil {
 		return err
 	}
-	registerModelTools(h, schema, entity, model)
 	return nil
 }
 

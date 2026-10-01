@@ -627,3 +627,23 @@ func TestRawSQL(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// WHERE placeholders must be shifted past the SET parameters without rewriting numbers the
+// shift itself produced: "a = ? AND b = ?" must stay in order.
+func TestPgSQLUpdateQuery_WherePlaceholdersAfterSet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	mock.ExpectExec(`UPDATE users SET name = \$1 WHERE a = \$2 AND b = \$3 AND "id" IN \(\$4, \$5\)`).
+		WithArgs("n", 10, 20, 7, 8).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	adapter := NewPgSQLAdapter(db)
+	_, err = adapter.NewUpdate().Table("users").SetMap(map[string]interface{}{"name": "n"}).
+		Where("a = ? AND b = ?", 10, 20).
+		Where(`"id" IN (?, ?)`, 7, 8).
+		Exec(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

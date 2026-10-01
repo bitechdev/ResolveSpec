@@ -27,12 +27,13 @@ var allowedPoolHookTx = map[string]int{
 	"resolvespec/handler.go":   1,
 	"websocketspec/handler.go": 1,
 	"resolvemcp/handler.go":    4,
+	"resolvemcp/annotation.go": 1, // BeforeHandle context of the annotate tool
+	"resolvemcp/writewhere.go": 1, // BeforeHandle context of filter writes
+	"resolvemcp/functions.go":  1, // BeforeHandle context of call_function
 }
 
 // allowedPoolQuery: statements outside the request path.
-var allowedPoolQuery = map[string]int{
-	"resolvemcp/annotation.go": 2, // tool annotations, not a data request
-}
+var allowedPoolQuery = map[string]int{}
 
 func guardedFiles(t *testing.T) map[string][]string {
 	t.Helper()

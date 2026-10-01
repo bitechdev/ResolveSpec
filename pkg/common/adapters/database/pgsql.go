@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -767,6 +769,9 @@ func (p *PgSQLInsertQuery) Scan(ctx context.Context, dest interface{}) (err erro
 	return nil
 }
 
+// placeholderRe matches a numbered SQL parameter such as $12.
+var placeholderRe = regexp.MustCompile(`\$\d+`)
+
 // PgSQLUpdateQuery implements UpdateQuery for PostgreSQL
 type PgSQLUpdateQuery struct {
 	db             *sql.DB
@@ -897,23 +902,17 @@ func (p *PgSQLUpdateQuery) Exec(ctx context.Context) (res common.Result, err err
 		p.tableName,
 		strings.Join(setClauses, ", "))
 
-	// Update WHERE clause parameter numbers to continue after SET parameters
+	// WHERE placeholders were numbered from $1 as the clauses were added; shift every one past
+	// the SET parameters in a single pass (replacing one number at a time would rewrite a
+	// number it had just produced, e.g. "$1, $2" -> "$3, $2").
 	if len(p.whereClauses) > 0 {
+		shift := len(setArgs)
 		updatedWhereClauses := make([]string, 0, len(p.whereClauses))
 		for _, whereClause := range p.whereClauses {
-			// Find and replace parameter placeholders
-			updatedClause := whereClause
-			paramNum := i
-			// Count how many parameters are in this WHERE clause
-			placeholderCount := strings.Count(whereClause, "$")
-			for j := 0; j < placeholderCount; j++ {
-				oldParam := fmt.Sprintf("$%d", j+1)
-				newParam := fmt.Sprintf("$%d", paramNum)
-				updatedClause = strings.Replace(updatedClause, oldParam, newParam, 1)
-				paramNum++
-			}
-			updatedWhereClauses = append(updatedWhereClauses, updatedClause)
-			i = paramNum
+			updatedWhereClauses = append(updatedWhereClauses, placeholderRe.ReplaceAllStringFunc(whereClause, func(m string) string {
+				n, _ := strconv.Atoi(m[1:])
+				return fmt.Sprintf("$%d", n+shift)
+			}))
 		}
 		p.whereClauses = updatedWhereClauses
 	}

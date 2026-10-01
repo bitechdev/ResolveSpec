@@ -34,6 +34,12 @@ const (
 	BeforeDelete HookType = "before_delete"
 	AfterDelete  HookType = "after_delete"
 
+	// BeforeCall and AfterCall fire inside the transaction of a call_function call.
+	// hookCtx.Entity is the function name, Data the validated arguments (BeforeCall may
+	// replace them) and Result the function's result (AfterCall).
+	BeforeCall HookType = "before_call"
+	AfterCall  HookType = "after_call"
+
 	// OnTxBegin fires once, first, inside every transaction the handler opens
 	// (including the second short transaction for post-commit work). hookCtx.Tx is
 	// the transaction; use it to stamp transaction-local state such as RLS

@@ -28,6 +28,7 @@ All share the same core architecture and provide dynamic data querying, relation
 - [Testing](#testing)
 - [Additional Packages](#additional-packages)
 - [Security Considerations](#security-considerations)
+- [Breaking Changes](#breaking-changes)
 - [What's New](#whats-new)
 
 ## Features
@@ -729,6 +730,58 @@ For documentation, see [pkg/dbtrace/README.md](pkg/dbtrace/README.md).
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Breaking Changes
+
+Changes from 2026-09-30 to 2026-10-01 that require action when upgrading. The full `pkg/security` migration tables are in [pkg/security/breaking_changes.md](pkg/security/breaking_changes.md).
+
+### Security package (`pkg/security`)
+
+- **No SQL in `pkg/security`**: all database access moved to `pkg/security/lookup`. Removed `SQLNames`, `TableNames`, `KeyStoreSQLNames`, `KeyStoreTableNames`, `QueryMode` (`ModeAuto`/`ModeProcedure`/`ModeDirect`), `ErrDirectModeUnsupported` and the `SQLNames`/`TableNames`/`QueryMode` option fields and `WithQueryMode`/`WithTableNames` builders. Use `lookup.Config` (`Dialect`, `Mode`, `Overrides`, `Procs`, `Schema`) via the `Lookup` option field or `WithLookup`/`WithLookupProvider`. The variadic `names ...*SQLNames` argument was dropped from `NewJWTAuthenticator`, `NewDatabaseColumnSecurityProvider`, `NewDatabaseRowSecurityProvider` and `NewDatabaseTwoFactorProvider`.
+- **Default lookup mode is per dialect**: stored procedures on Postgres, direct SQL elsewhere. `ModeAuto` is opt-in.
+- **Packages moved (no aliases)**: TOTP types to `pkg/security/totp`; header, config key store and config column/row providers to `pkg/security/providers`.
+- **SQL schema files moved** from `pkg/security/` to `pkg/security/lookup/`.
+- **Password handling**: bcrypt is verified in Direct mode and in the shipped procedures; passwords are hashed on register and reset; client-supplied roles/level are ignored at registration; legacy cleartext passwords need an explicit opt-in to upgrade. Row security templates bind the user as a parameter, and a filter that cannot be attached now fails the request.
+- **OAuth2 / OIDC server**: existing databases need new columns (`oauth_clients.metadata`, `oauth_codes.extra`) and new tables (`oauth_consents`, `oauth_refresh_tokens`, `oauth_device_codes`, `oauth_par_requests`, `oauth_jti`); Postgres procedure mode needs the schema reapplied. `/oauth/introspect` and `/oauth/revoke` now require client authentication (`AllowAnonymousIntrospection` restores the old behaviour). Only PKCE `S256` is accepted. Authorization errors redirect to the client after `redirect_uri` validation.
+- **Row security** now applies to update and delete queries (skipped for inserts); hidden/masked columns are excluded from create and update payloads.
+
+### Request hardening (`pkg/common`)
+
+Enabled by default under the new `hardening` config section (`RESOLVESPEC_HARDENING_*`); each can be switched off to restore the old behaviour.
+
+- **`cors_strict_origins`**: only origins listed in `cors.allowed_origins` or the server URLs are reflected; `*` never sends credentials.
+- **`sort_strict`**: sort expressions and join aliases must be identifier-safe; dangerous functions and catalogs are rejected.
+- **`sql_strict`**: client raw-SQL fragments with unbalanced quotes/parens, comments, `;`, DML keywords or system catalogs are rejected, and a rejected fragment now fails closed (`1=0`) instead of dropping the filter.
+- **`x-custom-sql-or`** is grouped with the client's own conditions so it can no longer OR past server-side filters. `common.Database` query builders gain an optional `WhereGrouper` (implemented for bun and gorm).
+
+### ResolveMCP (`pkg/resolvemcp`)
+
+- **Authentication required**: `SetupMuxRoutes`, `SetupBunRouterRoutes`, `SetupMuxStreamableHTTPRoutes`, `SetupBunRouterStreamableHTTPRoutes`, `NewSSEServer` and `NewStreamableHTTPHandler` now take a `*security.SecurityList`. Use the `*Unauthenticated` variants to keep the old open behaviour.
+- **Per-model tools removed**: the `read_`/`create_`/`update_`/`delete_` tools and per-model resources are replaced by fixed meta tools: `list_tables`, `describe_table`, `select_table`, `insert_into_table`, `update_table`, `delete_from_table`, `list_functions`, `call_function`.
+- **Guarded writes**: filter-based update/delete require filters, are capped by `MaxWriteRows`, and need a single-use confirm token (or `dry_run`).
+- **Limits and errors**: reads are capped (`DefaultLimit`, `MaxLimit`, `MaxOffset`, `MaxBatch`, `MaxPreloadDepth`, `QueryTimeout`); the total `COUNT` is optional; errors reach clients as `{code, message}` only.
+- **Writes**: create checks `CanCreate`; create/update reject keys outside the model's writable columns; update sets only the given keys; the annotation tool is opt-in via `Config.EnableAnnotations`.
+
+### Update semantics
+
+- **`""` and `null` now overwrite** stored values on update in resolvespec and restheadspec (previously skipped). Use `Handler.SetDisallowNulls` to skip nulls.
+- **websocketspec / mqttspec** update only the keys present in the payload (`SetMap`) instead of writing the whole zeroed model.
+
+### Transactions and hooks
+
+- **One transaction per request** in every spec. Hooks must use `hookCtx.Tx`, not the pool; `BeforeHandle` runs before any transaction and must not touch the DB. `OnTxBegin` fires first in every transaction.
+- **`AfterDelete` failure now rolls the delete back.**
+- **Create/update re-fetch, `BeforeScan` and post-commit hooks** (`AfterCreate`, `AfterUpdate`, restheadspec `AfterRead`, funcspec `BeforeResponse`) run on a second, short transaction after the first commits.
+- **websocketspec / mqttspec / funcspec** begin or commit failures answer `transaction_error`.
+- **`BeforeDisconnect` / `AfterDisconnect`** hooks in websocketspec now fire on close.
+
+### Other
+
+- **Clients moved**: the JS and Python clients now live under `clients/`.
+- **Test server ports**: `8123` (testserver) and `8124` (PostgreSQL), previously `8080` and `5434`.
+- **pgsql**: subquery preload errors are returned instead of being logged and skipped; a `SET` plus multi-placeholder `WHERE` update previously renumbered `WHERE` parameters wrongly (fixed).
+- **Cache**: `Clear()` on the Redis and Memcache providers requires `AllowFlush`; a missing key returns `ErrNotFound`; Memcache keys are hashed and namespaced, so existing entries are not found.
+- **Config**: `NewManager` no longer replaces the global manager (use `SetConfigManager`); saved configs are written `0600`; `PathsConfig.Join` is confined to its base path.
 
 ## What's New
 

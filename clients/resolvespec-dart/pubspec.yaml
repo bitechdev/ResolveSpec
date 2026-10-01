@@ -1,6 +1,7 @@
 name: resolvespec
 description: Client for ResolveSpec (JSON body) and FunctionSpec endpoints.
 version: 0.1.0
+repository: https://git.warky.dev/wdevs/ResolveSpec
 publish_to: none
 
 environment:

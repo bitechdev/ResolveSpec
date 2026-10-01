@@ -1,6 +1,11 @@
 # pkg/security lookup sub package plan
 
-Status: plan only, no code changed. Related: `audit/mcp_plan.md` (work item 1, API key login).
+Status: implemented (steps 0-7). What shipped and every API change is recorded in `pkg/security/breaking_changes.md`;
+usage is documented in `pkg/security/README.md` ("Database access (lookup)"). This file is kept as the design record.
+Deviations from the plan below: only `totp` and `providers` were split out of `pkg/security` (no `oauth` package, the
+OAuth server and passkey provider stay in `security`), the `Database*` constructors stay in `security`, and
+`ddl/postgres.sql` is tables only and cannot be combined with the procedure schema.
+Related: `audit/mcp_plan.md` (work item 1, API key login).
 
 ## Problem
 

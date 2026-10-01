@@ -325,6 +325,32 @@ func (p *PgSQLSelectQuery) WhereOr(query string, args ...interface{}) common.Sel
 	return p
 }
 
+// WhereGroup wraps the conditions added by fn (Where = AND, WhereOr = OR) in one
+// parenthesised group ANDed with the rest of the query. Inside the group the
+// semantics match Bun: `w1 AND w2 OR o1 OR o2`.
+func (p *PgSQLSelectQuery) WhereGroup(fn func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	sub := &PgSQLSelectQuery{driverName: p.driverName, paramCounter: p.paramCounter, args: make([]interface{}, 0)}
+	res, ok := fn(sub).(*PgSQLSelectQuery)
+	if !ok {
+		res = sub
+	}
+	var group string
+	switch {
+	case len(res.whereClauses) > 0 && len(res.orClauses) > 0:
+		group = "(" + strings.Join(res.whereClauses, " AND ") + ") OR " + strings.Join(res.orClauses, " OR ")
+	case len(res.whereClauses) > 0:
+		group = strings.Join(res.whereClauses, " AND ")
+	case len(res.orClauses) > 0:
+		group = strings.Join(res.orClauses, " OR ")
+	default:
+		return p
+	}
+	p.whereClauses = append(p.whereClauses, "("+group+")")
+	p.args = append(p.args, res.args...)
+	p.paramCounter = res.paramCounter
+	return p
+}
+
 func (p *PgSQLSelectQuery) Join(query string, args ...interface{}) common.SelectQuery {
 	query = p.replacePlaceholders(query, len(args))
 	p.joins = append(p.joins, "JOIN "+query)

@@ -9,6 +9,7 @@
 | **Docs** | `README.md`, `SECURITY_FEATURES.md`, `QUICK_REFERENCE.md`, `OAUTH2.md`, `OAUTH2_REFRESH_*.md`, `PASSKEY_QUICK_REFERENCE.md`, `KEYSTORE.md` |
 | **Tests** | 6 359 lines across 13 `_test.go` files |
 | **Audit date** | 2026-09-29 |
+| **Note** | Point-in-time snapshot. File names and line numbers refer to the code as audited. Since then all SQL moved out of `pkg/security` into `pkg/security/lookup`: `providers_direct.go`, `sql_names.go`, `table_names.go`, `query_mode.go` and `password.go` are gone, `SQLNames` / `TableNames` / `QueryMode` became `lookup.Config`, and the SQL files moved to `pkg/security/lookup/`. See `pkg/security/breaking_changes.md` for the mapping. |
 | **Axes** | thread locking/waiting, slowness, security, panic handling & logging |
 | **Threat model** | hostile internet client; request bodies, headers, query params, schema/table/column names and filter expressions all attacker-controlled |
 | **Depth** | deep |

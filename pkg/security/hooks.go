@@ -147,6 +147,9 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 			secCtx.SetQuery(q.Where(whereClause, whereArgs...))
 		case common.DeleteQuery:
 			secCtx.SetQuery(q.Where(whereClause, whereArgs...))
+		case common.InsertQuery:
+			// Inserts read no existing rows, so there is nothing to filter.
+			logger.Debug("Row security filter not applicable to insert on %s.%s", schema, tablename)
 		default:
 			return fmt.Errorf("row security: query type %T on %s.%s does not support Where", secCtx.GetQuery(), schema, tablename)
 		}

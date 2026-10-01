@@ -435,19 +435,19 @@ func TestFilterRequestOptions_WithSortExpressions(t *testing.T) {
 
 	options := RequestOptions{
 		Sort: []SortOption{
-			{Column: "id", Direction: "ASC"},                                    // Valid column
-			{Column: "(SELECT MAX(age) FROM users)", Direction: "DESC"},         // Safe expression
-			{Column: "name", Direction: "ASC"},                                  // Valid column
-			{Column: "(id); DROP TABLE users; --", Direction: "DESC"},          // Dangerous expression
-			{Column: "invalid_col", Direction: "ASC"},                           // Invalid column
+			{Column: "id", Direction: "ASC"},                                     // Valid column
+			{Column: "(SELECT MAX(age) FROM users)", Direction: "DESC"},          // Safe expression
+			{Column: "name", Direction: "ASC"},                                   // Valid column
+			{Column: "(id); DROP TABLE users; --", Direction: "DESC"},            // Dangerous expression
+			{Column: "invalid_col", Direction: "ASC"},                            // Invalid column
 			{Column: "(CASE WHEN age > 18 THEN 1 ELSE 0 END)", Direction: "ASC"}, // Safe expression
 		},
 	}
 
 	filtered := validator.FilterRequestOptions(options)
 
-	// Should keep: id, safe expression, name, another safe expression
-	// Should remove: dangerous expression, invalid column
+	// Keeps: id, subquery expression, name, CASE expression
+	// Removes: dangerous expression, invalid column
 	expectedCount := 4
 	if len(filtered.Sort) != expectedCount {
 		t.Errorf("Expected %d sort options, got %d", expectedCount, len(filtered.Sort))
@@ -474,8 +474,8 @@ type RelatedModel struct {
 // PreloadParentModel has a has-one relation to RelatedModel. The json tag on
 // the relation field is the name used in x-preload headers.
 type PreloadParentModel struct {
-	ID      int64        `bun:"id,pk"`
-	Name    string       `bun:"name"`
+	ID      int64         `bun:"id,pk"`
+	Name    string        `bun:"name"`
 	RELATED *RelatedModel `json:"RELATED" bun:"rel:has-one,join:id=related_id"`
 }
 

@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -105,7 +106,7 @@ func (v *ColumnValidator) ValidateColumn(column string) error {
 	}
 
 	// Allow columns prefixed with "cql" (case insensitive) for computed columns
-	if strings.HasPrefix(strings.ToLower(column), "cql") {
+	if lc := strings.ToLower(column); strings.HasPrefix(lc, "cql") && (!Hardening().SortStrict || reCQLColumn.MatchString(lc)) {
 		return nil
 	}
 
@@ -275,8 +276,14 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 			validSorts = append(validSorts, sort)
 		} else {
 			foundJoin := false
+			strictSort := Hardening().SortStrict
 			for _, j := range options.JoinAliases {
-				if strings.Contains(sort.Column, j) {
+				if strictSort {
+					if isJoinAliasColumn(sort.Column, j) {
+						foundJoin = true
+						break
+					}
+				} else if strings.Contains(sort.Column, j) {
 					foundJoin = true
 					break
 				}
@@ -287,7 +294,7 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 			}
 			if strings.HasPrefix(sort.Column, "(") && strings.HasSuffix(sort.Column, ")") {
 				// Allow sort by expression/subquery, but validate for security
-				if IsSafeSortExpression(sort.Column) {
+				if IsSafeSortExpression(sort.Column) && (!strictSort || isSortExpressionRestricted(sort.Column)) {
 					validSorts = append(validSorts, sort)
 				} else {
 					logger.Warn("Unsafe sort expression '%s' removed", sort.Column)
@@ -374,6 +381,56 @@ func (v *ColumnValidator) FilterRequestOptions(options RequestOptions) RequestOp
 	filtered.JoinAliases = nil
 
 	return filtered
+}
+
+var reCQLColumn = regexp.MustCompile(`^cql[a-z0-9_]*$`)
+
+var (
+	reJoinColumnIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+// isJoinAliasColumn reports whether col is exactly "<alias>.<identifier>".
+// An empty alias never matches.
+func isJoinAliasColumn(col, alias string) bool {
+	if alias == "" || !strings.HasPrefix(col, alias+".") {
+		return false
+	}
+	return reJoinColumnIdent.MatchString(col[len(alias)+1:])
+}
+
+// isSortExpressionRestricted applies the hardened checks to a client sort
+// expression. Subqueries and ordinary functions are allowed; dangerous
+// functions/catalogs (pg_sleep, pg_*, dblink, ...) and unbalanced parentheses are
+// rejected. Subqueries are blocked only when hardening.sql_block_subqueries is on.
+func isSortExpressionRestricted(expr string) bool {
+	stripped, ok := stripSQLLiterals(expr)
+	if !ok {
+		return false
+	}
+	depth := 0
+	for i := 0; i < len(stripped); i++ {
+		switch stripped[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	if depth != 0 {
+		return false
+	}
+	if m := reStrictDangerousFunc.FindString(stripped); m != "" {
+		logger.Warn("Forbidden function '%s' in sort expression: %s", m, expr)
+		return false
+	}
+	if Hardening().SQLBlockSubqueries && reStrictSubquery.MatchString(stripped) {
+		logger.Warn("Subquery in sort expression rejected: %s", expr)
+		return false
+	}
+	return true
 }
 
 // IsSafeSortExpression validates that a sort expression (enclosed in brackets) is safe

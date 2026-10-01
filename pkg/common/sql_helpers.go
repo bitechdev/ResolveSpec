@@ -148,6 +148,93 @@ func validateWhereClauseSecurity(where string) error {
 	return nil
 }
 
+var (
+	reStrictDML = regexp.MustCompile(`(?i)\b(delete|update|truncate|drop|alter|create|insert|grant|revoke|exec|execute|copy|call|do|merge|vacuum|listen|notify|set|returning|into)\b`)
+	// reStrictSubquery is only enforced when hardening.sql_block_subqueries is on.
+	reStrictSubquery = regexp.MustCompile(`(?i)\b(select|union|lateral|with)\b`)
+	// reStrictDangerousFunc matches functions/schemas that enable DoS or data
+	// exfiltration through a WHERE fragment (sleep, file/large-object access,
+	// dblink, config access, catalogs).
+	reStrictDangerousFunc = regexp.MustCompile(`(?i)\b(pg_[a-z0-9_]*|lo_[a-z0-9_]*|dblink[a-z0-9_]*|set_config|current_setting|query_to_xml[a-z_]*|xpath[a-z_]*|generate_series|repeat|crypt|information_schema|sleep|benchmark)\b`)
+)
+
+// stripSQLLiterals blanks out single-quoted literals (honouring ”) and
+// double-quoted identifiers so structural checks only see SQL syntax.
+// ok is false when a quote is left unterminated.
+func stripSQLLiterals(s string) (out string, ok bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch != '\'' && ch != '"' {
+			b.WriteByte(ch)
+			continue
+		}
+		q := ch
+		closed := false
+		for i++; i < len(s); i++ {
+			if s[i] == q {
+				if i+1 < len(s) && s[i+1] == q { // escaped quote
+					i++
+					continue
+				}
+				closed = true
+				break
+			}
+		}
+		if !closed {
+			return "", false
+		}
+		b.WriteString("''")
+	}
+	return b.String(), true
+}
+
+// validateWhereClauseStrict is the hardened check for client raw-SQL fragments
+// (hardening.sql_strict). It inspects syntax outside string literals: quotes
+// and parentheses must be balanced, and comments, statement separators,
+// dollar-quoting, DML keywords, dangerous functions and system catalogs are
+// rejected. Subqueries and ordinary functions stay allowed unless
+// hardening.sql_block_subqueries is set. isJoin (custom joins) still gets all
+// checks except the subquery block, since joins legitimately use subqueries.
+func validateWhereClauseStrict(where string, isJoin bool) error {
+	stripped, ok := stripSQLLiterals(where)
+	if !ok {
+		return fmt.Errorf("unterminated quote")
+	}
+	for _, bad := range []string{"--", "/*", "*/", ";", "$$", "\\"} {
+		if strings.Contains(stripped, bad) {
+			return fmt.Errorf("forbidden token %q", bad)
+		}
+	}
+	depth := 0
+	for i := 0; i < len(stripped); i++ {
+		switch stripped[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("unbalanced parentheses")
+			}
+		}
+	}
+	if depth != 0 {
+		return fmt.Errorf("unbalanced parentheses")
+	}
+	if m := reStrictDML.FindString(stripped); m != "" {
+		return fmt.Errorf("forbidden keyword %q", strings.ToLower(m))
+	}
+	if m := reStrictDangerousFunc.FindString(stripped); m != "" {
+		return fmt.Errorf("forbidden function or schema %q", strings.ToLower(m))
+	}
+	if !isJoin && Hardening().SQLBlockSubqueries {
+		if m := reStrictSubquery.FindString(stripped); m != "" {
+			return fmt.Errorf("subqueries not allowed (%q)", strings.ToLower(m))
+		}
+	}
+	return nil
+}
+
 // SanitizeWhereClause removes trivial conditions and fixes incorrect table prefixes
 // This function should be used everywhere a WHERE statement is sent to ensure clean, efficient SQL
 //
@@ -174,7 +261,14 @@ func SanitizeWhereClause(where string, tableName string, options ...*RequestOpti
 	where = strings.TrimSpace(where)
 
 	// Validate that the WHERE clause doesn't contain dangerous SQL statements
-	if err := validateWhereClauseSecurity(where); err != nil {
+	if Hardening().SQLStrict {
+		// Strict mode: fail closed. A rejected client fragment must not turn into
+		// "no filter", so substitute a clause that matches no rows.
+		if err := validateWhereClauseStrict(where, tableName == ""); err != nil {
+			logger.Warn("Rejected client SQL fragment (%v): %s", err, where)
+			return "(1=0)"
+		}
+	} else if err := validateWhereClauseSecurity(where); err != nil {
 		logger.Debug("Security validation failed for WHERE clause: %v", err)
 		return ""
 	}

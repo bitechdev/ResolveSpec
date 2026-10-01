@@ -377,6 +377,16 @@ func (g *GormSelectQuery) WhereOr(query string, args ...interface{}) common.Sele
 	return g
 }
 
+// WhereGroup wraps the conditions added by fn in one parenthesised group ANDed with the rest.
+func (g *GormSelectQuery) WhereGroup(fn func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	inner := *g
+	inner.db = g.db.Session(&gorm.Session{NewDB: true})
+	if res, ok := fn(&inner).(*GormSelectQuery); ok {
+		g.db = g.db.Where(res.db)
+	}
+	return g
+}
+
 func (g *GormSelectQuery) Join(query string, args ...interface{}) common.SelectQuery {
 	// Extract optional prefix from args
 	// If the last arg is a string that looks like a table prefix, use it

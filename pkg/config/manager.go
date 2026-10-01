@@ -168,6 +168,7 @@ func (m *Manager) SetConfig(cfg *Config) error {
 	m.v.Set("event_broker", cfg.EventBroker)
 	m.v.Set("dbmanager", cfg.DBManager)
 	m.v.Set("db_trace", cfg.DBTrace)
+	m.v.Set("hardening", cfg.Hardening)
 	m.v.Set("paths", cfg.Paths)
 	m.v.Set("extensions", cfg.Extensions)
 
@@ -278,6 +279,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cors.allowed_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
 	v.SetDefault("cors.allowed_headers", []string{"*"})
 	v.SetDefault("cors.max_age", 3600)
+
+	// Security hardening defaults (on)
+	v.SetDefault("hardening.cors_strict_origins", true)
+	v.SetDefault("hardening.sort_strict", true)
+	v.SetDefault("hardening.sql_strict", true)
+	v.SetDefault("hardening.sql_block_subqueries", false)
 
 	// Database defaults
 	v.SetDefault("database.url", "")

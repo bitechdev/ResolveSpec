@@ -17,6 +17,7 @@ type Config struct {
 	EventBroker   EventBrokerConfig      `mapstructure:"event_broker"`
 	DBManager     DBManagerConfig        `mapstructure:"dbmanager"`
 	DBTrace       DBTraceConfig          `mapstructure:"db_trace"`
+	Hardening     HardeningConfig        `mapstructure:"hardening"`
 	Paths         PathsConfig            `mapstructure:"paths"`
 	Extensions    map[string]interface{} `mapstructure:"extensions"`
 }
@@ -141,6 +142,25 @@ type CORSConfig struct {
 	AllowedMethods []string `mapstructure:"allowed_methods"`
 	AllowedHeaders []string `mapstructure:"allowed_headers"`
 	MaxAge         int      `mapstructure:"max_age"`
+}
+
+// HardeningConfig toggles security hardening that may reject requests which
+// older clients relied on. All switches default to true; set one to false to
+// restore the previous (permissive) behaviour.
+// Env: RESOLVESPEC_HARDENING_CORS_STRICT_ORIGINS, _SORT_STRICT, _SQL_STRICT, _SQL_BLOCK_SUBQUERIES.
+type HardeningConfig struct {
+	// CORSStrictOrigins only reflects origins listed in cors.allowed_origins (and the
+	// server URLs); credentials are never sent for unlisted or wildcard origins.
+	CORSStrictOrigins bool `mapstructure:"cors_strict_origins"`
+	// SortStrict stops empty/substring join aliases from admitting arbitrary sort strings.
+	SortStrict bool `mapstructure:"sort_strict"`
+	// SQLStrict hardens client raw-SQL fragments (x-custom-sql-*, preload where, cursor):
+	// balanced parentheses, no subqueries/functions/comments, and rejection instead of
+	// silently dropping the filter.
+	SQLStrict bool `mapstructure:"sql_strict"`
+	// SQLBlockSubqueries additionally rejects subqueries (select/union/with) in client
+	// WHERE fragments (not custom joins). Off by default: existing clients use them.
+	SQLBlockSubqueries bool `mapstructure:"sql_block_subqueries"`
 }
 
 // DBTraceConfig controls database usage logging (off by default).

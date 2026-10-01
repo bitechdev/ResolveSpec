@@ -537,6 +537,19 @@ func (b *BunSelectQuery) WhereOr(query string, args ...interface{}) common.Selec
 	return b
 }
 
+// WhereGroup wraps the conditions added by fn in one parenthesised group ANDed with the rest.
+func (b *BunSelectQuery) WhereGroup(fn func(common.SelectQuery) common.SelectQuery) common.SelectQuery {
+	b.query = b.query.WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
+		inner := *b
+		inner.query = q
+		if res, ok := fn(&inner).(*BunSelectQuery); ok {
+			return res.query
+		}
+		return q
+	})
+	return b
+}
+
 func (b *BunSelectQuery) Join(query string, args ...interface{}) common.SelectQuery {
 	// Extract optional prefix from args
 	// If the last arg is a string that looks like a table prefix, use it

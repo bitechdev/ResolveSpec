@@ -319,3 +319,11 @@ type QueryHandler interface {
 	SpecHandler
 	// Methods are defined in funcspec package due to different function signature requirements
 }
+
+// WhereGrouper is implemented by query builders that can wrap a set of
+// conditions (including WhereOr) in one parenthesised group that is ANDed with
+// the rest of the query. It is optional so existing SelectQuery implementations
+// keep compiling.
+type WhereGrouper interface {
+	WhereGroup(fn func(SelectQuery) SelectQuery) SelectQuery
+}

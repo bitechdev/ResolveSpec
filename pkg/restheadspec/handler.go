@@ -646,77 +646,92 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			// This may need to be handled differently per database adapter
 		}
 
-		// Apply filters - validate and adjust for column types first
-		// Group consecutive OR filters together to prevent OR logic from escaping
-		for i := 0; i < len(options.Filters); {
-			filter := &options.Filters[i]
+		// Client-controlled conditions (filters + x-custom-sql-w) are built by a closure so they can
+		// be wrapped in a single group together with x-custom-sql-or: the OR then only widens the
+		// client's own conditions and can never escape the server-side filters ANDed around it.
+		applyUserConds := func(query common.SelectQuery) common.SelectQuery {
+			// Apply filters - validate and adjust for column types first
+			// Group consecutive OR filters together to prevent OR logic from escaping
+			for i := 0; i < len(options.Filters); {
+				filter := &options.Filters[i]
 
-			// Validate and adjust filter based on column type
-			castInfo := h.ValidateAndAdjustFilterForColumnType(filter, model)
+				// Validate and adjust filter based on column type
+				castInfo := h.ValidateAndAdjustFilterForColumnType(filter, model)
 
-			// Default to AND if LogicOperator is not set
-			logicOp := filter.LogicOperator
-			if logicOp == "" {
-				logicOp = "AND"
-			}
-
-			// Check if this is the start of an OR group
-			if logicOp == "OR" {
-				// Collect all consecutive OR filters
-				orFilters := []*common.FilterOption{filter}
-				orCastInfo := []ColumnCastInfo{castInfo}
-
-				j := i + 1
-				for j < len(options.Filters) {
-					nextFilter := &options.Filters[j]
-					nextLogicOp := nextFilter.LogicOperator
-					if nextLogicOp == "" {
-						nextLogicOp = "AND"
-					}
-					if nextLogicOp == "OR" {
-						nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
-						orFilters = append(orFilters, nextFilter)
-						orCastInfo = append(orCastInfo, nextCastInfo)
-						j++
-					} else {
-						break
-					}
+				// Default to AND if LogicOperator is not set
+				logicOp := filter.LogicOperator
+				if logicOp == "" {
+					logicOp = "AND"
 				}
 
-				// Apply the OR group as a single grouped condition
-				logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
-				query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName, model)
-				i = j
-			} else {
-				// Single AND filter - apply normally
-				logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
-				query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp, model)
-				i++
+				// Check if this is the start of an OR group
+				if logicOp == "OR" {
+					// Collect all consecutive OR filters
+					orFilters := []*common.FilterOption{filter}
+					orCastInfo := []ColumnCastInfo{castInfo}
+
+					j := i + 1
+					for j < len(options.Filters) {
+						nextFilter := &options.Filters[j]
+						nextLogicOp := nextFilter.LogicOperator
+						if nextLogicOp == "" {
+							nextLogicOp = "AND"
+						}
+						if nextLogicOp == "OR" {
+							nextCastInfo := h.ValidateAndAdjustFilterForColumnType(nextFilter, model)
+							orFilters = append(orFilters, nextFilter)
+							orCastInfo = append(orCastInfo, nextCastInfo)
+							j++
+						} else {
+							break
+						}
+					}
+
+					// Apply the OR group as a single grouped condition
+					logger.Debug("Applying OR filter group with %d conditions", len(orFilters))
+					query = h.applyOrFilterGroup(query, orFilters, orCastInfo, tableName, model)
+					i = j
+				} else {
+					// Single AND filter - apply normally
+					logger.Debug("Applying filter: %s %s %v (needsCast=%v, logic=%s)", filter.Column, filter.Operator, filter.Value, castInfo.NeedsCast, logicOp)
+					query = h.applyFilter(query, *filter, tableName, castInfo.NeedsCast, logicOp, model)
+					i++
+				}
 			}
+
+			// Apply custom SQL WHERE clause (AND condition)
+			if options.CustomSQLWhere != "" {
+				logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
+				// First add table prefixes to unqualified columns (but skip columns inside function calls)
+				prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
+				// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
+				sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+				// Ensure outer parentheses to prevent OR logic from escaping
+				sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
+				if sanitizedWhere != "" {
+					query = query.Where(sanitizedWhere)
+				}
+			}
+
+			return query
 		}
 
-		// Apply custom SQL WHERE clause (AND condition)
-		if options.CustomSQLWhere != "" {
-			logger.Debug("Applying custom SQL WHERE: %s", options.CustomSQLWhere)
-			// First add table prefixes to unqualified columns (but skip columns inside function calls)
-			prefixedWhere := common.AddTablePrefixToColumns(options.CustomSQLWhere, reflection.ExtractTableNameOnly(tableName))
-			// Then sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-			sanitizedWhere := common.SanitizeWhereClause(prefixedWhere, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
-			// Ensure outer parentheses to prevent OR logic from escaping
-			sanitizedWhere = common.EnsureOuterParentheses(sanitizedWhere)
-			if sanitizedWhere != "" {
-				query = query.Where(sanitizedWhere)
-			}
-		}
-
-		// Apply custom SQL WHERE clause (OR condition)
+		sanitizedOr := ""
 		if options.CustomSQLOr != "" {
 			logger.Debug("Applying custom SQL OR: %s", options.CustomSQLOr)
 			customOr := common.AddTablePrefixToColumns(options.CustomSQLOr, reflection.ExtractTableNameOnly(tableName))
 			// Sanitize and allow preload table prefixes since custom SQL may reference multiple tables
-			sanitizedOr := common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
+			sanitizedOr = common.SanitizeWhereClause(customOr, reflection.ExtractTableNameOnly(tableName), &options.RequestOptions)
 			// Ensure outer parentheses to prevent OR logic from escaping
 			sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
+		}
+
+		if grouper, ok := query.(common.WhereGrouper); ok && sanitizedOr != "" && common.Hardening().SQLStrict {
+			query = grouper.WhereGroup(func(q common.SelectQuery) common.SelectQuery {
+				return applyUserConds(q).WhereOr(sanitizedOr)
+			})
+		} else {
+			query = applyUserConds(query)
 			if sanitizedOr != "" {
 				query = query.WhereOr(sanitizedOr)
 			}

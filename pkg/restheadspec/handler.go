@@ -241,9 +241,11 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 			h.sendError(w, http.StatusBadRequest, "invalid_request", "Invalid request body", err)
 			return
 		}
-		validId, _ := strconv.ParseInt(id, 10, 64)
+		// A URL id is valid when it is a positive integer or any non-numeric
+		// string (string primary keys); "", "0" and negatives mean no id.
+		validId, parseErr := strconv.ParseInt(id, 10, 64)
 		updateID := id
-		isUpdate := validId > 0
+		isUpdate := id != "" && (parseErr != nil || validId > 0)
 		if !isUpdate {
 			// No valid /:id in the URL - check whether the body itself carries
 			// a valid primary key value and treat this as an update if so.

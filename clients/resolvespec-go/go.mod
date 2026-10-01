@@ -1,3 +1,3 @@
-module github.com/bitechdev/ResolveSpec/clients/resolvespec-go
+module git.warky.dev/wdevs/ResolveSpec/clients/resolvespec-go
 
 go 1.22

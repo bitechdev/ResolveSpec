@@ -9,9 +9,9 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version: "1.24"
       - name: Run unit tests
@@ -22,7 +22,7 @@ jobs:
           go test ./pkg/resolvespec ./pkg/restheadspec -coverprofile=coverage.out
           go tool cover -html=coverage.out -o coverage.html
       - name: Upload coverage
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v3
         continue-on-error: true
         with:
           name: coverage-report
@@ -31,9 +31,9 @@ jobs:
     name: Race Detector
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version: "1.24"
       - name: Run unit tests with the race detector
@@ -56,9 +56,9 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version: "1.24"
       - name: Create test databases
@@ -86,16 +86,16 @@ jobs:
           go tool cover -html=coverage-restheadspec-integration.out -o coverage-restheadspec-integration.html
           
       - name: Upload resolvespec integration coverage
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v3
         continue-on-error: true
         with:
           name: resolvespec-integration-coverage-report
           path: coverage-resolvespec-integration.html
 
       - name: Upload restheadspec integration coverage
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v3
         continue-on-error: true
         
         with:
           name: integration-coverage-restheadspec-report
-          path: coverage-restheadspec-integration
+          path: coverage-restheadspec-integration.html

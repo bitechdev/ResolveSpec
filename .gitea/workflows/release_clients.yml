@@ -1,0 +1,264 @@
+name: Release Clients
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Client version (e.g. 1.4.0)"
+        required: true
+        type: string
+      publish:
+        description: "Publish packages to Gitea (untick for a build/test dry run)"
+        required: true
+        default: true
+        type: boolean
+
+env:
+  VERSION_INPUT: ${{ github.event.inputs.version }}
+  PUBLISH: ${{ github.event.inputs.publish }}
+  SERVER_URL: ${{ github.server_url }}
+  OWNER: ${{ github.repository_owner }}
+  REGISTRY_USER: ${{ secrets.PACKAGE_REGISTRY_USERNAME || vars.PACKAGE_REGISTRY_USERNAME }}
+  TOKEN: ${{ secrets.PACKAGE_REGISTRY_TOKEN || vars.PACKAGE_REGISTRY_TOKEN }}
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          version="${VERSION_INPUT#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $VERSION_INPUT" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  js:
+    name: JS (npm)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-js
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
+
+      - name: Set version
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        run: |
+          host="${SERVER_URL#*://}"
+          registry="${SERVER_URL}/api/packages/${OWNER}/npm/"
+          npm config set "@warkypublic:registry" "$registry"
+          npm config set "//${host}/api/packages/${OWNER}/npm/:_authToken" "$TOKEN"
+          npm publish --registry "$registry"
+
+  python:
+    name: Python (PyPI)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-python
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[dev]" build twine
+
+      - name: Test
+        run: pytest
+
+      - name: Set version
+        run: sed -i -E "s/^version = \".*\"/version = \"${VERSION}\"/" pyproject.toml
+
+      - name: Build
+        run: python -m build
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        run: |
+          twine upload \
+            --repository-url "${SERVER_URL}/api/packages/${OWNER}/pypi" \
+            -u "$REGISTRY_USER" -p "$TOKEN" \
+            dist/*
+
+  rust:
+    name: Rust (Cargo)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-rs
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Test
+        run: cargo test
+
+      - name: Set version
+        run: sed -i -E '0,/^version = ".*"/s//version = "'"${VERSION}"'"/' Cargo.toml
+
+      - name: Package
+        run: cargo package --allow-dirty
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          CARGO_REGISTRIES_GITEA_INDEX: sparse+${{ github.server_url }}/api/packages/${{ github.repository_owner }}/cargo/
+        run: |
+          export CARGO_REGISTRIES_GITEA_TOKEN="Bearer ${TOKEN}"
+          cargo publish --registry gitea --allow-dirty
+
+  dotnet:
+    name: C# (NuGet)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-cs
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test
+        run: dotnet test tests/ResolveSpec.Tests.csproj
+
+      - name: Pack
+        run: dotnet pack src/ResolveSpec.csproj -c Release -p:Version="$VERSION" -o out
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        run: |
+          dotnet nuget push out/*.nupkg \
+            --source "${SERVER_URL}/api/packages/${OWNER}/nuget/index.json" \
+            --api-key "$TOKEN" \
+            --skip-duplicate
+
+  go:
+    name: Go (Go registry)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-go
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: clients/resolvespec-go/go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build module zip
+        run: |
+          python3 - <<'PY'
+          import os, re, zipfile
+          version = "v" + os.environ["VERSION"]
+          module = re.search(r"^module\s+(\S+)", open("go.mod").read(), re.M).group(1)
+          prefix = f"{module}@{version}/"
+          with zipfile.ZipFile("../resolvespec-go.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              for root, dirs, files in os.walk("."):
+                  dirs[:] = [d for d in dirs if d != ".git"]
+                  for f in files:
+                      path = os.path.join(root, f)
+                      z.write(path, prefix + os.path.relpath(path, "."))
+          PY
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        run: |
+          curl -f -X PUT \
+            --user "${REGISTRY_USER}:${TOKEN}" \
+            --upload-file ../resolvespec-go.zip \
+            "${SERVER_URL}/api/packages/${OWNER}/go/upload"
+
+  dart:
+    name: Dart (Pub)
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: clients/resolvespec-dart
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Install
+        run: dart pub get
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Test
+        run: dart test
+
+      - name: Set version and registry
+        run: |
+          sed -i -E "s/^version: .*/version: ${VERSION}/" pubspec.yaml
+          sed -i -E "s#^publish_to: .*#publish_to: ${SERVER_URL}/api/packages/${OWNER}/pub#" pubspec.yaml
+
+      - name: Dry run
+        if: ${{ env.PUBLISH != 'true' }}
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        if: ${{ env.PUBLISH == 'true' }}
+        run: |
+          dart pub token add "${SERVER_URL}/api/packages/${OWNER}/pub" --env-var TOKEN
+          dart pub publish --force

@@ -1539,6 +1539,10 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	// Variable to store the updated record
 	var updatedRecord interface{}
 
+	// ID used to re-fetch the record after the update; differs from targetID
+	// when the request changes the primary key.
+	finalID := targetID
+
 	// Hook context used inside and outside transaction
 	hookCtx := &HookContext{
 		Context:   ctx,
@@ -1604,11 +1608,25 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 			nestedRelations = relations
 		}
 
+		// Capture a changed primary key from the request before merging. The row is
+		// located by the original targetID (WHERE), while the new value is written via SET.
+		// Only honoured when an ID was given in the URL (id != "").
+		var newPK interface{}
+		var pkChanged bool
+		if id != "" {
+			newPK, pkChanged = h.requestedPrimaryKey(model, pkName, dataMap, targetID)
+		}
+
 		// Overwrite with every key present in the request (including "" and null unless disallowed)
 		common.MergeUpdateValues(existingMap, dataMap, h.disallowNulls)
 
-		// Ensure ID is in the data map for the update
-		existingMap[pkName] = targetID
+		// Ensure ID is in the data map for the update (new value if the PK is being changed)
+		if pkChanged {
+			existingMap[pkName] = newPK
+			finalID = newPK
+		} else {
+			existingMap[pkName] = targetID
+		}
 		dataMap = existingMap
 
 		// Populate model instance from dataMap to preserve custom types (like SqlJSONB)
@@ -1651,6 +1669,20 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		}
 
 		_ = result
+
+		// Primary key changes are not part of the struct SET, so apply them explicitly.
+		if pkChanged {
+			pkResult, err := tx.NewUpdate().Table(tableName).
+				Set(pkName, newPK).
+				Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID).
+				Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to update primary key: %w", err)
+			}
+			if pkResult.RowsAffected() == 0 {
+				return fmt.Errorf("primary key update affected no rows for ID: %v", targetID)
+			}
+		}
 		return nil
 	})
 
@@ -1667,7 +1699,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 	var errCode, errMsg string
 	err = h.runInTx(ctx, hookCtx, func(tx common.Database) error {
 		fetchedRecord := reflect.New(reflect.TypeOf(model)).Interface()
-		selectQuery := tx.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
+		selectQuery := tx.NewSelect().Model(fetchedRecord).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), finalID)
 
 		// Execute BeforeScan hooks so row security is re-applied to the post-update
 		// re-fetch, same as it is for the initial read and the update query itself.
@@ -1711,13 +1743,35 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 		return
 	}
 
-	logger.Info("Successfully updated record with ID: %v", targetID)
+	logger.Info("Successfully updated record with ID: %v", finalID)
 	// Invalidate cache for this table
 	cacheTags := buildCacheTags(schema, tableName)
 	if err := invalidateCacheForTags(ctx, cacheTags); err != nil {
 		logger.Warn("Failed to invalidate cache for table %s: %v", tableName, err)
 	}
 	h.sendResponseWithOptions(w, mergedData, nil, &options)
+}
+
+// requestedPrimaryKey returns the primary key value carried in the request body
+// (by column name or JSON key) when it differs from the current target ID.
+func (h *Handler) requestedPrimaryKey(model interface{}, pkName string, dataMap map[string]interface{}, targetID interface{}) (interface{}, bool) {
+	val, exists := dataMap[pkName]
+	if !exists {
+		modelType := reflection.GetPointerElement(reflect.TypeOf(model))
+		for jsonKey, col := range reflection.BuildJSONToDBColumnMap(modelType) {
+			if col == pkName {
+				val, exists = dataMap[jsonKey]
+				break
+			}
+		}
+	}
+	if !exists || val == nil || reflection.IsEmptyValue(val) {
+		return nil, false
+	}
+	if fmt.Sprintf("%v", val) == fmt.Sprintf("%v", targetID) {
+		return nil, false
+	}
+	return val, true
 }
 
 func (h *Handler) handleDelete(ctx context.Context, w common.ResponseWriter, id string, data interface{}) {

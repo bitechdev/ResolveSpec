@@ -1244,6 +1244,16 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 			return
 		}
 
+		// A primary key change is only honoured when the ID was given in the URL and
+		// the body carries a different, non-null primary key value.
+		var newPK interface{}
+		pkChanged := false
+		if urlID != "" {
+			if v, ok := updates[pkName]; ok && v != nil && !reflection.IsEmptyValue(v) && fmt.Sprintf("%v", v) != urlID {
+				newPK, pkChanged = v, true
+			}
+		}
+
 		// Wrap in transaction to ensure BeforeUpdate hook is inside transaction
 		err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			// Execute BeforeUpdate hooks inside transaction, before any queries run.
@@ -1337,6 +1347,14 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 				return fmt.Errorf("no records found to update")
 			}
 
+			// SetMap skips primary key columns, so apply a PK change explicitly.
+			if pkChanged {
+				if _, err := tx.NewUpdate().Table(tableName).Set(pkName, newPK).
+					Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID).Exec(ctx); err != nil {
+					return fmt.Errorf("error updating primary key: %w", err)
+				}
+			}
+
 			// Execute AfterUpdate hooks inside transaction
 			hookCtx.Result = updates
 			hookCtx.Error = nil
@@ -1362,7 +1380,9 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 		updatedRecord := reflect.New(reflection.GetPointerElement(reflect.TypeOf(model))).Interface()
 		if err := h.runInTx(ctx, h.newTxHookContext(ctx, schema, entity, model, "update", options, w), func(tx common.Database) error {
 			fetchQuery := tx.NewSelect().Model(updatedRecord).Column(reflection.GetSQLModelColumns(model)...)
-			if urlID != "" {
+			if pkChanged {
+				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), newPK)
+			} else if urlID != "" {
 				fetchQuery = fetchQuery.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), urlID)
 			} else if reqID != nil {
 				switch id := reqID.(type) {

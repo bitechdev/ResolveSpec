@@ -140,11 +140,16 @@ func applyRowSecurity(secCtx SecurityContext, securityList *SecurityList) error 
 
 		// A filter that cannot be attached must fail the request; silently
 		// skipping it would expose every row.
-		selectQuery, ok := secCtx.GetQuery().(common.SelectQuery)
-		if !ok {
+		switch q := secCtx.GetQuery().(type) {
+		case common.SelectQuery:
+			secCtx.SetQuery(q.Where(whereClause, whereArgs...))
+		case common.UpdateQuery:
+			secCtx.SetQuery(q.Where(whereClause, whereArgs...))
+		case common.DeleteQuery:
+			secCtx.SetQuery(q.Where(whereClause, whereArgs...))
+		default:
 			return fmt.Errorf("row security: query type %T on %s.%s does not support Where", secCtx.GetQuery(), schema, tablename)
 		}
-		secCtx.SetQuery(selectQuery.Where(whereClause, whereArgs...))
 	}
 
 	return nil

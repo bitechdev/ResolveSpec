@@ -214,6 +214,32 @@ func (q *recordingQuery) Where(query string, args ...interface{}) common.SelectQ
 	return q
 }
 
+// recordingUpdateQuery is a common.UpdateQuery that records Where calls.
+type recordingUpdateQuery struct {
+	common.UpdateQuery
+	clauses []string
+	args    [][]any
+}
+
+func (q *recordingUpdateQuery) Where(query string, args ...interface{}) common.UpdateQuery {
+	q.clauses = append(q.clauses, query)
+	q.args = append(q.args, args)
+	return q
+}
+
+// recordingDeleteQuery is a common.DeleteQuery that records Where calls.
+type recordingDeleteQuery struct {
+	common.DeleteQuery
+	clauses []string
+	args    [][]any
+}
+
+func (q *recordingDeleteQuery) Where(query string, args ...interface{}) common.DeleteQuery {
+	q.clauses = append(q.clauses, query)
+	q.args = append(q.args, args)
+	return q
+}
+
 // Test applyRowSecurity
 func TestApplyRowSecurity(t *testing.T) {
 	type TestModel struct {
@@ -275,6 +301,33 @@ func TestApplyRowSecurity(t *testing.T) {
 		}
 		if err := ApplyRowSecurity(secCtx, secList); err == nil {
 			t.Fatal("expected an error when the query does not support Where")
+		}
+	})
+
+	t.Run("filter is attached to update and delete queries", func(t *testing.T) {
+		provider := &mockSecurityProvider{rowSecurity: RowSecurity{
+			Schema: "public", Tablename: "orders", Template: "user_id = {UserID}", UserID: 1,
+		}}
+		secList, _ := NewSecurityList(provider)
+		ctx := context.Background()
+		_, _ = secList.LoadRowSecurity(ctx, 1, "public", "orders", false)
+
+		uq := &recordingUpdateQuery{}
+		dq := &recordingDeleteQuery{}
+		for name, q := range map[string]interface{}{"update": uq, "delete": dq} {
+			secCtx := &mockSecurityContext{
+				ctx: ctx, userID: 1, hasUser: true, schema: "public", entity: "orders",
+				model: &TestModel{}, query: q,
+			}
+			if err := ApplyRowSecurity(secCtx, secList); err != nil {
+				t.Fatalf("%s: expected no error, got %v", name, err)
+			}
+		}
+		if len(uq.clauses) != 1 || uq.clauses[0] != "user_id = ?" || uq.args[0][0] != 1 {
+			t.Fatalf("update: filter not attached correctly: %v %v", uq.clauses, uq.args)
+		}
+		if len(dq.clauses) != 1 || dq.clauses[0] != "user_id = ?" || dq.args[0][0] != 1 {
+			t.Fatalf("delete: filter not attached correctly: %v %v", dq.clauses, dq.args)
 		}
 	})
 

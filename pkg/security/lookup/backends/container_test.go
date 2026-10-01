@@ -139,3 +139,18 @@ func TestConformancePostgresContainer(t *testing.T) {
 		runOnServer(t, "pgx", dsn("cf_direct"), "postgres", lookup.Config{Mode: lookup.ModeDirect}, true)
 	})
 }
+
+func TestConformanceMSSQLContainer(t *testing.T) {
+	rt := containerRuntime(t)
+	port := startContainer(t, rt, "mcr.microsoft.com/mssql/server:2022-latest", "1433", map[string]string{
+		"ACCEPT_EULA": "Y", "MSSQL_SA_PASSWORD": containerPassword,
+	})
+	dsn := func(db string) string {
+		return fmt.Sprintf("sqlserver://sa:%s@127.0.0.1:%s?database=%s&encrypt=disable", containerPassword, port, db)
+	}
+	admin := waitReady(t, "sqlserver", dsn("master"), 3*time.Minute)
+	if _, err := admin.Exec("CREATE DATABASE cf_direct"); err != nil {
+		t.Fatal(err)
+	}
+	runOnServer(t, "sqlserver", dsn("cf_direct"), "mssql", lookup.Config{}, true)
+}

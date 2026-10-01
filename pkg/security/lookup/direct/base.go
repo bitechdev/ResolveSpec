@@ -102,6 +102,17 @@ func (b *Base) arg(v any) any {
 	if bv, ok := v.(bool); ok {
 		return b.d.Bool(bv)
 	}
+	// Timestamp columns carry no zone: bind every instant as UTC so drivers that send an
+	// offset (SQL Server) and ones that drop it agree on the stored wall clock.
+	if tv, ok := v.(time.Time); ok {
+		return tv.UTC()
+	}
+	if tp, ok := v.(*time.Time); ok {
+		if tp == nil {
+			return nil
+		}
+		return tp.UTC()
+	}
 	return v
 }
 

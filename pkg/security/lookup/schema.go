@@ -26,6 +26,11 @@ const (
 	EntityUserPasswordResets     Entity = "user_password_resets"
 	EntityOAuthClients           Entity = "oauth_clients"
 	EntityOAuthCodes             Entity = "oauth_codes"
+	EntityOAuthConsents          Entity = "oauth_consents"
+	EntityOAuthRefreshTokens     Entity = "oauth_refresh_tokens" //nolint:gosec // table name, not a credential
+	EntityOAuthDeviceCodes       Entity = "oauth_device_codes"
+	EntityOAuthPARRequests       Entity = "oauth_par_requests"
+	EntityOAuthJTI               Entity = "oauth_jti"
 	EntityUserKeys               Entity = "user_keys"
 	EntitySecGroupMembers        Entity = "sec_group_members"
 	EntitySecColumnRules         Entity = "sec_column_rules"
@@ -121,6 +126,7 @@ var (
 	OAuthClientsClientSecretHash        = col(EntityOAuthClients, "client_secret_hash")
 	OAuthClientsTokenEndpointAuthMethod = col(EntityOAuthClients, "token_endpoint_auth_method")
 	OAuthClientsIsActive                = col(EntityOAuthClients, "is_active")
+	OAuthClientsMetadata                = col(EntityOAuthClients, "metadata")
 	OAuthClientsCreatedAt               = col(EntityOAuthClients, "created_at")
 
 	OAuthCodesID                  = col(EntityOAuthCodes, "id")
@@ -135,6 +141,51 @@ var (
 	OAuthCodesScopes              = col(EntityOAuthCodes, "scopes")
 	OAuthCodesExpiresAt           = col(EntityOAuthCodes, "expires_at")
 	OAuthCodesCreatedAt           = col(EntityOAuthCodes, "created_at")
+	OAuthCodesExtra               = col(EntityOAuthCodes, "extra")
+
+	OAuthConsentsID        = col(EntityOAuthConsents, "id")
+	OAuthConsentsUserID    = col(EntityOAuthConsents, "user_id")
+	OAuthConsentsClientID  = col(EntityOAuthConsents, "client_id")
+	OAuthConsentsScopes    = col(EntityOAuthConsents, "scopes")
+	OAuthConsentsCreatedAt = col(EntityOAuthConsents, "created_at")
+	OAuthConsentsExpiresAt = col(EntityOAuthConsents, "expires_at")
+
+	OAuthRefreshID           = col(EntityOAuthRefreshTokens, "id")
+	OAuthRefreshTokenHash    = col(EntityOAuthRefreshTokens, "token_hash")
+	OAuthRefreshFamilyID     = col(EntityOAuthRefreshTokens, "family_id")
+	OAuthRefreshClientID     = col(EntityOAuthRefreshTokens, "client_id")
+	OAuthRefreshUserID       = col(EntityOAuthRefreshTokens, "user_id")
+	OAuthRefreshSessionToken = col(EntityOAuthRefreshTokens, "session_token")
+	OAuthRefreshScopes       = col(EntityOAuthRefreshTokens, "scopes")
+	OAuthRefreshExtra        = col(EntityOAuthRefreshTokens, "extra")
+	OAuthRefreshCreatedAt    = col(EntityOAuthRefreshTokens, "created_at")
+	OAuthRefreshExpiresAt    = col(EntityOAuthRefreshTokens, "expires_at")
+	OAuthRefreshUsedAt       = col(EntityOAuthRefreshTokens, "used_at")
+	OAuthRefreshRevokedAt    = col(EntityOAuthRefreshTokens, "revoked_at")
+
+	OAuthDeviceID           = col(EntityOAuthDeviceCodes, "id")
+	OAuthDeviceHash         = col(EntityOAuthDeviceCodes, "device_hash")
+	OAuthDeviceUserCode     = col(EntityOAuthDeviceCodes, "user_code")
+	OAuthDeviceClientID     = col(EntityOAuthDeviceCodes, "client_id")
+	OAuthDeviceScopes       = col(EntityOAuthDeviceCodes, "scopes")
+	OAuthDeviceStatus       = col(EntityOAuthDeviceCodes, "status")
+	OAuthDeviceUserID       = col(EntityOAuthDeviceCodes, "user_id")
+	OAuthDeviceSessionToken = col(EntityOAuthDeviceCodes, "session_token")
+	OAuthDeviceInterval     = col(EntityOAuthDeviceCodes, "poll_interval")
+	OAuthDeviceCreatedAt    = col(EntityOAuthDeviceCodes, "created_at")
+	OAuthDeviceExpiresAt    = col(EntityOAuthDeviceCodes, "expires_at")
+	OAuthDeviceLastPolledAt = col(EntityOAuthDeviceCodes, "last_polled_at")
+
+	OAuthPARID         = col(EntityOAuthPARRequests, "id")
+	OAuthPARRequestURI = col(EntityOAuthPARRequests, "request_uri")
+	OAuthPARClientID   = col(EntityOAuthPARRequests, "client_id")
+	OAuthPARParams     = col(EntityOAuthPARRequests, "params")
+	OAuthPARCreatedAt  = col(EntityOAuthPARRequests, "created_at")
+	OAuthPARExpiresAt  = col(EntityOAuthPARRequests, "expires_at")
+
+	OAuthJTIID        = col(EntityOAuthJTI, "id")
+	OAuthJTIKey       = col(EntityOAuthJTI, "jti_key")
+	OAuthJTIExpiresAt = col(EntityOAuthJTI, "expires_at")
 
 	KeysID         = col(EntityUserKeys, "id")
 	KeysUserID     = col(EntityUserKeys, "user_id")
@@ -190,10 +241,20 @@ var allColumns = []Column{
 	ResetsID, ResetsUserID, ResetsTokenHash, ResetsExpiresAt, ResetsCreatedAt, ResetsUsed, ResetsUsedAt,
 	OAuthClientsID, OAuthClientsClientID, OAuthClientsRedirectURIs, OAuthClientsClientName, OAuthClientsGrantTypes,
 	OAuthClientsAllowedScopes, OAuthClientsClientSecretHash, OAuthClientsTokenEndpointAuthMethod,
-	OAuthClientsIsActive, OAuthClientsCreatedAt,
+	OAuthClientsIsActive, OAuthClientsCreatedAt, OAuthClientsMetadata,
 	OAuthCodesID, OAuthCodesCode, OAuthCodesClientID, OAuthCodesRedirectURI, OAuthCodesClientState,
 	OAuthCodesCodeChallenge, OAuthCodesCodeChallengeMethod, OAuthCodesSessionToken, OAuthCodesRefreshToken,
-	OAuthCodesScopes, OAuthCodesExpiresAt, OAuthCodesCreatedAt,
+	OAuthCodesScopes, OAuthCodesExpiresAt, OAuthCodesCreatedAt, OAuthCodesExtra,
+	OAuthConsentsID, OAuthConsentsUserID, OAuthConsentsClientID, OAuthConsentsScopes, OAuthConsentsCreatedAt,
+	OAuthConsentsExpiresAt,
+	OAuthRefreshID, OAuthRefreshTokenHash, OAuthRefreshFamilyID, OAuthRefreshClientID, OAuthRefreshUserID,
+	OAuthRefreshSessionToken, OAuthRefreshScopes, OAuthRefreshExtra, OAuthRefreshCreatedAt, OAuthRefreshExpiresAt,
+	OAuthRefreshUsedAt, OAuthRefreshRevokedAt,
+	OAuthDeviceID, OAuthDeviceHash, OAuthDeviceUserCode, OAuthDeviceClientID, OAuthDeviceScopes, OAuthDeviceStatus,
+	OAuthDeviceUserID, OAuthDeviceSessionToken, OAuthDeviceInterval, OAuthDeviceCreatedAt, OAuthDeviceExpiresAt,
+	OAuthDeviceLastPolledAt,
+	OAuthPARID, OAuthPARRequestURI, OAuthPARClientID, OAuthPARParams, OAuthPARCreatedAt, OAuthPARExpiresAt,
+	OAuthJTIID, OAuthJTIKey, OAuthJTIExpiresAt,
 	KeysID, KeysUserID, KeysKeyType, KeysKeyHash, KeysName, KeysScopes, KeysMeta, KeysExpiresAt,
 	KeysCreatedAt, KeysLastUsedAt, KeysIsActive,
 	GroupMembersGroupID, GroupMembersUserID,

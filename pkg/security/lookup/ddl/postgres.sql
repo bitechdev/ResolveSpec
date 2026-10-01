@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_secret_hash TEXT,
     token_endpoint_auth_method VARCHAR(30) DEFAULT 'none',
     is_active BOOLEAN DEFAULT true,
+    metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -155,10 +156,82 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     refresh_token TEXT,
     scopes TEXT,
     expires_at TIMESTAMP NOT NULL,
+    extra TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_codes(expires_at);
+
+
+--   oauth_consents.scopes / oauth_refresh_tokens.scopes+extra / oauth_device_codes.scopes / oauth_par_requests.params: JSON text
+
+CREATE TABLE IF NOT EXISTS oauth_consents (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    scopes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_consents_user_client ON oauth_consents(user_id, client_id);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    family_id VARCHAR(64) NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INTEGER NOT NULL,
+    session_token VARCHAR(255),
+    scopes TEXT,
+    extra TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_family ON oauth_refresh_tokens(family_id);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_session ON oauth_refresh_tokens(session_token);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_device_codes (
+    id SERIAL PRIMARY KEY,
+    device_hash VARCHAR(64) NOT NULL UNIQUE,
+    user_code VARCHAR(32) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    scopes TEXT,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    user_id INTEGER,
+    session_token VARCHAR(255),
+    poll_interval INTEGER NOT NULL DEFAULT 5,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    last_polled_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_device_expires ON oauth_device_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_par_requests (
+    id SERIAL PRIMARY KEY,
+    request_uri VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    params TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_par_expires ON oauth_par_requests(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_jti (
+    id SERIAL PRIMARY KEY,
+    jti_key VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_jti_expires ON oauth_jti(expires_at);
 
 
 --   key_hash: SHA-256 hex

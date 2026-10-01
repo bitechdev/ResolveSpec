@@ -113,6 +113,11 @@ func cleanup(t *testing.T, db *sql.DB, d dialect.Dialect, prefix string) {
 	like := prefix + "%"
 	for _, q := range []struct{ table, col string }{
 		{"oauth_codes", "code"},
+		{"oauth_consents", "client_id"},
+		{"oauth_refresh_tokens", "client_id"},
+		{"oauth_device_codes", "client_id"},
+		{"oauth_par_requests", "client_id"},
+		{"oauth_jti", "jti_key"},
 		{"oauth_clients", "client_id"},
 		{"token_blacklist", "token"},
 		{"sec_column_rules", "schema_name"},

@@ -4,6 +4,8 @@
 
 The security package provides OAuth2 authentication support for any OAuth2-compliant provider including Google, GitHub, Microsoft, Facebook, and custom providers.
 
+> **Full OAuth 2.1 / OpenID Connect**: this guide covers the plain OAuth2 client login. For the OIDC relying party (discovery, PKCE, nonce, id_token validation, logout) and the complete authorization server (consent, refresh rotation, DPoP, PAR, device grant, token exchange) see [OAUTH2_SERVER.md](OAUTH2_SERVER.md).
+
 ## Features
 
 - **Universal OAuth2 Support**: Works with any OAuth2 provider
@@ -14,6 +16,7 @@ The security package provides OAuth2 authentication support for any OAuth2-compl
 - **Token Refresh**: Automatic token refresh support
 - **State Validation**: Built-in CSRF protection
 - **User Auto-Creation**: Automatically creates users on first login
+- **OpenID Connect** (opt-in): `WithOIDC` discovery, PKCE, nonce and id_token validation, RP-initiated logout
 - **Unified Authentication**: OAuth2 and traditional auth share same session storage
 
 ## Quick Start

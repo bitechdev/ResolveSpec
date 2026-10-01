@@ -154,3 +154,27 @@ func TestConformanceMSSQLContainer(t *testing.T) {
 	}
 	runOnServer(t, "sqlserver", dsn("cf_direct"), "mssql", lookup.Config{}, true)
 }
+
+// TestContainerLifecycle checks the start/stop plumbing the container tests rely on: the
+// container comes up and accepts connections, and after stop it is gone (it runs with --rm).
+func TestContainerLifecycle(t *testing.T) {
+	rt := containerRuntime(t)
+	port := startContainer(t, rt, "docker.io/library/postgres:16-alpine", "5432", map[string]string{"POSTGRES_PASSWORD": containerPassword})
+	waitReady(t, "pgx", fmt.Sprintf("postgres://postgres:%s@127.0.0.1:%s/postgres?sslmode=disable", containerPassword, port), 90*time.Second)
+
+	listed := func() string {
+		return run(t, 30*time.Second, rt, "ps", "-q", "--filter", "ancestor=docker.io/library/postgres:16-alpine")
+	}
+	id := listed()
+	if id == "" {
+		t.Fatal("container is not running after start")
+	}
+	run(t, time.Minute, rt, "stop", "-t", "2", id)
+	deadline := time.Now().Add(30 * time.Second)
+	for listed() != "" {
+		if time.Now().After(deadline) {
+			t.Fatal("container still present after stop")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}

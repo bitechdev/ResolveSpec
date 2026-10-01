@@ -2,6 +2,8 @@ package security
 
 import (
 	"context"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
 )
 
 // OAuthRegisterClient persists an OAuth2 client registration.
@@ -32,4 +34,25 @@ func (a *DatabaseAuthenticator) OAuthIntrospectToken(ctx context.Context, token 
 // OAuthRevokeToken revokes a token by deleting the session (RFC 7009).
 func (a *DatabaseAuthenticator) OAuthRevokeToken(ctx context.Context, token string) error {
 	return a.src.get().OAuthClient.Revoke(ctx, token)
+}
+
+// OAuthGrants returns the store holding consents, managed refresh tokens, device codes,
+// pushed authorization requests and the replay cache.
+func (a *DatabaseAuthenticator) OAuthGrants() lookup.OAuthGrantStore {
+	return a.src.get().OAuthGrant
+}
+
+// OAuthUpdateClient replaces the registered metadata of a client (RFC 7592).
+func (a *DatabaseAuthenticator) OAuthUpdateClient(ctx context.Context, client *OAuthServerClient) error {
+	return a.src.get().OAuthClient.UpdateClient(ctx, client)
+}
+
+// OAuthDeleteClient deactivates a registered client (RFC 7592).
+func (a *DatabaseAuthenticator) OAuthDeleteClient(ctx context.Context, clientID string) error {
+	return a.src.get().OAuthClient.DeleteClient(ctx, clientID)
+}
+
+// OAuthGetUser returns the active user with the given id.
+func (a *DatabaseAuthenticator) OAuthGetUser(ctx context.Context, userID int) (*UserContext, error) {
+	return a.src.get().OAuthUser.GetUser(ctx, userID)
 }

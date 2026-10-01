@@ -646,6 +646,8 @@ Authentication and authorization framework with hooks integration. Database-back
 
 For documentation, see [pkg/security/README.md](pkg/security/README.md) (see "Database access (lookup)" for the SQLite/portable-SQL path).
 
+It includes a standards-based OAuth 2.1 / OpenID Connect authorization server (consent, rotating refresh tokens, JWT access tokens, DPoP, PAR, device grant, token exchange, logout) and an OIDC relying-party client; see [pkg/security/OAUTH2_SERVER.md](pkg/security/OAUTH2_SERVER.md).
+
 #### Middleware
 
 HTTP middleware collection for common tasks (CORS, logging, metrics, rate limiting, etc.).

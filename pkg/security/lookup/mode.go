@@ -61,12 +61,30 @@ const (
 	OpOAuthExchangeCode   Op = "oauth_exchange_code"
 	OpOAuthIntrospect     Op = "oauth_introspect"
 	OpOAuthRevoke         Op = "oauth_revoke"
+	OpOAuthUpdateClient   Op = "oauth_update_client"
+	OpOAuthDeleteClient   Op = "oauth_delete_client"
 
 	OpOAuthGetOrCreateUser    Op = "oauth_get_or_create_user"
 	OpOAuthCreateSession      Op = "oauth_create_session"
 	OpOAuthGetRefreshToken    Op = "oauth_get_refresh_token"    //nolint:gosec // operation name, not a credential
 	OpOAuthUpdateRefreshToken Op = "oauth_update_refresh_token" //nolint:gosec // operation name, not a credential
 	OpOAuthGetUser            Op = "oauth_get_user"
+
+	OpOAuthSaveConsent         Op = "oauth_save_consent"
+	OpOAuthGetConsent          Op = "oauth_get_consent"
+	OpOAuthRevokeConsent       Op = "oauth_revoke_consent"
+	OpOAuthSaveRefresh         Op = "oauth_save_refresh"           //nolint:gosec // operation name, not a credential
+	OpOAuthRotateRefresh       Op = "oauth_rotate_refresh"         //nolint:gosec // operation name, not a credential
+	OpOAuthPeekRefresh         Op = "oauth_peek_refresh"           //nolint:gosec // operation name, not a credential
+	OpOAuthRevokeRefreshFamily Op = "oauth_revoke_refresh_family"  //nolint:gosec // operation name, not a credential
+	OpOAuthRevokeRefreshByUser Op = "oauth_revoke_refresh_session" //nolint:gosec // operation name, not a credential
+	OpOAuthCreateDevice        Op = "oauth_create_device"
+	OpOAuthDeviceByUserCode    Op = "oauth_device_by_user_code"
+	OpOAuthDeviceDecide        Op = "oauth_device_decide"
+	OpOAuthDevicePoll          Op = "oauth_device_poll"
+	OpOAuthSavePAR             Op = "oauth_save_par"
+	OpOAuthConsumePAR          Op = "oauth_consume_par"
+	OpOAuthSeenJTI             Op = "oauth_seen_jti"
 
 	OpPasskeyStore         Op = "passkey_store"
 	OpPasskeyGet           Op = "passkey_get"
@@ -144,11 +162,28 @@ func AllOps() []Op {
 		OpOAuthExchangeCode,
 		OpOAuthIntrospect,
 		OpOAuthRevoke,
+		OpOAuthUpdateClient,
+		OpOAuthDeleteClient,
 		OpOAuthGetOrCreateUser,
 		OpOAuthCreateSession,
 		OpOAuthGetRefreshToken,
 		OpOAuthUpdateRefreshToken,
 		OpOAuthGetUser,
+		OpOAuthSaveConsent,
+		OpOAuthGetConsent,
+		OpOAuthRevokeConsent,
+		OpOAuthSaveRefresh,
+		OpOAuthRotateRefresh,
+		OpOAuthPeekRefresh,
+		OpOAuthRevokeRefreshFamily,
+		OpOAuthRevokeRefreshByUser,
+		OpOAuthCreateDevice,
+		OpOAuthDeviceByUserCode,
+		OpOAuthDeviceDecide,
+		OpOAuthDevicePoll,
+		OpOAuthSavePAR,
+		OpOAuthConsumePAR,
+		OpOAuthSeenJTI,
 		OpPasskeyStore,
 		OpPasskeyGet,
 		OpPasskeyUpdateCounter,

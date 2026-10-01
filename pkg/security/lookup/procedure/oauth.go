@@ -313,3 +313,38 @@ func (o *OAuthClients) Revoke(ctx context.Context, token string) error {
 	}
 	return nil
 }
+
+// UpdateClient implements lookup.OAuthClientStore.
+func (o *OAuthClients) UpdateClient(ctx context.Context, client *sectypes.OAuthServerClient) error {
+	input, err := json.Marshal(client)
+	if err != nil {
+		return fmt.Errorf("failed to marshal client: %w", err)
+	}
+	var success bool
+	var errMsg sql.NullString
+	err = o.run.Run(func(db *sql.DB) error {
+		return db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT p_success, p_error
+		FROM %s($1::jsonb)
+	`, o.procs.OAuthUpdateClient), input).Scan(&success, &errMsg)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update client: %w", err)
+	}
+	if !success {
+		return failure(errMsg, "failed to update client")
+	}
+	return nil
+}
+
+// DeleteClient implements lookup.OAuthClientStore.
+func (o *OAuthClients) DeleteClient(ctx context.Context, clientID string) error {
+	ok, errMsg, err := o.callNoData(ctx, o.procs.OAuthDeleteClient, clientID)
+	if err != nil {
+		return fmt.Errorf("failed to delete client: %w", err)
+	}
+	if !ok {
+		return failure(errMsg, "failed to delete client")
+	}
+	return nil
+}

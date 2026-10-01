@@ -52,6 +52,12 @@ func Run(t *testing.T, env Env) {
 	t.Run("OAuthClientAndCodes", s.oauthClientAndCodes)
 	t.Run("OAuthIntrospectRevoke", s.oauthIntrospectRevoke)
 	t.Run("OAuthUsers", s.oauthUsers)
+	t.Run("OAuthClientMetadata", s.oauthClientMetadata)
+	t.Run("OAuthGrantConsent", s.oauthGrantConsent)
+	t.Run("OAuthGrantRefresh", s.oauthGrantRefresh)
+	t.Run("OAuthGrantDevice", s.oauthGrantDevice)
+	t.Run("OAuthGrantPAR", s.oauthGrantPAR)
+	t.Run("OAuthGrantJTI", s.oauthGrantJTI)
 	t.Run("Passkey", s.passkey)
 	t.Run("TOTP", s.totp)
 	t.Run("Policy", s.policy)
@@ -562,3 +568,305 @@ func (s *suite) policy(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// --- OAuth server grant state -------------------------------------------------------------
+
+func (s *suite) oauthClientMetadata(t *testing.T) {
+	st := s.Provider.OAuthClient
+	id := s.name("meta-client")
+	reg, err := st.RegisterClient(ctx, &sectypes.OAuthServerClient{
+		ClientID: id, RedirectURIs: []string{"https://app.example/cb"}, ClientName: "Meta",
+		PostLogoutRedirectURIs: []string{"https://app.example/bye"}, RequireConsent: true, FirstParty: false,
+		IDTokenSignedResponseAlg: "RS256", Contacts: []string{"ops@example.test"}, DPoPBoundAccessTokens: true,
+	})
+	if err != nil || reg.ClientID != id {
+		t.Fatalf("register: %+v %v", reg, err)
+	}
+	got, err := st.GetClient(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.RequireConsent || !got.DPoPBoundAccessTokens || got.IDTokenSignedResponseAlg != "RS256" ||
+		len(got.PostLogoutRedirectURIs) != 1 || got.PostLogoutRedirectURIs[0] != "https://app.example/bye" ||
+		len(got.Contacts) != 1 {
+		t.Fatalf("metadata lost: %+v", got)
+	}
+
+	got.ClientName = "Renamed"
+	got.RequireConsent = false
+	got.RedirectURIs = []string{"https://app.example/cb", "https://app.example/cb2"}
+	if err := st.UpdateClient(ctx, got); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	again, err := st.GetClient(ctx, id)
+	if err != nil || again.ClientName != "Renamed" || again.RequireConsent || len(again.RedirectURIs) != 2 || !again.DPoPBoundAccessTokens {
+		t.Fatalf("after update: %+v %v", again, err)
+	}
+	if err := st.DeleteClient(ctx, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_, err = st.GetClient(ctx, id)
+	rejected(t, "deleted client", err)
+
+	// Code extras round-trip.
+	code := s.name("meta-code")
+	err = st.SaveCode(ctx, &sectypes.OAuthCode{
+		Code: code, ClientID: id, RedirectURI: "https://app.example/cb", CodeChallenge: "chal", CodeChallengeMethod: "S256",
+		SessionToken: "sess", Scopes: []string{"openid"}, ExpiresAt: time.Now().Add(time.Minute),
+		Nonce: "n-0S6", AuthTime: 1700000000, ACR: "urn:acr:1", AMR: []string{"pwd"}, UserID: 7,
+		Claims: map[string]any{"id_token": map[string]any{"email": nil}}, Resource: []string{"https://api.example"}, DPoPJKT: "jkt",
+	})
+	if err != nil {
+		t.Fatalf("save code: %v", err)
+	}
+	c, err := st.ExchangeCode(ctx, code)
+	if err != nil {
+		t.Fatalf("exchange: %v", err)
+	}
+	if c.Nonce != "n-0S6" || c.AuthTime != 1700000000 || c.ACR != "urn:acr:1" || c.UserID != 7 || c.DPoPJKT != "jkt" ||
+		len(c.AMR) != 1 || len(c.Resource) != 1 || c.Claims["id_token"] == nil {
+		t.Fatalf("code extra lost: %+v", c)
+	}
+}
+
+func (s *suite) oauthGrantConsent(t *testing.T) {
+	g := s.Provider.OAuthGrant
+	client := s.name("consent-client")
+	if _, err := g.GetConsent(ctx, 1, client); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("missing consent: %v", err)
+	}
+	if err := g.SaveConsent(ctx, lookup.Consent{UserID: 1, ClientID: client, Scopes: []string{"openid", "email"}, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	c, err := g.GetConsent(ctx, 1, client)
+	if err != nil || len(c.Scopes) != 2 {
+		t.Fatalf("get: %+v %v", c, err)
+	}
+	// Saving again replaces.
+	if err := g.SaveConsent(ctx, lookup.Consent{UserID: 1, ClientID: client, Scopes: []string{"openid"}, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("resave: %v", err)
+	}
+	if c, err = g.GetConsent(ctx, 1, client); err != nil || len(c.Scopes) != 1 {
+		t.Fatalf("replaced: %+v %v", c, err)
+	}
+	// Another user is separate.
+	if _, err := g.GetConsent(ctx, 2, client); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("other user: %v", err)
+	}
+	// Expired consents are not returned.
+	if err := g.SaveConsent(ctx, lookup.Consent{UserID: 3, ClientID: client, Scopes: []string{"openid"}, ExpiresAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+	if _, err := g.GetConsent(ctx, 3, client); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("expired consent: %v", err)
+	}
+	if err := g.RevokeConsent(ctx, 1, client); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, err := g.GetConsent(ctx, 1, client); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("revoked consent: %v", err)
+	}
+}
+
+func (s *suite) oauthGrantRefresh(t *testing.T) {
+	g := s.Provider.OAuthGrant
+	client := s.name("refresh-client")
+	mk := func(n string, session string) lookup.RefreshToken {
+		return lookup.RefreshToken{TokenHash: s.name(n), FamilyID: s.name("fam-" + n), ClientID: client, UserID: 5,
+			SessionToken: session, Scopes: []string{"openid", "offline_access"},
+			Extra: map[string]any{"nonce": "abc"}, ExpiresAt: time.Now().Add(time.Hour)}
+	}
+	first := mk("r1", s.name("sess1"))
+	if err := g.SaveRefresh(ctx, first); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	peek, err := g.PeekRefresh(ctx, first.TokenHash)
+	if err != nil || peek.UserID != 5 || peek.ClientID != client || len(peek.Scopes) != 2 || peek.Extra["nonce"] != "abc" {
+		t.Fatalf("peek: %+v %v", peek, err)
+	}
+	if _, err := g.PeekRefresh(ctx, s.name("nope")); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("peek unknown: %v", err)
+	}
+
+	next := lookup.RefreshToken{TokenHash: s.name("r2"), ExpiresAt: time.Now().Add(time.Hour), Scopes: []string{"openid"}}
+	old, err := g.RotateRefresh(ctx, first.TokenHash, next)
+	if err != nil || old.FamilyID != first.FamilyID || old.SessionToken != first.SessionToken {
+		t.Fatalf("rotate: %+v %v", old, err)
+	}
+	// The new token belongs to the same family, client and user.
+	n, err := g.PeekRefresh(ctx, next.TokenHash)
+	if err != nil || n.FamilyID != first.FamilyID || n.ClientID != client || n.UserID != 5 || n.SessionToken != first.SessionToken {
+		t.Fatalf("next: %+v %v", n, err)
+	}
+	// The consumed token is still visible to Peek, so that presenting it reaches RotateRefresh.
+	if _, err := g.PeekRefresh(ctx, first.TokenHash); err != nil {
+		t.Fatalf("peek consumed: %v", err)
+	}
+
+	// Presenting the consumed token again is reuse: the family (including the new token) dies.
+	third := lookup.RefreshToken{TokenHash: s.name("r3"), ExpiresAt: time.Now().Add(time.Hour)}
+	reused, err := g.RotateRefresh(ctx, first.TokenHash, third)
+	if !errors.Is(err, lookup.ErrRefreshReused) || reused == nil || reused.FamilyID != first.FamilyID {
+		t.Fatalf("reuse: %+v %v", reused, err)
+	}
+	if _, err := g.PeekRefresh(ctx, next.TokenHash); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("family survived reuse: %v", err)
+	}
+	if _, err := g.RotateRefresh(ctx, next.TokenHash, lookup.RefreshToken{TokenHash: s.name("r4"), ExpiresAt: time.Now().Add(time.Hour)}); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("rotate revoked: %v", err)
+	}
+	if _, err := g.PeekRefresh(ctx, third.TokenHash); err == nil {
+		t.Fatal("a rejected rotation must not store the next token")
+	}
+
+	// Expired tokens cannot rotate.
+	exp := mk("rexp", s.name("sess2"))
+	exp.ExpiresAt = time.Now().Add(-time.Minute)
+	if err := g.SaveRefresh(ctx, exp); err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+	if _, err := g.RotateRefresh(ctx, exp.TokenHash, lookup.RefreshToken{TokenHash: s.name("rexp2"), ExpiresAt: time.Now().Add(time.Hour)}); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("rotate expired: %v", err)
+	}
+
+	// Revoking by family and by session.
+	fam := mk("rfam", s.name("sess3"))
+	if err := g.SaveRefresh(ctx, fam); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.RevokeRefreshFamily(ctx, fam.FamilyID); err != nil {
+		t.Fatalf("revoke family: %v", err)
+	}
+	if _, err := g.PeekRefresh(ctx, fam.TokenHash); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("family revoked: %v", err)
+	}
+	bs := mk("rsess", s.name("sess4"))
+	if err := g.SaveRefresh(ctx, bs); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.RevokeRefreshBySession(ctx, bs.SessionToken); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	if _, err := g.PeekRefresh(ctx, bs.TokenHash); !errors.Is(err, lookup.ErrRefreshInvalid) {
+		t.Fatalf("session revoked: %v", err)
+	}
+}
+
+func (s *suite) oauthGrantDevice(t *testing.T) {
+	g := s.Provider.OAuthGrant
+	client := s.name("device-client")
+	mk := func(n string) lookup.DeviceCode {
+		return lookup.DeviceCode{DeviceHash: s.name("dh-" + n), UserCode: strings.ToUpper(s.name("uc-" + n)), ClientID: client,
+			Scopes: []string{"openid"}, Interval: 1, ExpiresAt: time.Now().Add(time.Minute)}
+	}
+
+	// pending -> approved
+	d := mk("a")
+	if err := g.CreateDevice(ctx, d); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := g.DeviceByUserCode(ctx, strings.ToLower(d.UserCode)) // user codes are case-insensitive
+	if err != nil || got.ClientID != client || got.DeviceHash != d.DeviceHash || len(got.Scopes) != 1 {
+		t.Fatalf("by user code: %+v %v", got, err)
+	}
+	if _, err := g.DevicePoll(ctx, d.DeviceHash); !errors.Is(err, lookup.ErrDevicePending) {
+		t.Fatalf("first poll: %v", err)
+	}
+	if _, err := g.DevicePoll(ctx, d.DeviceHash); !errors.Is(err, lookup.ErrDeviceSlowDown) {
+		t.Fatalf("immediate re-poll: %v", err)
+	}
+	if err := g.DeviceDecide(ctx, d.UserCode, true, 9, s.name("dsess")); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := g.DeviceByUserCode(ctx, d.UserCode); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("decided code still pending: %v", err)
+	}
+	if err := g.DeviceDecide(ctx, d.UserCode, true, 9, "x"); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("second decision: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	done, err := g.DevicePoll(ctx, d.DeviceHash)
+	if err != nil || done.UserID != 9 || done.SessionToken != s.name("dsess") || done.ClientID != client {
+		t.Fatalf("approved poll: %+v %v", done, err)
+	}
+	if _, err := g.DevicePoll(ctx, d.DeviceHash); !errors.Is(err, lookup.ErrDeviceExpired) {
+		t.Fatalf("consumed code: %v", err)
+	}
+
+	// denied
+	dd := mk("d")
+	if err := g.CreateDevice(ctx, dd); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DeviceDecide(ctx, dd.UserCode, false, 0, ""); err != nil {
+		t.Fatalf("deny: %v", err)
+	}
+	if _, err := g.DevicePoll(ctx, dd.DeviceHash); !errors.Is(err, lookup.ErrDeviceDenied) {
+		t.Fatalf("denied poll: %v", err)
+	}
+
+	// expired
+	de := mk("e")
+	de.ExpiresAt = time.Now().Add(-time.Second)
+	if err := g.CreateDevice(ctx, de); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.DevicePoll(ctx, de.DeviceHash); !errors.Is(err, lookup.ErrDeviceExpired) {
+		t.Fatalf("expired poll: %v", err)
+	}
+	if _, err := g.DeviceByUserCode(ctx, de.UserCode); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("expired by user code: %v", err)
+	}
+	if _, err := g.DevicePoll(ctx, s.name("unknown")); !errors.Is(err, lookup.ErrDeviceExpired) {
+		t.Fatalf("unknown poll: %v", err)
+	}
+}
+
+func (s *suite) oauthGrantPAR(t *testing.T) {
+	g := s.Provider.OAuthGrant
+	uri := "urn:ietf:params:oauth:request_uri:" + s.name("par")
+	if len(uri) > 255 {
+		t.Fatal("test request_uri too long")
+	}
+	req := lookup.PushedRequest{RequestURI: uri, ClientID: s.name("par-client"),
+		Params: map[string]string{"redirect_uri": "https://app.example/cb", "scope": "openid"}, ExpiresAt: time.Now().Add(time.Minute)}
+	if err := g.SavePushedRequest(ctx, req); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := g.ConsumePushedRequest(ctx, uri)
+	if err != nil || got.ClientID != req.ClientID || got.Params["scope"] != "openid" {
+		t.Fatalf("consume: %+v %v", got, err)
+	}
+	if _, err := g.ConsumePushedRequest(ctx, uri); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("second consume: %v", err)
+	}
+	exp := lookup.PushedRequest{RequestURI: uri + "-exp", ClientID: s.name("par-client"), Params: map[string]string{"a": "b"}, ExpiresAt: time.Now().Add(-time.Minute)}
+	if err := g.SavePushedRequest(ctx, exp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.ConsumePushedRequest(ctx, exp.RequestURI); !errors.Is(err, lookup.ErrNotFound) {
+		t.Fatalf("expired consume: %v", err)
+	}
+}
+
+func (s *suite) oauthGrantJTI(t *testing.T) {
+	g := s.Provider.OAuthGrant
+	key := s.name("jti")
+	seen, err := g.SeenJTI(ctx, key, time.Now().Add(time.Minute))
+	if err != nil || seen {
+		t.Fatalf("first: %v %v", seen, err)
+	}
+	seen, err = g.SeenJTI(ctx, key, time.Now().Add(time.Minute))
+	if err != nil || !seen {
+		t.Fatalf("replay: %v %v", seen, err)
+	}
+	// An expired entry is forgotten.
+	old := s.name("jti-old")
+	if _, err := g.SeenJTI(ctx, old, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	seen, err = g.SeenJTI(ctx, old, time.Now().Add(time.Minute))
+	if err != nil || seen {
+		t.Fatalf("after expiry: %v %v", seen, err)
+	}
+}

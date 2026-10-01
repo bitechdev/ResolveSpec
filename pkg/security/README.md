@@ -13,7 +13,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 - ✅ **Extensible** - Implement custom providers for your needs
 - ✅ **Stored Procedures** - Database operations use PostgreSQL stored procedures where available, for security and maintainability
 - ✅ **Direct Mode** - Portable Go/SQL fallback for SQLite, MySQL, or Postgres without the stored procedures installed — no code changes required
-- ✅ **OAuth2 Authorization Server** - Built-in OAuth 2.1 + PKCE server (RFC 8414, 7591, 7009, 7662) with login form and external provider federation
+- ✅ **OAuth2 / OpenID Connect** - Built-in OAuth 2.1 + PKCE authorization server and OIDC provider (RFC 8414, 7591/7592, 7009, 7662, 9068, 9126, 9207, 9449, 8628, 8693): consent, rotating refresh tokens, JWT access tokens, logout, federation; plus an OIDC relying-party client. See [OAUTH2_SERVER.md](OAUTH2_SERVER.md)
 - ✅ **Password Reset** - Self-service password reset with secure token generation and session invalidation
 
 ## Stored Procedure Architecture
@@ -1068,6 +1068,8 @@ lookup.ProcNames{
 
 ## OAuth2 Authorization Server
 
+> The complete guide (consent, OIDC, refresh rotation, DPoP, PAR, device grant, token exchange, logout, relying-party client) is in [OAUTH2_SERVER.md](OAUTH2_SERVER.md). The table below lists the original endpoints.
+
 `OAuthServer` is a generic OAuth 2.1 + PKCE authorization server. It is not tied to any spec — `pkg/resolvemcp` uses it, but it can be used standalone with any `http.ServeMux`.
 
 ### Endpoints
@@ -1229,12 +1231,13 @@ The main changes:
 |------|-------------|
 | **QUICK_REFERENCE.md** | Quick reference guide with examples |
 | **KEYSTORE.md** | Per-user auth keys and key stores |
-| **OAUTH2.md** | OAuth2 client login and the authorization server |
+| **OAUTH2.md** | OAuth2 client login |
+| **OAUTH2_SERVER.md** | OAuth 2.1 / OpenID Connect server and relying-party client (full guide) |
 | **OAUTH2_REFRESH_QUICK_REFERENCE.md** / **OAUTH2_REFRESH_TOKEN_IMPLEMENTATION.md** | OAuth2 refresh tokens |
 | **PASSKEY_QUICK_REFERENCE.md** | WebAuthn passkeys |
 | **SECURITY_FEATURES.md** | Security feature overview |
-| **breaking_changes.md** | Migration notes for the `lookup` refactor |
-| **examples.go**, **examples_funcspec.go**, **oauth2_examples.go**, **passkey_examples.go** | Working provider implementations |
+| **breaking_changes.md** | Migration notes (`lookup` refactor, full OAuth2/OIDC schema changes) |
+| **examples.go**, **examples_funcspec.go**, **oauth2_examples.go**, **oauth2_full_example.go**, **passkey_examples.go** | Working provider implementations |
 
 ## API Reference
 

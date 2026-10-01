@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_secret_hash TEXT,
     token_endpoint_auth_method VARCHAR(30) DEFAULT 'none',
     is_active TINYINT(1) DEFAULT 1,
+    metadata TEXT,
     created_at DATETIME NULL
 );
 
@@ -144,8 +145,73 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     refresh_token TEXT,
     scopes TEXT,
     expires_at DATETIME NOT NULL,
+    extra TEXT,
     created_at DATETIME NULL,
     INDEX idx_oauth_codes_expires (expires_at)
+);
+
+
+--   oauth_consents.scopes / oauth_refresh_tokens.scopes+extra / oauth_device_codes.scopes / oauth_par_requests.params: JSON text
+
+CREATE TABLE IF NOT EXISTS oauth_consents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    scopes TEXT,
+    created_at DATETIME NULL,
+    expires_at DATETIME NOT NULL,
+    INDEX idx_oauth_consents_user_client (user_id, client_id)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    family_id VARCHAR(64) NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INT NOT NULL,
+    session_token VARCHAR(255),
+    scopes TEXT,
+    extra TEXT,
+    created_at DATETIME NULL,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME,
+    revoked_at DATETIME,
+    INDEX idx_oauth_refresh_family (family_id),
+    INDEX idx_oauth_refresh_session (session_token),
+    INDEX idx_oauth_refresh_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_device_codes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    device_hash VARCHAR(64) NOT NULL UNIQUE,
+    user_code VARCHAR(32) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    scopes TEXT,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    user_id INT,
+    session_token VARCHAR(255),
+    poll_interval INT NOT NULL DEFAULT 5,
+    created_at DATETIME NULL,
+    expires_at DATETIME NOT NULL,
+    last_polled_at DATETIME,
+    INDEX idx_oauth_device_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_par_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    request_uri VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    params TEXT,
+    created_at DATETIME NULL,
+    expires_at DATETIME NOT NULL,
+    INDEX idx_oauth_par_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oauth_jti (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    jti_key VARCHAR(255) NOT NULL UNIQUE,
+    expires_at DATETIME NOT NULL,
+    INDEX idx_oauth_jti_expires (expires_at)
 );
 
 

@@ -1,5 +1,7 @@
 # OAuth2 Refresh Token - Quick Reference
 
+> This covers refreshing tokens of an upstream provider with `OAuth2RefreshToken`. For refresh tokens issued by `OAuthServer` (rotation, reuse detection, downscoping) see [OAUTH2_SERVER.md](OAUTH2_SERVER.md#refresh-token-rotation).
+
 ## Quick Setup (3 Steps)
 
 ### 1. Initialize Authenticator

@@ -179,6 +179,8 @@ It can operate as:
 - **An OAuth2 federation layer** — delegates to external providers (Google, GitHub, Microsoft, etc.)
 - **Both simultaneously**
 
+> The underlying `security.OAuthServer` also supports consent, OpenID Connect, rotating refresh tokens, JWT access tokens, DPoP, PAR, the device grant and token exchange; they are opt-in `OAuthServerConfig` options described in [pkg/security/OAUTH2_SERVER.md](../security/OAUTH2_SERVER.md). The options of `resolvemcp.OAuth2Config` are unchanged.
+
 ### Standard endpoints served
 
 | Path | Spec | Purpose |

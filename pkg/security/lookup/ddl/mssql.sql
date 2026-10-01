@@ -147,6 +147,7 @@ CREATE TABLE oauth_clients (
     client_secret_hash NVARCHAR(MAX),
     token_endpoint_auth_method NVARCHAR(30) DEFAULT 'none',
     is_active BIT DEFAULT 1,
+    metadata NVARCHAR(MAX),
     created_at DATETIME2 DEFAULT SYSUTCDATETIME()
 );
 
@@ -166,11 +167,95 @@ CREATE TABLE oauth_codes (
     refresh_token NVARCHAR(MAX),
     scopes NVARCHAR(MAX),
     expires_at DATETIME2 NOT NULL,
+    extra NVARCHAR(MAX),
     created_at DATETIME2 DEFAULT SYSUTCDATETIME()
 );
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_codes_expires' AND object_id = OBJECT_ID(N'oauth_codes'))
 CREATE INDEX idx_oauth_codes_expires ON oauth_codes(expires_at);
+
+
+--   oauth_consents.scopes / oauth_refresh_tokens.scopes+extra / oauth_device_codes.scopes / oauth_par_requests.params: JSON text
+
+IF OBJECT_ID(N'oauth_consents', N'U') IS NULL
+CREATE TABLE oauth_consents (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    client_id NVARCHAR(255) NOT NULL,
+    scopes NVARCHAR(MAX),
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    expires_at DATETIME2 NOT NULL
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_consents_user_client' AND object_id = OBJECT_ID(N'oauth_consents'))
+CREATE INDEX idx_oauth_consents_user_client ON oauth_consents(user_id, client_id);
+
+IF OBJECT_ID(N'oauth_refresh_tokens', N'U') IS NULL
+CREATE TABLE oauth_refresh_tokens (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    token_hash NVARCHAR(64) NOT NULL UNIQUE,
+    family_id NVARCHAR(64) NOT NULL,
+    client_id NVARCHAR(255) NOT NULL,
+    user_id INT NOT NULL,
+    session_token NVARCHAR(255),
+    scopes NVARCHAR(MAX),
+    extra NVARCHAR(MAX),
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    expires_at DATETIME2 NOT NULL,
+    used_at DATETIME2,
+    revoked_at DATETIME2
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_refresh_family' AND object_id = OBJECT_ID(N'oauth_refresh_tokens'))
+CREATE INDEX idx_oauth_refresh_family ON oauth_refresh_tokens(family_id);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_refresh_session' AND object_id = OBJECT_ID(N'oauth_refresh_tokens'))
+CREATE INDEX idx_oauth_refresh_session ON oauth_refresh_tokens(session_token);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_refresh_expires' AND object_id = OBJECT_ID(N'oauth_refresh_tokens'))
+CREATE INDEX idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
+
+IF OBJECT_ID(N'oauth_device_codes', N'U') IS NULL
+CREATE TABLE oauth_device_codes (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    device_hash NVARCHAR(64) NOT NULL UNIQUE,
+    user_code NVARCHAR(32) NOT NULL UNIQUE,
+    client_id NVARCHAR(255) NOT NULL,
+    scopes NVARCHAR(MAX),
+    status NVARCHAR(16) NOT NULL DEFAULT 'pending',
+    user_id INT,
+    session_token NVARCHAR(255),
+    poll_interval INT NOT NULL DEFAULT 5,
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    expires_at DATETIME2 NOT NULL,
+    last_polled_at DATETIME2
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_device_expires' AND object_id = OBJECT_ID(N'oauth_device_codes'))
+CREATE INDEX idx_oauth_device_expires ON oauth_device_codes(expires_at);
+
+IF OBJECT_ID(N'oauth_par_requests', N'U') IS NULL
+CREATE TABLE oauth_par_requests (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    request_uri NVARCHAR(255) NOT NULL UNIQUE,
+    client_id NVARCHAR(255) NOT NULL,
+    params NVARCHAR(MAX),
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    expires_at DATETIME2 NOT NULL
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_par_expires' AND object_id = OBJECT_ID(N'oauth_par_requests'))
+CREATE INDEX idx_oauth_par_expires ON oauth_par_requests(expires_at);
+
+IF OBJECT_ID(N'oauth_jti', N'U') IS NULL
+CREATE TABLE oauth_jti (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    jti_key NVARCHAR(255) NOT NULL UNIQUE,
+    expires_at DATETIME2 NOT NULL
+);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_oauth_jti_expires' AND object_id = OBJECT_ID(N'oauth_jti'))
+CREATE INDEX idx_oauth_jti_expires ON oauth_jti(expires_at);
 
 
 --   key_hash: SHA-256 hex

@@ -197,6 +197,11 @@ func Gt(c lookup.Column, v any) Cond {
 	return func(bl *builder) string { return bl.col(c) + " > " + bl.ph(v) }
 }
 
+// Lt is `col < value`.
+func Lt(c lookup.Column, v any) Cond {
+	return func(bl *builder) string { return bl.col(c) + " < " + bl.ph(v) }
+}
+
 // IsNull is `col IS NULL`.
 func IsNull(c lookup.Column) Cond {
 	return func(bl *builder) string { return bl.col(c) + " IS NULL" }

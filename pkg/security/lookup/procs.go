@@ -63,6 +63,26 @@ type ProcNames struct {
 	OAuthExchangeCode   string // default: "resolvespec_oauth_exchange_code"
 	OAuthIntrospect     string // default: "resolvespec_oauth_introspect"
 	OAuthRevoke         string // default: "resolvespec_oauth_revoke"
+	OAuthUpdateClient   string // default: "resolvespec_oauth_update_client"
+	OAuthDeleteClient   string // default: "resolvespec_oauth_delete_client"
+
+	// OAuth2 server grant procedures (consents, refresh tokens, device codes, PAR, replay cache).
+	// Each takes a jsonb request and returns (p_success, p_error, p_data).
+	OAuthSaveConsent         string // default: "resolvespec_oauth_save_consent"
+	OAuthGetConsent          string // default: "resolvespec_oauth_get_consent"
+	OAuthRevokeConsent       string // default: "resolvespec_oauth_revoke_consent"
+	OAuthSaveRefresh         string // default: "resolvespec_oauth_save_refresh"
+	OAuthRotateRefresh       string // default: "resolvespec_oauth_rotate_refresh"
+	OAuthPeekRefresh         string // default: "resolvespec_oauth_peek_refresh"
+	OAuthRevokeRefreshFamily string // default: "resolvespec_oauth_revoke_refresh_family"
+	OAuthRevokeRefreshByUser string // default: "resolvespec_oauth_revoke_refresh_session"
+	OAuthCreateDevice        string // default: "resolvespec_oauth_create_device"
+	OAuthDeviceByUserCode    string // default: "resolvespec_oauth_device_by_user_code"
+	OAuthDeviceDecide        string // default: "resolvespec_oauth_device_decide"
+	OAuthDevicePoll          string // default: "resolvespec_oauth_device_poll"
+	OAuthSavePAR             string // default: "resolvespec_oauth_save_par"
+	OAuthConsumePAR          string // default: "resolvespec_oauth_consume_par"
+	OAuthSeenJTI             string // default: "resolvespec_oauth_seen_jti"
 
 	// Keystore procedures (KeyStore)
 	KeystoreGetUserKeys string // default: "resolvespec_keystore_get_user_keys"
@@ -112,6 +132,23 @@ func DefaultProcNames() ProcNames {
 		OAuthExchangeCode:         "resolvespec_oauth_exchange_code",
 		OAuthIntrospect:           "resolvespec_oauth_introspect",
 		OAuthRevoke:               "resolvespec_oauth_revoke",
+		OAuthUpdateClient:         "resolvespec_oauth_update_client",
+		OAuthDeleteClient:         "resolvespec_oauth_delete_client",
+		OAuthSaveConsent:          "resolvespec_oauth_save_consent",
+		OAuthGetConsent:           "resolvespec_oauth_get_consent",
+		OAuthRevokeConsent:        "resolvespec_oauth_revoke_consent",
+		OAuthSaveRefresh:          "resolvespec_oauth_save_refresh",
+		OAuthRotateRefresh:        "resolvespec_oauth_rotate_refresh",
+		OAuthPeekRefresh:          "resolvespec_oauth_peek_refresh",
+		OAuthRevokeRefreshFamily:  "resolvespec_oauth_revoke_refresh_family",
+		OAuthRevokeRefreshByUser:  "resolvespec_oauth_revoke_refresh_session",
+		OAuthCreateDevice:         "resolvespec_oauth_create_device",
+		OAuthDeviceByUserCode:     "resolvespec_oauth_device_by_user_code",
+		OAuthDeviceDecide:         "resolvespec_oauth_device_decide",
+		OAuthDevicePoll:           "resolvespec_oauth_device_poll",
+		OAuthSavePAR:              "resolvespec_oauth_save_par",
+		OAuthConsumePAR:           "resolvespec_oauth_consume_par",
+		OAuthSeenJTI:              "resolvespec_oauth_seen_jti",
 		KeystoreGetUserKeys:       "resolvespec_keystore_get_user_keys",
 		KeystoreCreateKey:         "resolvespec_keystore_create_key",
 		KeystoreDeleteKey:         "resolvespec_keystore_delete_key",

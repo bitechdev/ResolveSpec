@@ -1765,8 +1765,10 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_secret_hash TEXT,       -- sha256 hex of the confidential-client secret; NULL for public clients
     token_endpoint_auth_method VARCHAR(30) DEFAULT 'none',
     is_active BOOLEAN DEFAULT true,
+    metadata jsonb,                -- every other RFC 7591 field (see sectypes.OAuthServerClient)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE oauth_clients ADD COLUMN IF NOT EXISTS metadata jsonb;
 
 -- oauth_codes: short-lived authorization codes (for multi-instance deployments)
 -- Note: client_id is stored without a foreign key so codes can be persisted even
@@ -1783,8 +1785,10 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     refresh_token TEXT,
     scopes TEXT[],
     expires_at TIMESTAMP NOT NULL,
+    extra jsonb,                   -- nonce, auth_time, acr, claims, user_id, dpop_jkt ... (see sectypes.OAuthCode)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE oauth_codes ADD COLUMN IF NOT EXISTS extra jsonb;
 CREATE INDEX IF NOT EXISTS idx_oauth_codes_code ON oauth_codes(code);
 CREATE INDEX IF NOT EXISTS idx_oauth_codes_expires ON oauth_codes(expires_at);
 
@@ -1801,7 +1805,7 @@ DECLARE
 BEGIN
     v_client_id := p_request->>'client_id';
 
-    INSERT INTO oauth_clients (client_id, redirect_uris, client_name, grant_types, allowed_scopes, client_secret_hash, token_endpoint_auth_method)
+    INSERT INTO oauth_clients (client_id, redirect_uris, client_name, grant_types, allowed_scopes, client_secret_hash, token_endpoint_auth_method, metadata)
     VALUES (
         v_client_id,
         ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(p_request->'redirect_uris') = 'array' THEN p_request->'redirect_uris' ELSE '[]'::jsonb END)),
@@ -1809,9 +1813,10 @@ BEGIN
         CASE WHEN jsonb_typeof(p_request->'grant_types') = 'array' AND jsonb_array_length(p_request->'grant_types') > 0 THEN ARRAY(SELECT jsonb_array_elements_text(p_request->'grant_types')) ELSE ARRAY['authorization_code'] END,
         CASE WHEN jsonb_typeof(p_request->'allowed_scopes') = 'array' AND jsonb_array_length(p_request->'allowed_scopes') > 0 THEN ARRAY(SELECT jsonb_array_elements_text(p_request->'allowed_scopes')) ELSE ARRAY['openid','profile','email'] END,
         NULLIF(p_request->>'client_secret_hash', ''),
-        COALESCE(NULLIF(p_request->>'token_endpoint_auth_method', ''), 'none')
+        COALESCE(NULLIF(p_request->>'token_endpoint_auth_method', ''), 'none'),
+        NULLIF(p_request - ARRAY['client_id','redirect_uris','client_name','grant_types','allowed_scopes','client_secret_hash','token_endpoint_auth_method'], '{}'::jsonb)
     )
-    RETURNING to_jsonb(oauth_clients.*) INTO v_row;
+    RETURNING (to_jsonb(oauth_clients.*) - 'metadata') || COALESCE(metadata, '{}'::jsonb) INTO v_row;
 
     RETURN QUERY SELECT true, null::text, v_row;
 EXCEPTION WHEN OTHERS THEN
@@ -1825,7 +1830,7 @@ LANGUAGE plpgsql AS $$
 DECLARE
     v_row jsonb;
 BEGIN
-    SELECT to_jsonb(oauth_clients.*)
+    SELECT (to_jsonb(oauth_clients.*) - 'metadata') || COALESCE(metadata, '{}'::jsonb)
     INTO v_row
     FROM oauth_clients
     WHERE client_id = p_client_id AND is_active = true;
@@ -1842,7 +1847,7 @@ CREATE OR REPLACE FUNCTION resolvespec_oauth_save_code(p_request jsonb)
 RETURNS TABLE(p_success bool, p_error text)
 LANGUAGE plpgsql AS $$
 BEGIN
-    INSERT INTO oauth_codes (code, client_id, redirect_uri, client_state, code_challenge, code_challenge_method, session_token, refresh_token, scopes, expires_at)
+    INSERT INTO oauth_codes (code, client_id, redirect_uri, client_state, code_challenge, code_challenge_method, session_token, refresh_token, scopes, expires_at, extra)
     VALUES (
         p_request->>'code',
         p_request->>'client_id',
@@ -1853,7 +1858,8 @@ BEGIN
         p_request->>'session_token',
         p_request->>'refresh_token',
         ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(p_request->'scopes') = 'array' THEN p_request->'scopes' ELSE '[]'::jsonb END)),
-        (p_request->>'expires_at')::timestamptz::timestamp
+        (p_request->>'expires_at')::timestamptz::timestamp,
+        NULLIF(p_request - ARRAY['code','client_id','redirect_uri','client_state','code_challenge','code_challenge_method','session_token','refresh_token','scopes','expires_at'], '{}'::jsonb)
     );
 
     RETURN QUERY SELECT true, null::text;
@@ -1879,7 +1885,7 @@ BEGIN
         'session_token',         session_token,
         'refresh_token',         refresh_token,
         'scopes',                to_jsonb(scopes)
-    ) INTO v_row;
+    ) || COALESCE(extra, '{}'::jsonb) INTO v_row;
 
     IF v_row IS NULL THEN
         RETURN QUERY SELECT false, 'invalid or expired code'::text, null::jsonb;
@@ -1928,5 +1934,376 @@ LANGUAGE plpgsql AS $$
 BEGIN
     DELETE FROM user_sessions WHERE session_token = p_token;
     RETURN QUERY SELECT true, null::text;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_update_client(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_rows int;
+BEGIN
+    UPDATE oauth_clients SET
+        redirect_uris = ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(p_request->'redirect_uris') = 'array' THEN p_request->'redirect_uris' ELSE '[]'::jsonb END)),
+        client_name = p_request->>'client_name',
+        grant_types = CASE WHEN jsonb_typeof(p_request->'grant_types') = 'array' AND jsonb_array_length(p_request->'grant_types') > 0 THEN ARRAY(SELECT jsonb_array_elements_text(p_request->'grant_types')) ELSE grant_types END,
+        allowed_scopes = CASE WHEN jsonb_typeof(p_request->'allowed_scopes') = 'array' AND jsonb_array_length(p_request->'allowed_scopes') > 0 THEN ARRAY(SELECT jsonb_array_elements_text(p_request->'allowed_scopes')) ELSE allowed_scopes END,
+        client_secret_hash = NULLIF(p_request->>'client_secret_hash', ''),
+        token_endpoint_auth_method = COALESCE(NULLIF(p_request->>'token_endpoint_auth_method', ''), token_endpoint_auth_method),
+        metadata = NULLIF(p_request - ARRAY['client_id','redirect_uris','client_name','grant_types','allowed_scopes','client_secret_hash','token_endpoint_auth_method'], '{}'::jsonb)
+    WHERE client_id = p_request->>'client_id' AND is_active = true;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows = 0 THEN
+        RETURN QUERY SELECT false, 'client not found'::text;
+    ELSE
+        RETURN QUERY SELECT true, null::text;
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_delete_client(p_client_id text)
+RETURNS TABLE(p_success bool, p_error text)
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE oauth_clients SET is_active = false WHERE client_id = p_client_id;
+    RETURN QUERY SELECT true, null::text;
+END;
+$$;
+
+-- ============================================
+-- OAuth2 Server grant state (consents, refresh tokens, device codes, PAR, replay cache)
+-- ============================================
+-- Procedure-backend tables use jsonb for scopes/extra/params. Every procedure takes one jsonb
+-- request and returns (p_success, p_error, p_data). p_error carries a stable code for the
+-- failures the Go side maps to errors: not_found, refresh_invalid, refresh_reused,
+-- device_pending, device_slowdown, device_denied, device_expired.
+
+CREATE TABLE IF NOT EXISTS oauth_consents (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    scopes jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_consents_user_client ON oauth_consents(user_id, client_id);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    id SERIAL PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,   -- sha256 hex of the raw refresh token
+    family_id VARCHAR(64) NOT NULL,
+    client_id VARCHAR(255) NOT NULL,
+    user_id INTEGER NOT NULL,
+    session_token VARCHAR(255),
+    scopes jsonb,
+    extra jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_family ON oauth_refresh_tokens(family_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_session ON oauth_refresh_tokens(session_token);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_expires ON oauth_refresh_tokens(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_device_codes (
+    id SERIAL PRIMARY KEY,
+    device_hash VARCHAR(64) NOT NULL UNIQUE,
+    user_code VARCHAR(32) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    scopes jsonb,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    user_id INTEGER,
+    session_token VARCHAR(255),
+    poll_interval INTEGER NOT NULL DEFAULT 5,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    last_polled_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_device_expires ON oauth_device_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_par_requests (
+    id SERIAL PRIMARY KEY,
+    request_uri VARCHAR(255) NOT NULL UNIQUE,
+    client_id VARCHAR(255) NOT NULL,
+    params jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_par_expires ON oauth_par_requests(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_jti (
+    id SERIAL PRIMARY KEY,
+    jti_key VARCHAR(255) NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_jti_expires ON oauth_jti(expires_at);
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_save_consent(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM oauth_consents
+    WHERE user_id = (p_request->>'user_id')::int AND client_id = p_request->>'client_id';
+    INSERT INTO oauth_consents (user_id, client_id, scopes, expires_at)
+    VALUES ((p_request->>'user_id')::int, p_request->>'client_id', COALESCE(p_request->'scopes', '[]'::jsonb),
+            (p_request->>'expires_at')::timestamptz::timestamp);
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_get_consent(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    SELECT jsonb_build_object('user_id', user_id, 'client_id', client_id, 'scopes', COALESCE(scopes, '[]'::jsonb), 'expires_at', expires_at)
+    INTO v_row
+    FROM oauth_consents
+    WHERE user_id = (p_request->>'user_id')::int AND client_id = p_request->>'client_id' AND expires_at > now();
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'not_found'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_revoke_consent(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM oauth_consents
+    WHERE user_id = (p_request->>'user_id')::int AND client_id = p_request->>'client_id';
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_save_refresh(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO oauth_refresh_tokens (token_hash, family_id, client_id, user_id, session_token, scopes, extra, expires_at)
+    VALUES (p_request->>'token_hash', p_request->>'family_id', p_request->>'client_id', (p_request->>'user_id')::int,
+            p_request->>'session_token', p_request->'scopes', p_request->'extra',
+            (p_request->>'expires_at')::timestamptz::timestamp);
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_rotate_refresh(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    r oauth_refresh_tokens%ROWTYPE;
+    v_next jsonb := p_request->'next';
+    v_old jsonb;
+BEGIN
+    SELECT * INTO r FROM oauth_refresh_tokens WHERE token_hash = p_request->>'old_hash' FOR UPDATE;
+    IF NOT FOUND OR r.revoked_at IS NOT NULL OR r.expires_at <= now() THEN
+        RETURN QUERY SELECT false, 'refresh_invalid'::text, null::jsonb;
+        RETURN;
+    END IF;
+    v_old := jsonb_build_object('token_hash', r.token_hash, 'family_id', r.family_id, 'client_id', r.client_id,
+                                'user_id', r.user_id, 'session_token', r.session_token,
+                                'scopes', COALESCE(r.scopes, '[]'::jsonb), 'extra', COALESCE(r.extra, '{}'::jsonb),
+                                'expires_at', r.expires_at);
+    IF r.used_at IS NOT NULL THEN
+        -- A rotated token came back: revoke the whole family. Returning (not raising) keeps the revoke.
+        UPDATE oauth_refresh_tokens SET revoked_at = now() WHERE family_id = r.family_id AND revoked_at IS NULL;
+        RETURN QUERY SELECT false, 'refresh_reused'::text, v_old;
+        RETURN;
+    END IF;
+    UPDATE oauth_refresh_tokens SET used_at = now() WHERE id = r.id;
+    INSERT INTO oauth_refresh_tokens (token_hash, family_id, client_id, user_id, session_token, scopes, extra, expires_at)
+    VALUES (v_next->>'token_hash', r.family_id, r.client_id, r.user_id,
+            COALESCE(NULLIF(v_next->>'session_token', ''), r.session_token),
+            v_next->'scopes', v_next->'extra', (v_next->>'expires_at')::timestamptz::timestamp);
+    RETURN QUERY SELECT true, null::text, v_old;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_peek_refresh(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    SELECT jsonb_build_object('token_hash', token_hash, 'family_id', family_id, 'client_id', client_id,
+                              'user_id', user_id, 'session_token', session_token,
+                              'scopes', COALESCE(scopes, '[]'::jsonb), 'extra', COALESCE(extra, '{}'::jsonb),
+                              'expires_at', expires_at)
+    INTO v_row
+    FROM oauth_refresh_tokens
+    WHERE token_hash = p_request->>'token_hash' AND revoked_at IS NULL AND expires_at > now();
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'refresh_invalid'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_revoke_refresh_family(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE oauth_refresh_tokens SET revoked_at = now() WHERE family_id = p_request->>'family_id' AND revoked_at IS NULL;
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_revoke_refresh_session(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE oauth_refresh_tokens SET revoked_at = now() WHERE session_token = p_request->>'session_token' AND revoked_at IS NULL;
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_create_device(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO oauth_device_codes (device_hash, user_code, client_id, scopes, status, poll_interval, expires_at)
+    VALUES (p_request->>'device_hash', upper(p_request->>'user_code'), p_request->>'client_id', p_request->'scopes',
+            COALESCE(NULLIF(p_request->>'status', ''), 'pending'), COALESCE((p_request->>'interval')::int, 5),
+            (p_request->>'expires_at')::timestamptz::timestamp);
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_device_by_user_code(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    SELECT jsonb_build_object('device_hash', device_hash, 'user_code', user_code, 'client_id', client_id,
+                              'scopes', COALESCE(scopes, '[]'::jsonb), 'status', status, 'interval', poll_interval,
+                              'expires_at', expires_at)
+    INTO v_row
+    FROM oauth_device_codes
+    WHERE user_code = upper(p_request->>'user_code') AND status = 'pending' AND expires_at > now();
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'not_found'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_device_decide(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_rows int;
+    v_approve boolean := COALESCE((p_request->>'approve')::boolean, false);
+BEGIN
+    UPDATE oauth_device_codes
+    SET status = CASE WHEN v_approve THEN 'approved' ELSE 'denied' END,
+        user_id = CASE WHEN v_approve THEN (p_request->>'user_id')::int ELSE user_id END,
+        session_token = CASE WHEN v_approve THEN p_request->>'session_token' ELSE session_token END
+    WHERE user_code = upper(p_request->>'user_code') AND status = 'pending' AND expires_at > now();
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    IF v_rows = 0 THEN
+        RETURN QUERY SELECT false, 'not_found'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, null::jsonb;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_device_poll(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    d oauth_device_codes%ROWTYPE;
+    v_slow boolean;
+BEGIN
+    SELECT * INTO d FROM oauth_device_codes WHERE device_hash = p_request->>'device_hash' FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT false, 'device_expired'::text, null::jsonb;
+        RETURN;
+    END IF;
+    IF d.expires_at <= now() THEN
+        DELETE FROM oauth_device_codes WHERE id = d.id;
+        RETURN QUERY SELECT false, 'device_expired'::text, null::jsonb;
+        RETURN;
+    END IF;
+    v_slow := d.last_polled_at IS NOT NULL AND (now() - d.last_polled_at) < make_interval(secs => d.poll_interval);
+    UPDATE oauth_device_codes SET last_polled_at = now() WHERE id = d.id;
+    IF v_slow THEN
+        RETURN QUERY SELECT false, 'device_slowdown'::text, null::jsonb;
+    ELSIF d.status = 'denied' THEN
+        DELETE FROM oauth_device_codes WHERE id = d.id;
+        RETURN QUERY SELECT false, 'device_denied'::text, null::jsonb;
+    ELSIF d.status = 'approved' THEN
+        DELETE FROM oauth_device_codes WHERE id = d.id;
+        RETURN QUERY SELECT true, null::text, jsonb_build_object('device_hash', d.device_hash, 'user_code', d.user_code,
+            'client_id', d.client_id, 'scopes', COALESCE(d.scopes, '[]'::jsonb), 'status', d.status,
+            'user_id', d.user_id, 'session_token', d.session_token, 'interval', d.poll_interval, 'expires_at', d.expires_at);
+    ELSE
+        RETURN QUERY SELECT false, 'device_pending'::text, null::jsonb;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_save_par(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO oauth_par_requests (request_uri, client_id, params, expires_at)
+    VALUES (p_request->>'request_uri', p_request->>'client_id', p_request->'params',
+            (p_request->>'expires_at')::timestamptz::timestamp);
+    RETURN QUERY SELECT true, null::text, null::jsonb;
+EXCEPTION WHEN OTHERS THEN
+    RETURN QUERY SELECT false, SQLERRM, null::jsonb;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_consume_par(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_row jsonb;
+BEGIN
+    DELETE FROM oauth_par_requests
+    WHERE request_uri = p_request->>'request_uri' AND expires_at > now()
+    RETURNING jsonb_build_object('request_uri', request_uri, 'client_id', client_id,
+                                 'params', COALESCE(params, '{}'::jsonb), 'expires_at', expires_at)
+    INTO v_row;
+    IF v_row IS NULL THEN
+        RETURN QUERY SELECT false, 'not_found'::text, null::jsonb;
+    ELSE
+        RETURN QUERY SELECT true, null::text, v_row;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION resolvespec_oauth_seen_jti(p_request jsonb)
+RETURNS TABLE(p_success bool, p_error text, p_data jsonb)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_rows int;
+BEGIN
+    DELETE FROM oauth_jti WHERE expires_at < now();
+    INSERT INTO oauth_jti (jti_key, expires_at)
+    VALUES (p_request->>'key', (p_request->>'expires_at')::timestamptz::timestamp)
+    ON CONFLICT (jti_key) DO NOTHING;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    RETURN QUERY SELECT true, null::text, jsonb_build_object('seen', v_rows = 0);
 END;
 $$;

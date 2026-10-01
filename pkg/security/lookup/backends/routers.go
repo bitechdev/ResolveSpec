@@ -199,6 +199,22 @@ func (r *oauthClientRouter) Revoke(ctx context.Context, token string) error {
 	return st.Revoke(ctx, token)
 }
 
+func (r *oauthClientRouter) UpdateClient(ctx context.Context, client *sectypes.OAuthServerClient) error {
+	st, err := pick[lookup.OAuthClientStore](r.c, ctx, lookup.OpOAuthUpdateClient, r.c.procs.OAuthUpdateClient, r.proc, r.direct)
+	if err != nil {
+		return err
+	}
+	return st.UpdateClient(ctx, client)
+}
+
+func (r *oauthClientRouter) DeleteClient(ctx context.Context, clientID string) error {
+	st, err := pick[lookup.OAuthClientStore](r.c, ctx, lookup.OpOAuthDeleteClient, r.c.procs.OAuthDeleteClient, r.proc, r.direct)
+	if err != nil {
+		return err
+	}
+	return st.DeleteClient(ctx, clientID)
+}
+
 type oauthUserRouter struct {
 	c            *chooser
 	proc, direct lookup.OAuthUserStore
@@ -393,4 +409,135 @@ func (r *policyRouter) RowSecurity(ctx context.Context, userRef any, schema, tab
 		return sectypes.RowSecurity{}, err
 	}
 	return st.RowSecurity(ctx, userRef, schema, table)
+}
+
+type oauthGrantRouter struct {
+	c            *chooser
+	proc, direct lookup.OAuthGrantStore
+}
+
+var _ lookup.OAuthGrantStore = (*oauthGrantRouter)(nil)
+
+func (r *oauthGrantRouter) pick(ctx context.Context, op lookup.Op, proc string) (lookup.OAuthGrantStore, error) {
+	return pick[lookup.OAuthGrantStore](r.c, ctx, op, proc, r.proc, r.direct)
+}
+
+func (r *oauthGrantRouter) SaveConsent(ctx context.Context, c lookup.Consent) error {
+	st, err := r.pick(ctx, lookup.OpOAuthSaveConsent, r.c.procs.OAuthSaveConsent)
+	if err != nil {
+		return err
+	}
+	return st.SaveConsent(ctx, c)
+}
+
+func (r *oauthGrantRouter) GetConsent(ctx context.Context, userID int, clientID string) (*lookup.Consent, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthGetConsent, r.c.procs.OAuthGetConsent)
+	if err != nil {
+		return nil, err
+	}
+	return st.GetConsent(ctx, userID, clientID)
+}
+
+func (r *oauthGrantRouter) RevokeConsent(ctx context.Context, userID int, clientID string) error {
+	st, err := r.pick(ctx, lookup.OpOAuthRevokeConsent, r.c.procs.OAuthRevokeConsent)
+	if err != nil {
+		return err
+	}
+	return st.RevokeConsent(ctx, userID, clientID)
+}
+
+func (r *oauthGrantRouter) SaveRefresh(ctx context.Context, t lookup.RefreshToken) error {
+	st, err := r.pick(ctx, lookup.OpOAuthSaveRefresh, r.c.procs.OAuthSaveRefresh)
+	if err != nil {
+		return err
+	}
+	return st.SaveRefresh(ctx, t)
+}
+
+func (r *oauthGrantRouter) RotateRefresh(ctx context.Context, oldHash string, next lookup.RefreshToken) (*lookup.RefreshToken, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthRotateRefresh, r.c.procs.OAuthRotateRefresh)
+	if err != nil {
+		return nil, err
+	}
+	return st.RotateRefresh(ctx, oldHash, next)
+}
+
+func (r *oauthGrantRouter) PeekRefresh(ctx context.Context, hash string) (*lookup.RefreshToken, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthPeekRefresh, r.c.procs.OAuthPeekRefresh)
+	if err != nil {
+		return nil, err
+	}
+	return st.PeekRefresh(ctx, hash)
+}
+
+func (r *oauthGrantRouter) RevokeRefreshFamily(ctx context.Context, familyID string) error {
+	st, err := r.pick(ctx, lookup.OpOAuthRevokeRefreshFamily, r.c.procs.OAuthRevokeRefreshFamily)
+	if err != nil {
+		return err
+	}
+	return st.RevokeRefreshFamily(ctx, familyID)
+}
+
+func (r *oauthGrantRouter) RevokeRefreshBySession(ctx context.Context, sessionToken string) error {
+	st, err := r.pick(ctx, lookup.OpOAuthRevokeRefreshByUser, r.c.procs.OAuthRevokeRefreshByUser)
+	if err != nil {
+		return err
+	}
+	return st.RevokeRefreshBySession(ctx, sessionToken)
+}
+
+func (r *oauthGrantRouter) CreateDevice(ctx context.Context, d lookup.DeviceCode) error {
+	st, err := r.pick(ctx, lookup.OpOAuthCreateDevice, r.c.procs.OAuthCreateDevice)
+	if err != nil {
+		return err
+	}
+	return st.CreateDevice(ctx, d)
+}
+
+func (r *oauthGrantRouter) DeviceByUserCode(ctx context.Context, userCode string) (*lookup.DeviceCode, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthDeviceByUserCode, r.c.procs.OAuthDeviceByUserCode)
+	if err != nil {
+		return nil, err
+	}
+	return st.DeviceByUserCode(ctx, userCode)
+}
+
+func (r *oauthGrantRouter) DeviceDecide(ctx context.Context, userCode string, approve bool, userID int, sessionToken string) error {
+	st, err := r.pick(ctx, lookup.OpOAuthDeviceDecide, r.c.procs.OAuthDeviceDecide)
+	if err != nil {
+		return err
+	}
+	return st.DeviceDecide(ctx, userCode, approve, userID, sessionToken)
+}
+
+func (r *oauthGrantRouter) DevicePoll(ctx context.Context, deviceHash string) (*lookup.DeviceCode, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthDevicePoll, r.c.procs.OAuthDevicePoll)
+	if err != nil {
+		return nil, err
+	}
+	return st.DevicePoll(ctx, deviceHash)
+}
+
+func (r *oauthGrantRouter) SavePushedRequest(ctx context.Context, req lookup.PushedRequest) error {
+	st, err := r.pick(ctx, lookup.OpOAuthSavePAR, r.c.procs.OAuthSavePAR)
+	if err != nil {
+		return err
+	}
+	return st.SavePushedRequest(ctx, req)
+}
+
+func (r *oauthGrantRouter) ConsumePushedRequest(ctx context.Context, requestURI string) (*lookup.PushedRequest, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthConsumePAR, r.c.procs.OAuthConsumePAR)
+	if err != nil {
+		return nil, err
+	}
+	return st.ConsumePushedRequest(ctx, requestURI)
+}
+
+func (r *oauthGrantRouter) SeenJTI(ctx context.Context, key string, expires time.Time) (bool, error) {
+	st, err := r.pick(ctx, lookup.OpOAuthSeenJTI, r.c.procs.OAuthSeenJTI)
+	if err != nil {
+		return false, err
+	}
+	return st.SeenJTI(ctx, key, expires)
 }

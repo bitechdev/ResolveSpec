@@ -60,6 +60,10 @@ func (o *OAuthClients) RegisterClient(ctx context.Context, client *sectypes.OAut
 		return nil, fmt.Errorf("failed to marshal allowed_scopes: %w", err)
 	}
 
+	meta, err := client.ClientMetadataJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal client metadata: %w", err)
+	}
 	err = o.do(func(q Querier) error {
 		return o.Insert(lookup.EntityOAuthClients).Set(
 			Set(lookup.OAuthClientsClientID, client.ClientID),
@@ -70,33 +74,86 @@ func (o *OAuthClients) RegisterClient(ctx context.Context, client *sectypes.OAut
 			Set(lookup.OAuthClientsClientSecretHash, nullIfEmpty(client.ClientSecretHash)),
 			Set(lookup.OAuthClientsTokenEndpointAuthMethod, authMethod),
 			Set(lookup.OAuthClientsIsActive, true),
+			Set(lookup.OAuthClientsMetadata, nullIfEmpty(meta)),
 			Set(lookup.OAuthClientsCreatedAt, o.Now()),
 		).Exec(ctx, q)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to register client: %w", err)
 	}
-	return &sectypes.OAuthServerClient{
-		ClientID:                client.ClientID,
-		RedirectURIs:            client.RedirectURIs,
-		ClientName:              client.ClientName,
-		GrantTypes:              grantTypes,
-		AllowedScopes:           allowedScopes,
-		ClientSecretHash:        client.ClientSecretHash,
-		TokenEndpointAuthMethod: authMethod,
-	}, nil
+	res := *client
+	res.GrantTypes = grantTypes
+	res.AllowedScopes = allowedScopes
+	res.TokenEndpointAuthMethod = authMethod
+	return &res, nil
+}
+
+// UpdateClient implements lookup.OAuthClientStore: it rewrites the mutable registration
+// fields of an existing client (RFC 7592 management).
+func (o *OAuthClients) UpdateClient(ctx context.Context, client *sectypes.OAuthServerClient) error {
+	redirects, err := o.d.EncodeJSON(client.RedirectURIs)
+	if err != nil {
+		return err
+	}
+	if redirects == nil {
+		redirects = "[]"
+	}
+	grants, err := o.d.EncodeJSON(client.GrantTypes)
+	if err != nil {
+		return err
+	}
+	scopes, err := o.d.EncodeJSON(client.AllowedScopes)
+	if err != nil {
+		return err
+	}
+	meta, err := client.ClientMetadataJSON()
+	if err != nil {
+		return err
+	}
+	var n int64
+	err = o.do(func(q Querier) error {
+		var err error
+		n, err = o.Update(lookup.EntityOAuthClients).Set(
+			Set(lookup.OAuthClientsRedirectURIs, redirects),
+			Set(lookup.OAuthClientsClientName, client.ClientName),
+			Set(lookup.OAuthClientsGrantTypes, grants),
+			Set(lookup.OAuthClientsAllowedScopes, scopes),
+			Set(lookup.OAuthClientsClientSecretHash, nullIfEmpty(client.ClientSecretHash)),
+			Set(lookup.OAuthClientsTokenEndpointAuthMethod, client.TokenEndpointAuthMethod),
+			Set(lookup.OAuthClientsMetadata, nullIfEmpty(meta)),
+		).Where(Eq(lookup.OAuthClientsClientID, client.ClientID), Eq(lookup.OAuthClientsIsActive, true)).Exec(ctx, q)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update client: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("client not found")
+	}
+	return nil
+}
+
+// DeleteClient implements lookup.OAuthClientStore: the client is deactivated.
+func (o *OAuthClients) DeleteClient(ctx context.Context, clientID string) error {
+	return o.do(func(q Querier) error {
+		_, err := o.Update(lookup.EntityOAuthClients).Set(Set(lookup.OAuthClientsIsActive, false)).
+			Where(Eq(lookup.OAuthClientsClientID, clientID)).Exec(ctx, q)
+		return err
+	})
 }
 
 // GetClient implements lookup.OAuthClientStore.
 func (o *OAuthClients) GetClient(ctx context.Context, clientID string) (*sectypes.OAuthServerClient, error) {
 	var redirects, grants, scopes any
 	var name, secret, method sql.NullString
+	var meta any
 	err := o.do(func(q Querier) error {
 		return o.From(lookup.EntityOAuthClients).
 			Cols(lookup.OAuthClientsRedirectURIs, lookup.OAuthClientsClientName, lookup.OAuthClientsGrantTypes,
-				lookup.OAuthClientsAllowedScopes, lookup.OAuthClientsClientSecretHash, lookup.OAuthClientsTokenEndpointAuthMethod).
+				lookup.OAuthClientsAllowedScopes, lookup.OAuthClientsClientSecretHash, lookup.OAuthClientsTokenEndpointAuthMethod,
+				lookup.OAuthClientsMetadata).
 			Where(Eq(lookup.OAuthClientsClientID, clientID), Eq(lookup.OAuthClientsIsActive, true)).
-			QueryRow(ctx, q, &redirects, &name, &grants, &scopes, &secret, &method)
+			QueryRow(ctx, q, &redirects, &name, &grants, &scopes, &secret, &method, &meta)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -104,12 +161,17 @@ func (o *OAuthClients) GetClient(ctx context.Context, clientID string) (*sectype
 		}
 		return nil, fmt.Errorf("failed to get client: %w", err)
 	}
-	res := &sectypes.OAuthServerClient{
-		ClientID:                clientID,
-		ClientName:              name.String,
-		ClientSecretHash:        secret.String,
-		TokenEndpointAuthMethod: method.String,
+	res := &sectypes.OAuthServerClient{}
+	switch v := meta.(type) {
+	case []byte:
+		_ = res.ApplyClientMetadata(string(v))
+	case string:
+		_ = res.ApplyClientMetadata(v)
 	}
+	res.ClientID = clientID
+	res.ClientName = name.String
+	res.ClientSecretHash = secret.String
+	res.TokenEndpointAuthMethod = method.String
 	_ = o.d.DecodeJSON(redirects, &res.RedirectURIs)
 	_ = o.d.DecodeJSON(grants, &res.GrantTypes)
 	_ = o.d.DecodeJSON(scopes, &res.AllowedScopes)
@@ -126,6 +188,10 @@ func (o *OAuthClients) SaveCode(ctx context.Context, code *sectypes.OAuthCode) e
 	if method == "" {
 		method = "S256"
 	}
+	extra, err := code.CodeExtraJSON()
+	if err != nil {
+		return fmt.Errorf("failed to marshal code extra: %w", err)
+	}
 	return o.do(func(q Querier) error {
 		return o.Insert(lookup.EntityOAuthCodes).Set(
 			Set(lookup.OAuthCodesCode, code.Code),
@@ -138,6 +204,7 @@ func (o *OAuthClients) SaveCode(ctx context.Context, code *sectypes.OAuthCode) e
 			Set(lookup.OAuthCodesRefreshToken, code.RefreshToken),
 			Set(lookup.OAuthCodesScopes, scopes),
 			Set(lookup.OAuthCodesExpiresAt, code.ExpiresAt),
+			Set(lookup.OAuthCodesExtra, nullIfEmpty(extra)),
 			Set(lookup.OAuthCodesCreatedAt, o.Now()),
 		).Exec(ctx, q)
 	})
@@ -148,15 +215,15 @@ func (o *OAuthClients) SaveCode(ctx context.Context, code *sectypes.OAuthCode) e
 func (o *OAuthClients) ExchangeCode(ctx context.Context, code string) (*sectypes.OAuthCode, error) {
 	var res sectypes.OAuthCode
 	var state, refresh sql.NullString
-	var scopes any
+	var scopes, extra any
 	err := o.tx(ctx, func(q Querier) error {
 		err := o.From(lookup.EntityOAuthCodes).
 			Cols(lookup.OAuthCodesClientID, lookup.OAuthCodesRedirectURI, lookup.OAuthCodesClientState,
 				lookup.OAuthCodesCodeChallenge, lookup.OAuthCodesCodeChallengeMethod, lookup.OAuthCodesSessionToken,
-				lookup.OAuthCodesRefreshToken, lookup.OAuthCodesScopes).
+				lookup.OAuthCodesRefreshToken, lookup.OAuthCodesScopes, lookup.OAuthCodesExtra).
 			Where(Eq(lookup.OAuthCodesCode, code), Gt(lookup.OAuthCodesExpiresAt, o.Now())).
 			QueryRow(ctx, q, &res.ClientID, &res.RedirectURI, &state, &res.CodeChallenge, &res.CodeChallengeMethod,
-				&res.SessionToken, &refresh, &scopes)
+				&res.SessionToken, &refresh, &scopes, &extra)
 		if err != nil {
 			return err
 		}
@@ -179,6 +246,12 @@ func (o *OAuthClients) ExchangeCode(ctx context.Context, code string) (*sectypes
 	res.ClientState = state.String
 	res.RefreshToken = refresh.String
 	_ = o.d.DecodeJSON(scopes, &res.Scopes)
+	switch v := extra.(type) {
+	case []byte:
+		_ = res.ApplyCodeExtra(string(v))
+	case string:
+		_ = res.ApplyCodeExtra(v)
+	}
 	return &res, nil
 }
 

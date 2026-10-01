@@ -62,6 +62,10 @@ type OAuthClientStore interface {
 	ExchangeCode(ctx context.Context, code string) (*sectypes.OAuthCode, error)
 	Introspect(ctx context.Context, token string) (*sectypes.OAuthTokenInfo, error)
 	Revoke(ctx context.Context, token string) error
+	// UpdateClient rewrites the registration fields of an existing client (RFC 7592).
+	UpdateClient(ctx context.Context, client *sectypes.OAuthServerClient) error
+	// DeleteClient deactivates a client.
+	DeleteClient(ctx context.Context, clientID string) error
 }
 
 // OAuthSession is the session row written after an OAuth2 client login.
@@ -147,6 +151,7 @@ type Provider struct {
 	Keys        KeyStore
 	OAuthClient OAuthClientStore
 	OAuthUser   OAuthUserStore
+	OAuthGrant  OAuthGrantStore
 	Passkey     PasskeyStore
 	TOTP        TOTPStore
 	Policy      PolicyStore

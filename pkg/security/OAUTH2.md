@@ -397,7 +397,7 @@ UserInfoParser: func(userInfo map[string]any) (*security.UserContext, error) {
 
 ## Implementation Details
 
-All database operations use stored procedures for consistency and security:
+On PostgreSQL, database operations use stored procedures by default (other dialects use direct SQL through `pkg/security/lookup`):
 - `resolvespec_oauth_getorcreateuser` - Find or create OAuth2 user
 - `resolvespec_oauth_createsession` - Create OAuth2 session
 - `resolvespec_oauth_getsession` - Validate and retrieve session

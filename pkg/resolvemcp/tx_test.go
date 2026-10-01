@@ -128,14 +128,12 @@ func TestReadRunsInOneTransaction(t *testing.T) {
 	}
 }
 
-func TestCreateSingleUsesTwoTransactions(t *testing.T) {
+func TestCreateSingleRunsInOneTransaction(t *testing.T) {
 	h, mock, ctx := newTxHarness(t)
 	tr := traceHooks(h, OnTxBegin, BeforeCreate, AfterCreate)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, "a"))
 	mock.ExpectCommit()
 
@@ -145,24 +143,19 @@ func TestCreateSingleUsesTwoTransactions(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	tr.assertOrder(t, "on_tx_begin", "before_create", "on_tx_begin", "after_create")
-	if tr.txs["before_create"][0] != tr.txs["on_tx_begin"][0] {
-		t.Fatal("BeforeCreate must run on the first transaction")
-	}
-	if tr.txs["after_create"][0] != tr.txs["on_tx_begin"][1] || tr.txs["on_tx_begin"][0] == tr.txs["on_tx_begin"][1] {
-		t.Fatal("AfterCreate must run on a second, distinct transaction")
+	tr.assertOrder(t, "on_tx_begin", "before_create", "after_create")
+	if tr.txs["before_create"][0] != tr.txs["on_tx_begin"][0] || tr.txs["after_create"][0] != tr.txs["on_tx_begin"][0] {
+		t.Fatal("BeforeCreate, the re-fetch and AfterCreate must share one transaction")
 	}
 }
 
-func TestCreateBatchRefetchOnSecondTransaction(t *testing.T) {
+func TestCreateBatchRefetchInSameTransaction(t *testing.T) {
 	h, mock, ctx := newTxHarness(t)
 	tr := traceHooks(h, OnTxBegin, AfterCreate)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`INSERT`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 	mock.ExpectQuery(`INSERT`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "a"))
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(2, "b"))
 	mock.ExpectCommit()
@@ -174,10 +167,10 @@ func TestCreateBatchRefetchOnSecondTransaction(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	tr.assertOrder(t, "on_tx_begin", "on_tx_begin", "after_create")
+	tr.assertOrder(t, "on_tx_begin", "after_create")
 }
 
-func TestUpdateRefetchRunsInSecondTransaction(t *testing.T) {
+func TestUpdateRefetchRunsInSameTransaction(t *testing.T) {
 	h, mock, ctx := newTxHarness(t)
 	tr := traceHooks(h, OnTxBegin, BeforeUpdate, AfterUpdate)
 
@@ -185,25 +178,38 @@ func TestUpdateRefetchRunsInSecondTransaction(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a"))
 	mock.ExpectExec(`UPDATE`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "b"))
 	mock.ExpectCommit()
 
-	if _, err := h.executeUpdate(ctx, "public", "items", "7", map[string]interface{}{"name": "b"}); err != nil {
+	res, err := h.executeUpdate(ctx, "public", "items", "7", map[string]interface{}{"name": "b"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	tr.assertOrder(t, "on_tx_begin", "before_update", "after_update", "on_tx_begin")
-	if tr.txs["on_tx_begin"][0] == tr.txs["on_tx_begin"][1] {
-		t.Fatal("re-fetch must run on a second transaction")
+	if m, _ := res.(map[string]interface{}); m["name"] != "b" {
+		t.Fatalf("result must be the re-fetched row, got %v", res)
 	}
-	for _, ht := range []string{"before_update", "after_update"} {
-		if tr.txs[ht][0] != tr.txs["on_tx_begin"][0] {
-			t.Fatalf("%s must run on the first transaction", ht)
-		}
+	tr.assertOrder(t, "on_tx_begin", "before_update", "after_update")
+}
+
+// A failing AfterCreate must roll the insert back: the client sees an error, so nothing may
+// have been committed that a retry would duplicate.
+func TestAfterCreateErrorRollsBackInsert(t *testing.T) {
+	h, mock, ctx := newTxHarness(t)
+	h.Hooks().Register(AfterCreate, func(*HookContext) error { return sql.ErrConnDone })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(7, "a"))
+	mock.ExpectRollback()
+
+	if _, err := h.executeCreate(ctx, "public", "items", map[string]interface{}{"name": "a"}); err == nil {
+		t.Fatal("expected error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -314,15 +320,12 @@ func TestSecurityHooksStampTxSettingsOnEveryTransaction(t *testing.T) {
 	ctx = context.WithValue(ctx, security.UserContextKey, &security.UserContext{UserID: 7, UserName: "u"})
 	ctx = context.WithValue(ctx, security.UserIDKey, 7)
 
-	// Update opens two transactions; each must be stamped before any other SQL.
+	// The transaction is stamped before any other SQL.
 	cols := []string{"id", "name"}
 	mock.ExpectBegin()
 	mock.ExpectExec(`set_config\('app\.user_id'`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a"))
 	mock.ExpectExec(`UPDATE`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	mock.ExpectExec(`set_config\('app\.user_id'`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "b"))
 	mock.ExpectCommit()
 

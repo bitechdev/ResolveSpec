@@ -187,7 +187,7 @@ handler.EnableOAuthServer(security.OAuthServerConfig{
 
 provider, _ := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
 securityList, _ := security.NewSecurityList(provider)
-security.RegisterSecurityHooks(handler, securityList)
+resolvemcp.RegisterSecurityHooks(handler, securityList)
 
 http.ListenAndServe(":8080", handler.HTTPHandler(securityList))
 ```
@@ -286,7 +286,10 @@ resolvemcp.SetupMuxRoutesWithAuth(r, handler, securityList)
 ```go
 import "github.com/bitechdev/ResolveSpec/pkg/security"
 
-securityList := security.NewSecurityList(mySecurityProvider)
+securityList, err := security.NewSecurityList(mySecurityProvider)
+if err != nil {
+    log.Fatal(err)
+}
 resolvemcp.RegisterSecurityHooks(handler, securityList)
 ```
 
@@ -294,10 +297,13 @@ Call `RegisterSecurityHooks` **once**, after creating the handler and before reg
 
 | Hook | Effect |
 |---|---|
-| `BeforeHandle` | Enforces per-entity operation rules (see below) |
+| `OnTxBegin` | Stamps transaction-local settings (RLS GUCs) set with `SecurityList.SetTxSettings` |
+| `BeforeHandle` | Enforces per-entity operation rules (see below); preloads column rules for writes |
 | `BeforeRead` | Loads RLS/CLS rules, then injects a user-scoped WHERE clause |
+| `BeforeScan` | Applies row security to the row an update or delete targets; a row the user cannot see is "not found" |
 | `AfterRead` | Masks/hides columns per column-security rules; writes audit log |
-| `BeforeUpdate` | Blocks update if `CanUpdate` is false |
+| `BeforeCreate` | Blocks create if `CanCreate` is false; drops hidden/masked columns from the payload |
+| `BeforeUpdate` | Blocks update if `CanUpdate` is false; drops hidden/masked columns from the payload |
 | `BeforeDelete` | Blocks delete if `CanDelete` is false |
 
 ### Per-entity operation rules

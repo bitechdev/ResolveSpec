@@ -16,7 +16,8 @@ rowSec := security.NewDatabaseRowSecurityProvider(db)
 provider, _ := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
 
 // Step 3: Setup and apply middleware
-securityList, _ := security.SetupSecurityProvider(handler, provider)
+securityList, _ := security.NewSecurityList(provider)
+restheadspec.RegisterSecurityHooks(handler, securityList)
 router.Use(security.NewAuthMiddleware(securityList))
 router.Use(security.SetSecurityMiddleware(securityList))
 ```
@@ -25,7 +26,7 @@ router.Use(security.SetSecurityMiddleware(securityList))
 
 ## Stored Procedures
 
-**All database operations use PostgreSQL stored procedures** with `resolvespec_*` naming:
+**On PostgreSQL, database operations use stored procedures by default** with `resolvespec_*` naming (other dialects use direct SQL; see `lookup.Config` in README.md):
 
 ### Database Authenticators
 ```go
@@ -632,7 +633,8 @@ func main() {
 
     // Setup security
     provider := &SimpleProvider{}
-    securityList := security.SetupSecurityProvider(handler, provider)
+    securityList, _ := security.NewSecurityList(provider)
+    restheadspec.RegisterSecurityHooks(handler, securityList)
 
     // Apply middleware
     router := mux.NewRouter()
@@ -761,7 +763,8 @@ auth := security.NewJWTAuthenticator("secret", db)
 colSec := security.NewDatabaseColumnSecurityProvider(db)
 rowSec := security.NewDatabaseRowSecurityProvider(db)
 provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
-securityList := security.SetupSecurityProvider(handler, provider)
+securityList, _ := security.NewSecurityList(provider)
+restheadspec.RegisterSecurityHooks(handler, securityList)
 
 // ===== INTERFACE METHODS =====
 Authenticate(r *http.Request) (*UserContext, error)

@@ -15,7 +15,7 @@ Wire: `dbtrace.Configure(dbtrace.FromConfig(cfg.DBTrace))` and wrap handlers wit
 ## Log fields
 - `tx` transactions begun · `tx_queries` adapter queries inside `RunInTransaction` (share the tx connection)
 - `pooled` adapter queries outside a tx (each takes a pool connection)
-- `raw` direct `*sql.DB` calls, with kinds: `auth.session`, `auth.activity`, `security.column`, `security.row`, `probe.pg_proc`, `keystore.validate`
+- `raw` direct `*sql.DB` calls, with kinds: `auth.session`, `auth.activity`, `security.column`, `security.row`, `probe.pg_proc` (lookup `ModeAuto` only), `keystore.validate`
 - Connections used ≈ `tx + pooled + raw`
 
 ## Pool log

@@ -66,8 +66,6 @@ func TestUpdateSetsOnlyGivenKeysAndAllowsNull(t *testing.T) {
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a", "A", "n"))
 	// Only "note" is set (to NULL); the id in the payload addresses the row and is not rewritten.
 	mock.ExpectExec(`UPDATE .* SET "?note"? = \$1 WHERE`).WithArgs(nil, "7").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT`).WillReturnRows(sqlmock.NewRows(cols).AddRow(7, "a", "A", nil))
 	mock.ExpectCommit()
 

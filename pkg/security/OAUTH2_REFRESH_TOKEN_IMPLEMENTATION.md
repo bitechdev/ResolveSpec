@@ -43,16 +43,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 **`resolvespec_oauth_getrefreshtoken(p_refresh_token)`**
 - Gets OAuth2 session data by refresh token
 - Returns: `{user_id, access_token, token_type, expiry}`
-- Location: `lookup/database_schema.sql:714`
+- Location: `lookup/database_schema.sql` (section 15); direct mode: `lookup/direct` `OAuthUserStore.GetByRefreshToken`
 
 **`resolvespec_oauth_updaterefreshtoken(p_update_data)`**
 - Updates session with new tokens after refresh
 - Input: `{user_id, old_refresh_token, new_session_token, new_access_token, new_refresh_token, expires_at}`
-- Location: `lookup/database_schema.sql:752`
+- Location: `lookup/database_schema.sql` (section 16); direct mode: `lookup/direct` `OAuthUserStore.UpdateRefreshToken`
 
 **`resolvespec_oauth_getuser(p_user_id)`**
 - Gets user data by ID for building UserContext
-- Location: `lookup/database_schema.sql:791`
+- Location: `lookup/database_schema.sql` (section 17); direct mode: `lookup/direct` `OAuthUserStore.GetUser`
 
 ---
 
@@ -68,7 +68,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(
 ) (*LoginResponse, error)
 ```
 
-**Location:** `pkg/security/oauth2_methods.go:375`
+**Location:** `pkg/security/oauth2_methods.go` (`OAuth2RefreshToken`)
 
 ### Implementation Flow
 
@@ -476,7 +476,7 @@ auth.OAuth2RefreshToken(ctx, token, "google") // Must match ProviderName
 
 ## 8. Complete Working Example
 
-See `pkg/security/oauth2_examples.go:250` for full working example with token refresh.
+See `pkg/security/oauth2_examples.go` (`ExampleOAuth2TokenRefresh`) for full working example with token refresh.
 
 ---
 

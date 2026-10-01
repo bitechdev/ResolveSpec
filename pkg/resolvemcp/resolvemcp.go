@@ -41,6 +41,11 @@ type Config struct {
 	// If empty, the path is detected from each incoming request automatically.
 	BasePath string
 
+	// AllowedHosts restricts the Host header accepted by the SSE transport when BaseURL is
+	// empty (the message endpoint URL sent to clients is built from it). Empty accepts any
+	// host, with at most 32 distinct base URLs cached; prefer setting BaseURL.
+	AllowedHosts []string
+
 	// EnableAnnotations registers the resolvespec_annotate tool. Off by default: annotations
 	// are free text that agents read back, so enabling the tool opens a write channel into
 	// agent-visible text. When on, every call runs the BeforeHandle hooks (operation

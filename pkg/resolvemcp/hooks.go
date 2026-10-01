@@ -3,6 +3,7 @@ package resolvemcp
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
@@ -67,6 +68,7 @@ type HookFunc func(*HookContext) error
 
 // HookRegistry manages all registered hooks
 type HookRegistry struct {
+	mu    sync.RWMutex
 	hooks map[HookType][]HookFunc
 }
 
@@ -77,11 +79,14 @@ func NewHookRegistry() *HookRegistry {
 }
 
 func (r *HookRegistry) Register(hookType HookType, hook HookFunc) {
+	r.mu.Lock()
 	if r.hooks == nil {
 		r.hooks = make(map[HookType][]HookFunc)
 	}
 	r.hooks[hookType] = append(r.hooks[hookType], hook)
-	logger.Info("Registered resolvemcp hook for %s (total: %d)", hookType, len(r.hooks[hookType]))
+	total := len(r.hooks[hookType])
+	r.mu.Unlock()
+	logger.Info("Registered resolvemcp hook for %s (total: %d)", hookType, total)
 }
 
 func (r *HookRegistry) RegisterMultiple(hookTypes []HookType, hook HookFunc) {
@@ -91,8 +96,11 @@ func (r *HookRegistry) RegisterMultiple(hookTypes []HookType, hook HookFunc) {
 }
 
 func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
-	hooks, exists := r.hooks[hookType]
-	if !exists || len(hooks) == 0 {
+	// Append-only slices: a snapshot of the slice header is safe to iterate without the lock.
+	r.mu.RLock()
+	hooks := r.hooks[hookType]
+	r.mu.RUnlock()
+	if len(hooks) == 0 {
 		return nil
 	}
 
@@ -114,14 +122,19 @@ func (r *HookRegistry) Execute(hookType HookType, ctx *HookContext) error {
 }
 
 func (r *HookRegistry) Clear(hookType HookType) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.hooks, hookType)
 }
 
 func (r *HookRegistry) ClearAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.hooks = make(map[HookType][]HookFunc)
 }
 
 func (r *HookRegistry) HasHooks(hookType HookType) bool {
-	hooks, exists := r.hooks[hookType]
-	return exists && len(hooks) > 0
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.hooks[hookType]) > 0
 }

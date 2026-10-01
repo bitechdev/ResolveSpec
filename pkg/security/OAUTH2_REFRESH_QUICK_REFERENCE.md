@@ -276,6 +276,6 @@ authURL += "&access_type=offline&prompt=consent"
 
 ## Complete Example
 
-See `/pkg/security/oauth2_examples.go` line 250 for full working example.
+See `/pkg/security/oauth2_examples.go` (`ExampleOAuth2TokenRefresh`) for full working example.
 
 For detailed documentation see `/pkg/security/OAUTH2_REFRESH_TOKEN_IMPLEMENTATION.md`.

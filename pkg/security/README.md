@@ -18,7 +18,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 
 ## Stored Procedure Architecture
 
-**All database-backed security providers use PostgreSQL stored procedures exclusively.** No raw SQL queries are executed from Go code.
+**On PostgreSQL, database-backed security providers use stored procedures by default.** `pkg/security` itself contains no SQL; all database access lives in [`pkg/security/lookup`](lookup), which can also run the same operations as direct SQL on tables (see [Database access (lookup)](#database-access-lookup)).
 
 ### Benefits
 
@@ -139,7 +139,7 @@ Read them from Go with `ddl.SQL("sqlite")` or, for drivers that reject multi-sta
 - Direct mode stores `bytea` / array / `jsonb` values (passkey credentials, OAuth client lists, key meta) as base64 / JSON text; the Go API is unchanged.
 - OAuth authorization codes are consumed atomically.
 - Adding a database: implement `dialect.Dialect`, register it with `dialect.Register`, then set `Config.Dialect`.
-- Backend conformance: `lookup/conformance` is one behavioural suite run against every backend (`go test ./pkg/security/lookup/backends -run TestConformance`). SQLite runs always; Postgres (procedure and direct), MySQL and SQL Server run when `RESOLVESPEC_TEST_PG_DSN`, `RESOLVESPEC_TEST_PG_DIRECT_DSN`, `RESOLVESPEC_TEST_MYSQL_DSN` or `RESOLVESPEC_TEST_MSSQL_DSN` is set (see the comment in `backends/conformance_test.go`). Rows are prefixed and removed afterwards.
+- Backend conformance: `lookup/conformance` is one behavioural suite run against every backend (`go test ./pkg/security/lookup/backends -run TestConformance`). SQLite runs always; Postgres (procedure and direct), MySQL and SQL Server run when `RESOLVESPEC_TEST_PG_DSN`, `RESOLVESPEC_TEST_PG_DIRECT_DSN`, `RESOLVESPEC_TEST_MYSQL_DSN` or `RESOLVESPEC_TEST_MSSQL_DSN` is set (see the comment in `backends/conformance_test.go`). Rows are prefixed and removed afterwards. With `RESOLVESPEC_TEST_CONTAINERS=1` (and not `-short`) the container tests start a throwaway database with podman or docker (podman first), run the suite and remove the container, so no DSN is needed.
 - Migration from the old `SQLNames` / `TableNames` / `QueryMode` API: see `breaking_changes.md`.
 
 ## Quick Start
@@ -936,7 +936,8 @@ func TestMyHandler(t *testing.T) {
         &MockRowSecurity{},
     )
 
-    securityList := security.SetupSecurityProvider(handler, provider)
+    securityList, _ := security.NewSecurityList(provider)
+    restheadspec.RegisterSecurityHooks(handler, securityList)
     // ... test your handler
 }
 ```
@@ -1227,9 +1228,13 @@ The main changes:
 | File | Description |
 |------|-------------|
 | **QUICK_REFERENCE.md** | Quick reference guide with examples |
-| **INTERFACE_GUIDE.md** | Complete implementation guide |
-| **examples.go** | Working provider implementations |
-| **setup_example.go** | 6 complete integration examples |
+| **KEYSTORE.md** | Per-user auth keys and key stores |
+| **OAUTH2.md** | OAuth2 client login and the authorization server |
+| **OAUTH2_REFRESH_QUICK_REFERENCE.md** / **OAUTH2_REFRESH_TOKEN_IMPLEMENTATION.md** | OAuth2 refresh tokens |
+| **PASSKEY_QUICK_REFERENCE.md** | WebAuthn passkeys |
+| **SECURITY_FEATURES.md** | Security feature overview |
+| **breaking_changes.md** | Migration notes for the `lookup` refactor |
+| **examples.go**, **examples_funcspec.go**, **oauth2_examples.go**, **passkey_examples.go** | Working provider implementations |
 
 ## API Reference
 

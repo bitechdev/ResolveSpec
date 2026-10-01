@@ -27,9 +27,8 @@ Import `github.com/bitechdev/ResolveSpec/pkg/security/totp`. No aliases (import 
 `totp.NewAuthenticator` takes a `totp.BaseAuthenticator` (Login, Logout, Authenticate) instead of
 `security.Authenticator`; any `security.Authenticator` satisfies it.
 
-`DatabaseTwoFactorProvider` stays in `security` for now (it uses the core SQL internals) and moves
-into `totp` once the lookup `TOTPStore` replaces them. Until then core imports `totp`, so `totp`
-must not import `security`.
+`DatabaseTwoFactorProvider` stays in `security` (it now calls the lookup `TOTPStore`). Core imports
+`totp`, so `totp` must not import `security`.
 
 ## Step 0b (providers, first part): moved to `pkg/security/providers`
 
@@ -45,7 +44,7 @@ Import `github.com/bitechdev/ResolveSpec/pkg/security/providers`. Names unchange
 
 The SHA-256 key hash helper is now `sectypes.HashKey`. The database-backed providers
 (`DatabaseAuthenticator`, `JWTAuthenticator`, `DatabaseKeyStore`, `DatabaseColumn/RowSecurityProvider`)
-stay in `security` until the lookup stores replace their SQL.
+stay in `security`; they call the lookup stores (see step 5).
 
 ## Additions (no action needed)
 
@@ -67,7 +66,7 @@ stay in `security` until the lookup stores replace their SQL.
 
 - New `lookup/direct` package: table-backed stores for auth, keys, OAuth (client + user), passkey,
   TOTP and policy, built from `lookup.Schema` and the dialect. Nothing in `pkg/security` calls it
-  yet (wiring is step 5), so no existing API changes here.
+  yet (wiring happens in step 5), so no existing API changes here.
 - Direct `LoginAPIKey` is new: `header_api` / `api` keys only; unknown, expired, inactive and
   wrong-type keys (and inactive users) all return `lookup.ErrInvalidAPIKey`.
 - Policy tables (`sec_group_members`, `sec_column_rules`, `sec_row_rules`) are required for the

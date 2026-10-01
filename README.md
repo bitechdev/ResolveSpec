@@ -13,71 +13,69 @@ ResolveSpec is a flexible and powerful REST API specification and implementation
 
 All share the same core architecture and provide dynamic data querying, relationship preloading, and complex filtering.
 
-
-
 ## Table of Contents
 
-* [Features](#features)
-* [Installation](#installation)
-* [Quick Start](#quick-start)
-  * [ResolveSpec (Body-Based API)](#resolvespec---body-based-api)
-  * [RestHeadSpec (Header-Based API)](#restheadspec---header-based-api)
-  * [ResolveMCP (MCP Server)](#resolvemcp---mcp-server)
-* [Architecture](#architecture)
-* [API Structure](#api-structure)
-* [RestHeadSpec Overview](#restheadspec-header-based-api)
-* [Example Usage](#example-usage)
-* [Testing](#testing)
-* [Additional Packages](#additional-packages)
-* [Security Considerations](#security-considerations)
-* [What's New](#whats-new)
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+  - [ResolveSpec (Body-Based API)](#resolvespec---body-based-api)
+  - [RestHeadSpec (Header-Based API)](#restheadspec---header-based-api)
+  - [ResolveMCP (MCP Server)](#resolvemcp---mcp-server)
+- [Architecture](#architecture)
+- [API Structure](#api-structure)
+- [RestHeadSpec Overview](#restheadspec-header-based-api)
+- [Example Usage](#example-usage)
+- [Testing](#testing)
+- [Additional Packages](#additional-packages)
+- [Security Considerations](#security-considerations)
+- [What's New](#whats-new)
 
 ## Features
 
 ### Core Features
 
-* **Dynamic Data Querying**: Select specific columns and relationships to return
-* **Relationship Preloading**: Load related entities with custom column selection and filters
-* **Complex Filtering**: Apply multiple filters with various operators
-* **Sorting**: Multi-column sort support
-* **Pagination**: Built-in limit/offset and cursor-based pagination (both ResolveSpec and RestHeadSpec)
-* **Computed Columns**: Define virtual columns for complex calculations
-* **Custom Operators**: Add custom SQL conditions when needed
-* **🆕 One Transaction Per Request**: Every statement and DB-touching hook of a request runs on one transaction; `OnTxBegin` hook stamps transaction-local settings (RLS) first. See [pkg/common/TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)
-* **🆕 Recursive CRUD Handler**: Automatically handle nested object graphs with foreign key resolution and per-record operation control via `_request` field
+- **Dynamic Data Querying**: Select specific columns and relationships to return
+- **Relationship Preloading**: Load related entities with custom column selection and filters
+- **Complex Filtering**: Apply multiple filters with various operators
+- **Sorting**: Multi-column sort support
+- **Pagination**: Built-in limit/offset and cursor-based pagination (both ResolveSpec and RestHeadSpec)
+- **Computed Columns**: Define virtual columns for complex calculations
+- **Custom Operators**: Add custom SQL conditions when needed
+- **🆕 One Transaction Per Request**: Every statement and DB-touching hook of a request runs on one transaction; `OnTxBegin` hook stamps transaction-local settings (RLS) first. See [pkg/common/TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)
+- **🆕 Recursive CRUD Handler**: Automatically handle nested object graphs with foreign key resolution and per-record operation control via `_request` field
 
 ### Architecture (v2.0+)
 
-* **🆕 Database Agnostic**: Works with GORM, Bun, or any database layer through adapters
-* **🆕 Router Flexible**: Integrates with Gorilla Mux, Gin, Echo, or custom routers
-* **🆕 Backward Compatible**: Existing code works without changes
-* **🆕 Better Testing**: Mockable interfaces for easy unit testing
+- **🆕 Database Agnostic**: Works with GORM, Bun, or any database layer through adapters
+- **🆕 Router Flexible**: Integrates with Gorilla Mux, Gin, Echo, or custom routers
+- **🆕 Backward Compatible**: Existing code works without changes
+- **🆕 Better Testing**: Mockable interfaces for easy unit testing
 
 ### ResolveMCP (v3.2+)
 
-* **🆕 MCP Server**: Expose any registered database model as Model Context Protocol tools and resources
-* **🆕 AI-Ready Descriptions**: Tool descriptions include the full column schema, primary key, nullable flags, and relations — giving AI models everything they need to query correctly without guessing
-* **🆕 Four Tools Per Model**: `read_`, `create_`, `update_`, `delete_` tools auto-registered per model
-* **🆕 Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
-* **🆕 HTTP/SSE Transport**: Standards-compliant SSE transport for use with Claude Desktop, Cursor, and any MCP-compatible client
-* **🆕 Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth and side-effects
+- **🆕 MCP Server**: Expose any registered database model as Model Context Protocol tools and resources
+- **🆕 AI-Ready Descriptions**: Tool descriptions include the full column schema, primary key, nullable flags, and relations — giving AI models everything they need to query correctly without guessing
+- **🆕 Four Tools Per Model**: `read_`, `create_`, `update_`, `delete_` tools auto-registered per model
+- **🆕 Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
+- **🆕 HTTP/SSE Transport**: Standards-compliant SSE transport for use with Claude Desktop, Cursor, and any MCP-compatible client
+- **🆕 Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth and side-effects
 
 ### RestHeadSpec (v2.1+)
 
-* **🆕 Header-Based API**: All query options passed via HTTP headers instead of request body
-* **🆕 Lifecycle Hooks**: Before/after hooks for create, read, update, and delete operations
-* **🆕 Cursor Pagination**: Efficient cursor-based pagination with complex sort support
-* **🆕 Multiple Response Formats**: Simple, detailed, and Syncfusion-compatible formats
-* **🆕 Single Record as Object**: Automatically normalize single-element arrays to objects (enabled by default)
-* **🆕 Advanced Filtering**: Field filters, search operators, AND/OR logic, and custom SQL
-* **🆕 Base64 Encoding**: Support for base64-encoded header values
+- **🆕 Header-Based API**: All query options passed via HTTP headers instead of request body
+- **🆕 Lifecycle Hooks**: Before/after hooks for create, read, update, and delete operations
+- **🆕 Cursor Pagination**: Efficient cursor-based pagination with complex sort support
+- **🆕 Multiple Response Formats**: Simple, detailed, and Syncfusion-compatible formats
+- **🆕 Single Record as Object**: Automatically normalize single-element arrays to objects (enabled by default)
+- **🆕 Advanced Filtering**: Field filters, search operators, AND/OR logic, and custom SQL
+- **🆕 Base64 Encoding**: Support for base64-encoded header values
 
 ### Routing & CORS (v3.0+)
 
-* **🆕 Explicit Route Registration**: Routes created per registered model instead of dynamic lookups
-* **🆕 OPTIONS Method Support**: Full OPTIONS method support returning model metadata
-* **🆕 CORS Headers**: Comprehensive CORS support with all HeadSpec headers allowed
-* **🆕 Better Route Control**: Customize routes per model with more flexibility
+- **🆕 Explicit Route Registration**: Routes created per registered model instead of dynamic lookups
+- **🆕 OPTIONS Method Support**: Full OPTIONS method support returning model metadata
+- **🆕 CORS Headers**: Comprehensive CORS support with all HeadSpec headers allowed
+- **🆕 Better Route Control**: Customize routes per model with more flexibility
 
 ## API Structure
 
@@ -131,7 +129,6 @@ X-DetailApi: true
 
 For complete documentation including setup, headers, lifecycle hooks, cursor pagination, and more, see [pkg/restheadspec/README.md](pkg/restheadspec/README.md).
 
-
 ## Example Usage
 
 For detailed examples of reading data, cursor pagination, recursive CRUD operations, filtering, sorting, and more, see [pkg/resolvespec/README.md](pkg/resolvespec/README.md).
@@ -142,14 +139,14 @@ First-class support for PostGIS geometry/geography and pgvector columns in `reso
 
 ### Column types (`pkg/spectypes`)
 
-| Go type            | SQL type     | Wire / JSON                                             |
-|--------------------|--------------|--------------------------------------------------------|
-| `SqlGeometry`      | `geometry`   | JSON in/out = **GeoJSON**; also accepts EWKT / hex-EWKB |
-| `SqlGeography`     | `geography`  | same as `SqlGeometry`                                   |
-| `SqlVector`        | `vector`     | `[]float32` ⇄ `[1,2,3]`                                 |
-| `SqlHalfVector`    | `halfvec`    | `[]float32` ⇄ `[1,2,3]`                                 |
-| `SqlSparseVector`  | `sparsevec`  | `{"dim":8,"indices":[1,4],"values":[0.5,0.2]}`          |
-| `SqlBitVector`     | `bit`/`varbit` | bool array or `"1011"` string                        |
+| Go type           | SQL type       | Wire / JSON                                             |
+| ----------------- | -------------- | ------------------------------------------------------- |
+| `SqlGeometry`     | `geometry`     | JSON in/out = **GeoJSON**; also accepts EWKT / hex-EWKB |
+| `SqlGeography`    | `geography`    | same as `SqlGeometry`                                   |
+| `SqlVector`       | `vector`       | `[]float32` ⇄ `[1,2,3]`                                 |
+| `SqlHalfVector`   | `halfvec`      | `[]float32` ⇄ `[1,2,3]`                                 |
+| `SqlSparseVector` | `sparsevec`    | `{"dim":8,"indices":[1,4],"values":[0.5,0.2]}`          |
+| `SqlBitVector`    | `bit`/`varbit` | bool array or `"1011"` string                           |
 
 - Geometry `Value()` emits `SRID=<n>;<WKT>` (PostGIS implicit text→geometry cast; no wrapper function needed).
 - Declare dimensioned types with a tag: `gorm:"type:vector(1536)"` — the tag wins over the canonical name in metadata/OpenAPI.
@@ -159,32 +156,36 @@ First-class support for PostGIS geometry/geography and pgvector columns in `reso
 
 `value` is a geometry (GeoJSON object, EWKT string, or hex-EWKB) unless noted.
 
-| Operator | Value shape |
-|----------|-------------|
-| `st_intersects`, `st_contains`, `st_within`, `st_covers`, `st_coveredby`, `st_overlaps`, `st_touches`, `st_crosses`, `st_equals`, `st_disjoint` | geometry |
-| `st_dwithin` | `{"geom": <geometry>, "distance": <meters>}` |
-| `bbox` (alias `&&`) | geometry, or `{"bbox":[minx,miny,maxx,maxy],"srid":4326}` |
+| Operator                                                                                                                                        | Value shape                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `st_intersects`, `st_contains`, `st_within`, `st_covers`, `st_coveredby`, `st_overlaps`, `st_touches`, `st_crosses`, `st_equals`, `st_disjoint` | geometry                                                  |
+| `st_dwithin`                                                                                                                                    | `{"geom": <geometry>, "distance": <meters>}`              |
+| `bbox` (alias `&&`)                                                                                                                             | geometry, or `{"bbox":[minx,miny,maxx,maxy],"srid":4326}` |
 
 ### Vector similarity filter operators
 
-| Operator | pgvector op | Value shape |
-|----------|-------------|-------------|
-| `l2_within` / `euclidean_within` | `<->` | `{"vector":[...], "distance": <n>}` |
-| `cosine_within` | `<=>` | same (also `"lt"`/`"lte"`/`"gt"`/`"gte"` instead of `"distance"`) |
-| `ip_within` / `inner_within` | `<#>` | same |
+| Operator                         | pgvector op | Value shape                                                       |
+| -------------------------------- | ----------- | ----------------------------------------------------------------- |
+| `l2_within` / `euclidean_within` | `<->`       | `{"vector":[...], "distance": <n>}`                               |
+| `cosine_within`                  | `<=>`       | same (also `"lt"`/`"lte"`/`"gt"`/`"gte"` instead of `"distance"`) |
+| `ip_within` / `inner_within`     | `<#>`       | same                                                              |
 
 ### KNN search (ordering + distance column)
 
 **resolvespec** — `options.vector_search`:
 
 ```json
-{ "options": { "vector_search": {
-  "column": "embedding",
-  "vector": [0.1, 0.2, 0.3],
-  "metric": "cosine",
-  "as": "_distance",
-  "direction": "asc"
-}}}
+{
+  "options": {
+    "vector_search": {
+      "column": "embedding",
+      "vector": [0.1, 0.2, 0.3],
+      "metric": "cosine",
+      "as": "_distance",
+      "direction": "asc"
+    }
+  }
+}
 ```
 
 Orders rows by distance; when `as` is set, returns the distance as an extra column (all model columns are auto-selected).
@@ -343,25 +344,25 @@ Your Application Code
 
 ### Supported Database Layers
 
-* **GORM** - Full support for PostgreSQL, SQLite, MSSQL
-* **Bun** - Full support for PostgreSQL, SQLite, MSSQL
-* **Native SQL** - Standard library `*sql.DB` with all supported databases
-* **Custom ORMs** - Implement the `Database` interface
+- **GORM** - Full support for PostgreSQL, SQLite, MSSQL
+- **Bun** - Full support for PostgreSQL, SQLite, MSSQL
+- **Native SQL** - Standard library `*sql.DB` with all supported databases
+- **Custom ORMs** - Implement the `Database` interface
 
 ### Supported Databases
 
-* **PostgreSQL** - Full schema support
-* **SQLite** - Automatic schema.table to schema_table translation
-* **Microsoft SQL Server** - Full schema support
-* **MongoDB** - NoSQL document database (via MQTTSpec and custom handlers)
+- **PostgreSQL** - Full schema support
+- **SQLite** - Automatic schema.table to schema_table translation
+- **Microsoft SQL Server** - Full schema support
+- **MongoDB** - NoSQL document database (via MQTTSpec and custom handlers)
 
 ### Supported Routers
 
-* **Gorilla Mux** (built-in support with `SetupRoutes()`)
-* **BunRouter** (built-in support with `SetupBunRouterWithResolveSpec()`)
-* **Gin** (manual integration, see examples above)
-* **Echo** (manual integration, see examples above)
-* **Custom Routers** (implement request/response adapters)
+- **Gorilla Mux** (built-in support with `SetupRoutes()`)
+- **BunRouter** (built-in support with `SetupBunRouterWithResolveSpec()`)
+- **Gin** (manual integration, see examples above)
+- **Echo** (manual integration, see examples above)
+- **Custom Routers** (implement request/response adapters)
 
 ## Testing
 
@@ -373,11 +374,11 @@ ResolveSpec is designed for testability with mockable interfaces. For testing ex
 
 ### Test Server (dbtrace, real PostgreSQL)
 
-* `make testserver-up` / `make testserver-down`: testserver + PostgreSQL via compose (host networking)
-* `make testserver-smoke`: create, read, update, delete, batch create/delete against the testserver
-* Ports: testserver `8123`, PostgreSQL `8124`
-* `dbtrace` logs per request `tx`, `tx_queries`, `pooled`, `raw`; `pooled=0` is the target
-* Integration tests default to PostgreSQL on `localhost:8124`
+- `make testserver-up` / `make testserver-down`: testserver + PostgreSQL via compose (host networking)
+- `make testserver-smoke`: create, read, update, delete, batch create/delete against the testserver
+- Ports: testserver `8123`, PostgreSQL `8124`
+- `dbtrace` logs per request `tx`, `tx_queries`, `pooled`, `raw`; `pooled=0` is the target
+- Integration tests default to PostgreSQL on `localhost:8124`
 
 ## Continuous Integration
 
@@ -387,10 +388,10 @@ ResolveSpec uses GitHub Actions for automated testing and quality checks. The CI
 
 The project includes automated workflows that:
 
-* **Test**: Run all tests with race detection and code coverage
-* **Lint**: Check code quality with golangci-lint
-* **Build**: Verify the project builds successfully
-* **Multi-version**: Test against multiple Go versions (1.23.x, 1.24.x)
+- **Test**: Run all tests with race detection and code coverage
+- **Lint**: Check code quality with golangci-lint
+- **Build**: Verify the project builds successfully
+- **Multi-version**: Test against multiple Go versions (1.23.x, 1.24.x)
 
 ### Running Tests Locally
 
@@ -412,9 +413,9 @@ golangci-lint run
 
 The project includes comprehensive test coverage:
 
-* **Unit Tests**: Individual component testing
-* **Integration Tests**: End-to-end API testing
-* **CRUD Tests**: Standalone tests for both ResolveSpec and RestHeadSpec APIs
+- **Unit Tests**: Individual component testing
+- **Integration Tests**: End-to-end API testing
+- **CRUD Tests**: Standalone tests for both ResolveSpec and RestHeadSpec APIs
 
 To run only the CRUD standalone tests:
 
@@ -445,6 +446,7 @@ ResolveSpec includes several complementary packages that work together to provid
 The core body-based REST API with GraphQL-like capabilities.
 
 **Key Features**:
+
 - JSON request body with operation and options
 - Recursive CRUD with nested object support
 - Cursor and offset pagination
@@ -458,6 +460,7 @@ For complete documentation, see [pkg/resolvespec/README.md](pkg/resolvespec/READ
 Alternative REST API where query options are passed via HTTP headers.
 
 **Key Features**:
+
 - All query options via HTTP headers
 - Same capabilities as ResolveSpec
 - Cleaner separation of data and metadata
@@ -470,6 +473,7 @@ For complete documentation, see [pkg/restheadspec/README.md](pkg/restheadspec/RE
 Expose any registered model as Model Context Protocol tools and resources consumable by AI models over HTTP/SSE.
 
 **Key Features**:
+
 - Four tools per model: `read_`, `create_`, `update_`, `delete_`
 - Rich AI-readable descriptions: column names, types, primary key, nullable flags, and preloadable relations
 - Full query support: filters, sort, limit/offset, cursor pagination, column selection, preloads
@@ -483,6 +487,7 @@ For complete documentation, see [pkg/resolvemcp/](pkg/resolvemcp/).
 Execute SQL functions and queries through a simple HTTP API with header-based parameters.
 
 **Key Features**:
+
 - Direct SQL function invocation
 - Header-based parameter passing
 - Automatic pagination and counting
@@ -495,20 +500,21 @@ For complete documentation, see [pkg/funcspec/](pkg/funcspec/).
 
 All clients are under [clients/](clients/README.md); wire behaviour is identical across them.
 
-| Client | Language | Specs | Docs |
-|---|---|---|---|
-| `resolvespec-js` | TypeScript | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-js/README.md) |
+| Client               | Language       | Specs                                                | Docs                                           |
+| -------------------- | -------------- | ---------------------------------------------------- | ---------------------------------------------- |
+| `resolvespec-js`     | TypeScript     | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-js/README.md)     |
 | `resolvespec-python` | Python >= 3.11 | ResolveSpec, HeaderSpec, FunctionSpec, WebSocketSpec | [README](clients/resolvespec-python/README.md) |
-| `resolvespec-go` | Go | ResolveSpec, FunctionSpec | [README](clients/resolvespec-go/README.md) |
-| `resolvespec-rs` | Rust | ResolveSpec, FunctionSpec | [README](clients/resolvespec-rs/README.md) |
-| `resolvespec-cs` | C# (.NET 8) | ResolveSpec, FunctionSpec | [README](clients/resolvespec-cs/README.md) |
-| `resolvespec-dart` | Dart / Flutter | ResolveSpec, FunctionSpec | [README](clients/resolvespec-dart/README.md) |
+| `resolvespec-go`     | Go             | ResolveSpec, FunctionSpec                            | [README](clients/resolvespec-go/README.md)     |
+| `resolvespec-rs`     | Rust           | ResolveSpec, FunctionSpec                            | [README](clients/resolvespec-rs/README.md)     |
+| `resolvespec-cs`     | C# (.NET 8)    | ResolveSpec, FunctionSpec                            | [README](clients/resolvespec-cs/README.md)     |
+| `resolvespec-dart`   | Dart / Flutter | ResolveSpec, FunctionSpec                            | [README](clients/resolvespec-dart/README.md)   |
 
 #### ResolveSpec JS - TypeScript Client Library
 
 TypeScript/JavaScript client library supporting all three REST and WebSocket protocols.
 
 **Clients**:
+
 - Body-based REST client (`read`, `create`, `update`, `deleteEntity`)
 - Header-based REST client (`HeaderSpecClient`)
 - WebSocket client (`WebSocketClient`) with CRUD, subscriptions, heartbeat, reconnect
@@ -522,6 +528,7 @@ For complete documentation, see [clients/resolvespec-js/README.md](clients/resol
 Real-time bidirectional communication with full CRUD operations and subscriptions.
 
 **Key Features**:
+
 - Persistent WebSocket connections
 - Real-time subscriptions to entity changes
 - Automatic push notifications
@@ -535,6 +542,7 @@ For complete documentation, see [pkg/websocketspec/README.md](pkg/websocketspec/
 MQTT-based database operations ideal for IoT and mobile applications.
 
 **Key Features**:
+
 - Embedded or external MQTT broker support
 - QoS 1 (at-least-once delivery)
 - Real-time subscriptions
@@ -550,6 +558,7 @@ For complete documentation, see [pkg/mqttspec/README.md](pkg/mqttspec/README.md)
 Flexible, interface-driven static file server.
 
 **Key Features**:
+
 - Router-agnostic with standard `http.Handler`
 - Multiple filesystem backends (local, zip, embedded)
 - Pluggable cache, MIME, and fallback policies
@@ -557,6 +566,7 @@ Flexible, interface-driven static file server.
 - 140+ MIME types including modern formats
 
 **Quick Example**:
+
 ```go
 import "github.com/bitechdev/ResolveSpec/pkg/server/staticweb"
 
@@ -581,6 +591,7 @@ For complete documentation, see [pkg/server/staticweb/README.md](pkg/server/stat
 Comprehensive event handling system for real-time event publishing and cross-instance communication.
 
 **Key Features**:
+
 - Multiple event sources (database, websockets, frontend, system)
 - Multiple providers (in-memory, Redis Streams, NATS, PostgreSQL)
 - Pattern-based subscriptions
@@ -595,6 +606,7 @@ For complete documentation, see [pkg/eventbroker/README.md](pkg/eventbroker/READ
 Centralized management of multiple database connections with support for PostgreSQL, SQLite, MSSQL, and MongoDB.
 
 **Key Features**:
+
 - Multiple named database connections
 - Multi-ORM access (Bun, GORM, Native SQL) sharing the same connection pool
 - Automatic SQLite schema translation (`schema.table` → `schema_table`)
@@ -690,23 +702,23 @@ For documentation, see [pkg/dbtrace/README.md](pkg/dbtrace/README.md).
 
 ### Core Libraries
 
-| Package | Purpose |
-|---|---|
-| [`pkg/common`](pkg/common/) | Shared interfaces (database, request/response adapters), validation, recursive CRUD, request transactions ([TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)) |
-| [`pkg/modelregistry`](pkg/modelregistry/) | Model registration by schema/entity and per-model access rules |
-| [`pkg/reflection`](pkg/reflection/) | Model/struct reflection helpers (primary keys, columns, relations) |
-| [`pkg/spectypes`](pkg/spectypes/) | SQL-aware types (nullable, JSONB, PostGIS, vector) |
-| [`pkg/logger`](pkg/logger/) | Logging used by all packages |
-| [`pkg/testmodels`](pkg/testmodels/) | Shared test models and data for tests and the testserver |
+| Package                                   | Purpose                                                                                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`pkg/common`](pkg/common/)               | Shared interfaces (database, request/response adapters), validation, recursive CRUD, request transactions ([TRANSACTIONS.md](pkg/common/TRANSACTIONS.md)) |
+| [`pkg/modelregistry`](pkg/modelregistry/) | Model registration by schema/entity and per-model access rules                                                                                            |
+| [`pkg/reflection`](pkg/reflection/)       | Model/struct reflection helpers (primary keys, columns, relations)                                                                                        |
+| [`pkg/spectypes`](pkg/spectypes/)         | SQL-aware types (nullable, JSONB, PostGIS, vector)                                                                                                        |
+| [`pkg/logger`](pkg/logger/)               | Logging used by all packages                                                                                                                              |
+| [`pkg/testmodels`](pkg/testmodels/)       | Shared test models and data for tests and the testserver                                                                                                  |
 
 ## Security Considerations
 
-* Implement proper authentication and authorization
-* Validate all input parameters
-* Use prepared statements (handled by GORM/Bun/your ORM)
-* Implement rate limiting (`middleware.RateLimiter`) and per-client request queueing (`middleware.ClientQueue`)
-* Control access at schema/entity level
-* **New**: Database abstraction layer provides additional security through interface boundaries
+- Implement proper authentication and authorization
+- Validate all input parameters
+- Use prepared statements (handled by GORM/Bun/your ORM)
+- Implement rate limiting (`middleware.RateLimiter`) and per-client request queueing (`middleware.ClientQueue`)
+- Control access at schema/entity level
+- **New**: Database abstraction layer provides additional security through interface boundaries
 
 ## Contributing
 
@@ -726,15 +738,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Single transaction per request**:
 
-* **One tx per request**: hooks get the transaction in `hookCtx.Tx`, never the pool (`BeforeHandle` runs before any tx and must not touch the DB)
-* **`OnTxBegin` hook**: all specs (mqttspec re-exports websocketspec's); fires once, first, in every tx; error or abort rolls back with no detail to the client
-* **Second short tx**: create/update re-fetch, `BeforeScan` and post-commit hooks (`AfterCreate`, `AfterUpdate`, restheadspec `AfterRead`, funcspec `BeforeResponse`) run on a new tx after the first commits
-* **Delete**: single and batch delete, hooks included, in one tx
-* **websocketspec / mqttspec**: one tx per message; begin/commit failures answer `transaction_error`
-* **resolvemcp**: read, create, update, delete transactional
-* **RLS stamping**: `SecurityList.SetTxSettings(fn)`; `RegisterSecurityHooks` of every spec stamps `set_config(name, value, true)` on `OnTxBegin`; fails closed
-* **New**: `common.RunRequestTx`, `common.TxContext`, `common.TxHookName`
-* **Behavior changes**: `AfterDelete` failure now rolls the delete back; funcspec begin/commit failure answers 500 `transaction_error`
+- **One tx per request**: hooks get the transaction in `hookCtx.Tx`, never the pool (`BeforeHandle` runs before any tx and must not touch the DB)
+- **`OnTxBegin` hook**: all specs (mqttspec re-exports websocketspec's); fires once, first, in every tx; error or abort rolls back with no detail to the client
+- **Second short tx**: create/update re-fetch, `BeforeScan` and post-commit hooks (`AfterCreate`, `AfterUpdate`, restheadspec `AfterRead`, funcspec `BeforeResponse`) run on a new tx after the first commits
+- **Delete**: single and batch delete, hooks included, in one tx
+- **websocketspec / mqttspec**: one tx per message; begin/commit failures answer `transaction_error`
+- **resolvemcp**: read, create, update, delete transactional
+- **RLS stamping**: `SecurityList.SetTxSettings(fn)`; `RegisterSecurityHooks` of every spec stamps `set_config(name, value, true)` on `OnTxBegin`; fails closed
+- **New**: `common.RunRequestTx`, `common.TxContext`, `common.TxHookName`
+- **Behavior changes**: `AfterDelete` failure now rolls the delete back; funcspec begin/commit failure answers 500 `transaction_error`
 
 **Clients**: Go, Rust, C# and Dart clients for ResolveSpec and FunctionSpec under `clients/`.
 
@@ -744,121 +756,133 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **ResolveMCP - Model Context Protocol Server (🆕)**:
 
-* **MCP Tools**: Four tools auto-registered per model (`read_`, `create_`, `update_`, `delete_`) over HTTP/SSE transport
-* **AI-Ready Descriptions**: Full column schema, primary key, nullable flags, and relation names surfaced in tool descriptions so AI models can query without guessing
-* **Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
-* **HTTP/SSE Transport**: Standards-compliant transport compatible with Claude Desktop, Cursor, and any MCP 2024-11-05 client
-* **Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth, auditing, and side-effects
-* **MCP Resources**: Each model also exposed as a named resource for direct data access by AI clients
+- **MCP Tools**: Four tools auto-registered per model (`read_`, `create_`, `update_`, `delete_`) over HTTP/SSE transport
+- **AI-Ready Descriptions**: Full column schema, primary key, nullable flags, and relation names surfaced in tool descriptions so AI models can query without guessing
+- **Full Query Support**: Filters, sort, limit/offset, cursor pagination, column selection, and relation preloading all available as tool parameters
+- **HTTP/SSE Transport**: Standards-compliant transport compatible with Claude Desktop, Cursor, and any MCP 2024-11-05 client
+- **Lifecycle Hooks**: Same Before/After hook system as ResolveSpec for auth, auditing, and side-effects
+- **MCP Resources**: Each model also exposed as a named resource for direct data access by AI clients
 
 ### v3.1 (February 2026)
 
 **SQLite Schema Translation (🆕)**:
 
-* **Automatic Schema Translation**: SQLite support with automatic `schema.table` to `schema_table` conversion
-* **Database Agnostic Models**: Write models once, use across PostgreSQL, SQLite, and MSSQL
-* **Transparent Handling**: Translation occurs automatically in all operations (SELECT, INSERT, UPDATE, DELETE, preloads)
-* **All ORMs Supported**: Works with Bun, GORM, and Native SQL adapters
+- **Automatic Schema Translation**: SQLite support with automatic `schema.table` to `schema_table` conversion
+- **Database Agnostic Models**: Write models once, use across PostgreSQL, SQLite, and MSSQL
+- **Transparent Handling**: Translation occurs automatically in all operations (SELECT, INSERT, UPDATE, DELETE, preloads)
+- **All ORMs Supported**: Works with Bun, GORM, and Native SQL adapters
 
 ### v3.0 (December 2025)
 
 **Explicit Route Registration (🆕)**:
 
-* **Breaking Change**: Routes are now created explicitly for each registered model
-* **Better Control**: Customize routes per model with more flexibility
-* **Registration Order**: Models must be registered BEFORE calling SetupMuxRoutes/SetupBunRouterRoutes
-* **Benefits**: More flexible routing, easier to add custom routes per model, better performance
+- **Breaking Change**: Routes are now created explicitly for each registered model
+- **Better Control**: Customize routes per model with more flexibility
+- **Registration Order**: Models must be registered BEFORE calling SetupMuxRoutes/SetupBunRouterRoutes
+- **Benefits**: More flexible routing, easier to add custom routes per model, better performance
 
 **OPTIONS Method & CORS Support (🆕)**:
 
-* **OPTIONS Endpoint**: Full OPTIONS method support for CORS preflight requests
-* **Metadata Response**: OPTIONS returns model metadata (same as GET /metadata)
-* **CORS Headers**: Comprehensive CORS headers on all responses
-* **Header Support**: All HeadSpec custom headers (`X-Select-Fields`, `X-FieldFilter-*`, etc.) allowed
-* **No Auth on OPTIONS**: CORS preflight requests don't require authentication
-* **Configurable**: Customize CORS settings via `common.CORSConfig`
+- **OPTIONS Endpoint**: Full OPTIONS method support for CORS preflight requests
+- **Metadata Response**: OPTIONS returns model metadata (same as GET /metadata)
+- **CORS Headers**: Comprehensive CORS headers on all responses
+- **Header Support**: All HeadSpec custom headers (`X-Select-Fields`, `X-FieldFilter-*`, etc.) allowed
+- **No Auth on OPTIONS**: CORS preflight requests don't require authentication
+- **Configurable**: Customize CORS settings via `common.CORSConfig`
 
 ### v2.1
 
 **Cursor Pagination for ResolveSpec (🆕 Dec 9, 2025)**:
 
-* **Cursor-Based Pagination**: Efficient cursor pagination now available in ResolveSpec (body-based API)
-* **Consistent with RestHeadSpec**: Both APIs now support cursor pagination for feature parity
-* **Multi-Column Sort Support**: Works seamlessly with complex sorting requirements
-* **Better Performance**: Improved performance for large datasets compared to offset pagination
-* **SQL Safety**: Proper SQL sanitization for cursor values
+- **Cursor-Based Pagination**: Efficient cursor pagination now available in ResolveSpec (body-based API)
+- **Consistent with RestHeadSpec**: Both APIs now support cursor pagination for feature parity
+- **Multi-Column Sort Support**: Works seamlessly with complex sorting requirements
+- **Better Performance**: Improved performance for large datasets compared to offset pagination
+- **SQL Safety**: Proper SQL sanitization for cursor values
 
 **Recursive CRUD Handler (🆕 Nov 11, 2025)**:
 
-* **Nested Object Graphs**: Automatically handle complex object hierarchies with parent-child relationships
-* **Foreign Key Resolution**: Automatic propagation of parent IDs to child records
-* **Per-Record Operations**: Control create/update/delete operations per record via `_request` field
-* **Transaction Safety**: All nested operations execute atomically within database transactions
-* **Relationship Detection**: Automatic detection of belongsTo, hasMany, hasOne, and many2many relationships
-* **Deep Nesting Support**: Handle relationships at any depth level
-* **Mixed Operations**: Combine insert, update, and delete operations in a single request
+- **Nested Object Graphs**: Automatically handle complex object hierarchies with parent-child relationships
+- **Foreign Key Resolution**: Automatic propagation of parent IDs to child records
+- **Per-Record Operations**: Control create/update/delete operations per record via `_request` field
+- **Transaction Safety**: All nested operations execute atomically within database transactions
+- **Relationship Detection**: Automatic detection of belongsTo, hasMany, hasOne, and many2many relationships
+- **Deep Nesting Support**: Handle relationships at any depth level
+- **Mixed Operations**: Combine insert, update, and delete operations in a single request
 
 **Primary Key Improvements (Nov 11, 2025)**:
 
-* **GetPrimaryKeyName**: Enhanced primary key detection for better preload and ID field handling
-* **Better GORM/Bun Support**: Improved compatibility with both ORMs for primary key operations
-* **Computed Column Support**: Fixed computed columns functionality across handlers
+- **GetPrimaryKeyName**: Enhanced primary key detection for better preload and ID field handling
+- **Better GORM/Bun Support**: Improved compatibility with both ORMs for primary key operations
+- **Computed Column Support**: Fixed computed columns functionality across handlers
 
 **Database Adapter Enhancements (Nov 11, 2025)**:
 
-* **Bun ORM Relations**: Using Scan model method for better has-many and many-to-many relationship handling
-* **Model Method Support**: Enhanced query building with proper model registration
-* **Improved Type Safety**: Better handling of relationship queries with type-aware scanning
+- **Bun ORM Relations**: Using Scan model method for better has-many and many-to-many relationship handling
+- **Model Method Support**: Enhanced query building with proper model registration
+- **Improved Type Safety**: Better handling of relationship queries with type-aware scanning
 
 **RestHeadSpec - Header-Based REST API**:
 
-* **Header-Based Querying**: All query options via HTTP headers instead of request body
-* **Lifecycle Hooks**: Before/after hooks for create, read, update, delete operations
-* **Cursor Pagination**: Efficient cursor-based pagination with complex sorting
-* **Advanced Filtering**: Field filters, search operators, AND/OR logic
-* **Multiple Response Formats**: Simple, detailed, and Syncfusion-compatible responses
-* **Single Record as Object**: Automatically return single-element arrays as objects (default, toggleable via header)
-* **Base64 Support**: Base64-encoded header values for complex queries
-* **Type-Aware Filtering**: Automatic type detection and conversion for filters
+- **Header-Based Querying**: All query options via HTTP headers instead of request body
+- **Lifecycle Hooks**: Before/after hooks for create, read, update, delete operations
+- **Cursor Pagination**: Efficient cursor-based pagination with complex sorting
+- **Advanced Filtering**: Field filters, search operators, AND/OR logic
+- **Multiple Response Formats**: Simple, detailed, and Syncfusion-compatible responses
+- **Single Record as Object**: Automatically return single-element arrays as objects (default, toggleable via header)
+- **Base64 Support**: Base64-encoded header values for complex queries
+- **Type-Aware Filtering**: Automatic type detection and conversion for filters
 
 **Core Improvements**:
 
-* Better model registry with schema.table format support
-* Enhanced validation and error handling
-* Improved reflection safety
-* Fixed COUNT query issues with table aliasing
-* Better pointer handling throughout the codebase
-* **Comprehensive Test Coverage**: Added standalone CRUD tests for both ResolveSpec and RestHeadSpec
+- Better model registry with schema.table format support
+- Enhanced validation and error handling
+- Improved reflection safety
+- Fixed COUNT query issues with table aliasing
+- Better pointer handling throughout the codebase
+- **Comprehensive Test Coverage**: Added standalone CRUD tests for both ResolveSpec and RestHeadSpec
 
 ### v2.0
 
 **Breaking Changes**:
 
-* **None!** Full backward compatibility maintained
+- **None!** Full backward compatibility maintained
 
 **New Features**:
 
-* **Database Abstraction**: Support for GORM, Bun, and custom ORMs
-* **Router Flexibility**: Works with any HTTP router through adapters
-* **BunRouter Integration**: Built-in support for uptrace/bunrouter
-* **Better Architecture**: Clean separation of concerns with interfaces
-* **Enhanced Testing**: Mockable interfaces for comprehensive testing
+- **Database Abstraction**: Support for GORM, Bun, and custom ORMs
+- **Router Flexibility**: Works with any HTTP router through adapters
+- **BunRouter Integration**: Built-in support for uptrace/bunrouter
+- **Better Architecture**: Clean separation of concerns with interfaces
+- **Enhanced Testing**: Mockable interfaces for comprehensive testing
 
 **Performance Improvements**:
 
-* More efficient query building through interface design
-* Reduced coupling between components
-* Better memory management with interface boundaries
+- More efficient query building through interface design
+- Reduced coupling between components
+- Better memory management with interface boundaries
+
+# Security Policy
+
+## Reporting a vulnerability
+
+Please do not open a public issue for security problems.
+
+Report privately through GitHub: Security → Report a vulnerability
+(https://github.com/bitechdev/ResolveSpec/security/advisories/new),
+or email hein@bitechsystems.co.za / hein@warky.dev
+
+You'll get an acknowledgement within 7 days. We aim to release a fix within
+90 days and will credit reporters in the advisory unless they prefer otherwise.
 
 ## Acknowledgments
 
-* Inspired by REST, OData, and GraphQL's flexibility
-* **Header-based approach**: Inspired by REST best practices and clean API design
-* **Database Support**: [GORM](https://gorm.io) and [Bun](https://bun.uptrace.dev/)
-* **Router Support**: Gorilla Mux (built-in), BunRouter, Gin, Echo, and others through adapters
-* Slogan generated using DALL-E
-* AI used for documentation checking and correction
-* Community feedback and contributions that made v2.0 and v2.1 possible
-
+- Inspired by REST, OData, and GraphQL's flexibility
+- **Header-based approach**: Inspired by REST best practices and clean API design
+- **Database Support**: [GORM](https://gorm.io) and [Bun](https://bun.uptrace.dev/)
+- **Router Support**: Gorilla Mux (built-in), BunRouter, Gin, Echo, and others through adapters
+- Slogan generated using DALL-E
+- AI used for documentation checking and correction
+- Community feedback and contributions that made v2.0 and v2.1 possible
 
 ![1.00](./generated_slogan.webp)

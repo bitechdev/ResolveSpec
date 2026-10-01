@@ -277,32 +277,28 @@ ResolveMCP exposes registered models as Model Context Protocol tools so AI model
 ```go
 import "github.com/bitechdev/ResolveSpec/pkg/resolvemcp"
 
-// Create handler
-handler := resolvemcp.NewHandlerWithGORM(db)
+handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{BaseURL: "http://localhost:8080", BasePath: "/mcp"})
 
-// Register models — must be done BEFORE Build()
+securityList, _ := security.NewSecurityList(provider)
+resolvemcp.RegisterSecurityHooks(handler, securityList)
+
 handler.RegisterModel("public", "users", &User{})
 handler.RegisterModel("public", "posts", &Post{})
 
-// Finalize: registers MCP tools and resources
-handler.Build()
-
-// Mount SSE transport on your existing router
+// Mount the guarded SSE transport (OAuth bearer, session token or API key required)
 router := mux.NewRouter()
-resolvemcp.SetupMuxRoutes(router, handler, "http://localhost:8080")
+resolvemcp.SetupMuxRoutes(router, handler, securityList)
 
 // MCP clients connect to:
 //   SSE stream:  GET  http://localhost:8080/mcp/sse
 //   Messages:    POST http://localhost:8080/mcp/message
 //
-// Auto-registered tools per model:
-//   read_public_users   — filter, sort, paginate, preload
-//   create_public_users — insert a new record
-//   update_public_users — update a record by ID
-//   delete_public_users — delete a record by ID
+// Fixed meta tools (independent of the number of models):
+//   list_tables, describe_table, select_table, insert_into_table,
+//   update_table, delete_from_table, list_functions, call_function
 ```
 
-For complete documentation, see [pkg/resolvemcp/README.md](pkg/resolvemcp/README.md) (if present) or the package source.
+For complete documentation, see [pkg/resolvemcp/README.md](pkg/resolvemcp/README.md) .
 
 ## Architecture
 
@@ -648,7 +644,7 @@ For documentation, see [pkg/cache/README.md](pkg/cache/README.md).
 
 Authentication and authorization framework with hooks integration. Database-backed providers use PostgreSQL stored procedures by default, with a direct SQL backend (SQLite, MySQL, SQL Server, or Postgres without the procedures) selected through `lookup.Config`.
 
-For documentation, see [pkg/security/README.md](pkg/security/README.md) (see "Direct Mode" for the SQLite/portable-SQL path).
+For documentation, see [pkg/security/README.md](pkg/security/README.md) (see "Database access (lookup)" for the SQLite/portable-SQL path).
 
 #### Middleware
 

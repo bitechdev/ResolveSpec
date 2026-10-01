@@ -1,46 +1,53 @@
 # resolvemcp
 
-Package `resolvemcp` exposes registered database models as **Model Context Protocol (MCP) tools and resources** over HTTP/SSE transport. It mirrors the `resolvespec` package patterns — same model registration API, same filter/sort/pagination/preload options, same lifecycle hook system.
+Package `resolvemcp` exposes registered database models to AI clients through a **fixed set of Model Context Protocol (MCP) meta tools** over SSE or Streamable HTTP. The tool count does not grow with the number of models. It mirrors the `resolvespec` package — same model registration, filter/sort/pagination/preload options, hook system and security rules.
+
+Every endpoint **requires authentication**; tools run as the authenticated caller.
 
 ## Quick Start
 
 ```go
 import (
     "github.com/bitechdev/ResolveSpec/pkg/resolvemcp"
+    "github.com/bitechdev/ResolveSpec/pkg/security"
     "github.com/gorilla/mux"
 )
 
-// 1. Create a handler
 handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{
-    BaseURL: "http://localhost:8080",
+    BaseURL:  "http://localhost:8080",
+    BasePath: "/mcp",
 })
 
-// 2. Register models
+securityList, _ := security.NewSecurityList(provider)
+resolvemcp.RegisterSecurityHooks(handler, securityList)
+
 handler.RegisterModel("public", "users", &User{})
 handler.RegisterModel("public", "orders", &Order{})
 
-// 3. Mount routes
 r := mux.NewRouter()
-resolvemcp.SetupMuxRoutes(r, handler)
+resolvemcp.SetupMuxRoutes(r, handler, securityList) // guarded
 ```
 
 ---
 
 ## Config
 
-```go
-type Config struct {
-    // BaseURL is the public-facing base URL of the server (e.g. "http://localhost:8080").
-    // Sent to MCP clients during the SSE handshake so they know where to POST messages.
-    // If empty, it is detected from each incoming request using the Host header and
-    // TLS state (X-Forwarded-Proto is honoured for reverse-proxy deployments).
-    BaseURL string
+| Field | Default | Purpose |
+|---|---|---|
+| `BaseURL` | request-detected | Public base URL sent to SSE clients |
+| `BasePath` | request-detected | Mount path (e.g. `/mcp`) |
+| `DefaultLimit` | 50 | Page size when a read gives no limit |
+| `MaxLimit` | 1000 | Larger limits are clamped |
+| `MaxOffset` | 100000 | Larger offsets are rejected |
+| `MaxBatch` | 100 | Rows in one batch insert |
+| `MaxPreloadDepth` | 2 | Depth of a preload path (`a.b.c`) |
+| `MaxWriteRows` | 100 | Rows a filter-based update/delete may touch |
+| `QueryTimeout` | 30s | One tool call, hooks and queries included |
+| `ConfirmTTL` | 5m | Lifetime of a filter-write confirm token |
+| `AllowedHosts` | any | Host allowlist for SSE when `BaseURL` is empty (prefer setting `BaseURL`) |
+| `EnableAnnotations` | false | Registers `resolvespec_annotate` (opt-in) |
 
-    // BasePath is the URL path prefix where MCP endpoints are mounted (e.g. "/mcp").
-    // Required.
-    BasePath string
-}
-```
+---
 
 ## Handler Creation
 
@@ -63,14 +70,36 @@ handler.RegisterModel(schema, entity string, model interface{}) error
 - `entity` — table/entity name (e.g. `"users"`).
 - `model` — a pointer to a struct (e.g. `&User{}`).
 
-Each call immediately creates four MCP **tools** and one MCP **resource** for the model.
+`RegisterModel` only adds the model to the registry; it creates no tools. All registered models are visible to `list_tables`; per-entity rules (see [Security](#security)) restrict the operations.
+
+### Functions
+
+```go
+// Go callback
+handler.RegisterFunction(resolvemcp.Function{
+    Name:        "recalc_totals",
+    Description: "Recalculate order totals",
+    Params:      []resolvemcp.FunctionParam{{Name: "order_id", Type: resolvemcp.ParamNumber, Required: true}},
+    Handler: func(ctx context.Context, tx common.Database, args map[string]any) (any, error) { return nil, nil },
+    Authorize: func(ctx context.Context) error { return nil }, // optional per-caller gate
+})
+
+// SQL procedure: SELECT * FROM public.my_proc($1, $2::jsonb)
+handler.RegisterFunction(resolvemcp.Function{
+    Name: "my_proc", Procedure: "public.my_proc",
+    Params: []resolvemcp.FunctionParam{{Name: "a", Type: resolvemcp.ParamString, Required: true}},
+})
+```
+
+Only registered functions are callable. Arguments are validated against `Params`; calls run in a transaction (`OnTxBegin` fired). A function the caller is not authorized for looks identical to an unknown one.
 
 ---
 
 ## HTTP Transports
 
-`Config.BasePath` is required and used for all route registration.
-`Config.BaseURL` is optional — when empty it is detected from each request.
+`Config.BasePath` is used for route registration. `Config.BaseURL` is optional — when empty it is detected from each request.
+
+All `Setup*`/`New*` helpers wrap the endpoint in `Guard(securityList)`: a valid OAuth bearer token, session token or API key is required, there is no guest/optional mode, and it fails closed. `handler.SSEServer()` / `handler.StreamableHTTPServer()` and the `*Unauthenticated` variants serve **without** a guard and log a warning; use them only behind your own authentication.
 
 Two transports are supported: **SSE** (legacy, two-endpoint) and **Streamable HTTP** (recommended, single-endpoint).
 
@@ -83,7 +112,7 @@ Two endpoints: `GET {BasePath}/sse` (subscribe) + `POST {BasePath}/message` (sen
 #### Gorilla Mux
 
 ```go
-resolvemcp.SetupMuxRoutes(r, handler)
+resolvemcp.SetupMuxRoutes(r, handler, securityList)
 ```
 
 | Route | Method | Description |
@@ -94,13 +123,13 @@ resolvemcp.SetupMuxRoutes(r, handler)
 #### bunrouter
 
 ```go
-resolvemcp.SetupBunRouterRoutes(router, handler)
+resolvemcp.SetupBunRouterRoutes(router, handler, securityList)
 ```
 
 #### Gin / net/http / Echo
 
 ```go
-sse := handler.SSEServer()
+sse := resolvemcp.NewSSEServer(handler, securityList) // guarded
 
 engine.Any("/mcp/*path", gin.WrapH(sse))  // Gin
 http.Handle("/mcp/", sse)                  // net/http
@@ -116,7 +145,7 @@ Single endpoint at `{BasePath}`. Handles POST (client→server) and GET (server�
 #### Gorilla Mux
 
 ```go
-resolvemcp.SetupMuxStreamableHTTPRoutes(r, handler)
+resolvemcp.SetupMuxStreamableHTTPRoutes(r, handler, securityList)
 ```
 
 Mounts the handler at `{BasePath}` (all methods).
@@ -124,7 +153,7 @@ Mounts the handler at `{BasePath}` (all methods).
 #### bunrouter
 
 ```go
-resolvemcp.SetupBunRouterStreamableHTTPRoutes(router, handler)
+resolvemcp.SetupBunRouterStreamableHTTPRoutes(router, handler, securityList)
 ```
 
 Registers GET, POST, DELETE on `{BasePath}`.
@@ -132,8 +161,7 @@ Registers GET, POST, DELETE on `{BasePath}`.
 #### Gin / net/http / Echo
 
 ```go
-h := handler.StreamableHTTPServer()
-// or: h := resolvemcp.NewStreamableHTTPHandler(handler)
+h := resolvemcp.NewStreamableHTTPHandler(handler, securityList) // guarded
 
 engine.Any("/mcp", gin.WrapH(h))      // Gin
 http.Handle("/mcp", h)                 // net/http
@@ -306,6 +334,8 @@ Call `RegisterSecurityHooks` **once**, after creating the handler and before reg
 | `BeforeUpdate` | Blocks update if `CanUpdate` is false; drops hidden/masked columns from the payload |
 | `BeforeDelete` | Blocks delete if `CanDelete` is false |
 
+Additional hooks: `BeforeScan` (row pre-read of update/delete/filter writes), `BeforeCall`/`AfterCall` (functions) and `OnTxBegin`. Hooks are mutex-protected and panics in hooks are recovered.
+
 ### Per-entity operation rules
 
 Use `RegisterModelWithRules` instead of `RegisterModel` to set access rules at registration time:
@@ -362,121 +392,58 @@ handler.SetModelRules("public", "users", modelregistry.ModelRules{
 
 ## MCP Tools
 
-### Tool Naming
+Fixed set, independent of the models. `table` is `schema.entity`. Errors return `{"success":false,"error":{"code","message"}}` with codes `invalid_argument`, `not_found`, `forbidden`, `limit_exceeded`, `internal` (internal details are logged, the client gets a reference id).
 
-```
-{operation}_{schema}_{entity}    // e.g. read_public_users
-{operation}_{entity}             // e.g. read_users  (when schema is empty)
-```
+| Tool | Purpose |
+|---|---|
+| `list_tables` | Tables the caller may use and the allowed operations |
+| `describe_table` | Columns, PK, relations, writable columns, operations, limits |
+| `select_table` | Read rows (filters, sort, columns, preloads, paging) |
+| `insert_into_table` | Insert one row or a capped batch |
+| `update_table` | Update by `id` or `filters` |
+| `delete_from_table` | Delete by `id` or `filters` |
+| `list_functions` | Registered functions the caller may call, with parameters |
+| `call_function` | Call a registered function |
+| `resolvespec_annotate` | Only with `EnableAnnotations` |
 
-Operations: `read`, `create`, `update`, `delete`.
-
-### Read Tool — `read_{schema}_{entity}`
-
-Fetch one or many records.
-
-| Argument | Type | Description |
-|---|---|---|
-| `id` | string | Primary key value. Omit to return multiple records. |
-| `limit` | number | Max records per page (recommended: 10–100). |
-| `offset` | number | Records to skip (offset-based pagination). |
-| `cursor_forward` | string | PK of the **last** record on the current page (next-page cursor). |
-| `cursor_backward` | string | PK of the **first** record on the current page (prev-page cursor). |
-| `columns` | array | Column names to include. Omit for all columns. |
-| `omit_columns` | array | Column names to exclude. |
-| `filters` | array | Filter objects (see [Filtering](#filtering)). |
-| `sort` | array | Sort objects (see [Sorting](#sorting)). |
-| `preloads` | array | Relation preload objects (see [Preloading](#preloading)). |
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [...],
-  "metadata": {
-    "total": 100,
-    "filtered": 100,
-    "count": 10,
-    "limit": 10,
-    "offset": 0
-  }
-}
-```
-
-### Create Tool — `create_{schema}_{entity}`
-
-Insert one or more records.
+### `select_table`
 
 | Argument | Type | Description |
 |---|---|---|
-| `data` | object \| array | Single object or array of objects to insert. |
+| `table` | string (required) | `schema.entity` |
+| `id` | string | Primary key of one row |
+| `filters`, `sort` | array | See [Filtering](#filtering), [Sorting](#sorting) |
+| `columns`, `omit_columns` | array | Column selection |
+| `preloads` | array | Relations (validated against the model, max depth `MaxPreloadDepth`) |
+| `limit`, `offset` | number | Clamped to `MaxLimit` / rejected above `MaxOffset` |
+| `cursor_forward`, `cursor_backward` | string | PK cursor, requires `sort` |
+| `include_count` | boolean | Also compute totals (slower); otherwise `total`/`filtered` are 0 |
 
-Array input runs inside a single transaction — all succeed or all fail.
+Response: `{"success":true,"data":[...],"metadata":{"total","filtered","count","limit","offset"}}`
 
-**Response:**
-```json
-{ "success": true, "data": { ... } }
-```
+### `insert_into_table`
 
-### Update Tool — `update_{schema}_{entity}`
+`data` is an object or an array (one transaction, max `MaxBatch`). Unknown, duplicate or read-only keys are rejected; keys are resolved to columns from the model.
 
-Partially update an existing record. Only non-null, non-empty fields in `data` are applied; existing values are preserved for omitted fields.
+### `update_table` / `delete_from_table`
 
-| Argument | Type | Description |
-|---|---|---|
-| `id` | string | Primary key of the record. Can also be included inside `data`. |
-| `data` | object (required) | Fields to update. |
+Either `id` or `filters` is required.
 
-**Response:**
-```json
-{ "success": true, "data": { ...merged record... } }
-```
+| Mode | Behaviour |
+|---|---|
+| `id` | One row, applied immediately. The row is locked and row security applies; an invisible row is "not found". |
+| `filters` | Matching rows are found inside the transaction (row security applied, max `MaxWriteRows`). The first call returns a preview and a `confirm_token`; repeat the identical call with `confirm_token` to apply. |
+| `dry_run` | Report match count and preview ids; change nothing. |
 
-### Delete Tool — `delete_{schema}_{entity}`
+The token is single-use, expires after `ConfirmTTL`, and is bound to user, table, operation and a hash of filters, data and matched ids; it is held in memory (lost on restart, single instance). Update changes only the keys in `data`; `null` sets NULL. Filters are strictly parsed (never silently dropped), columns validated, and only the documented operators are accepted.
 
-Delete a record by primary key. **Irreversible.**
+### `call_function`
 
-| Argument | Type | Description |
-|---|---|---|
-| `id` | string (required) | Primary key of the record to delete. |
+`name` and `arguments` (object). See [Functions](#functions).
 
-**Response:**
-```json
-{ "success": true, "data": { ...deleted record... } }
-```
+### `resolvespec_annotate`
 
-### Annotation Tool — `resolvespec_annotate`
-
-Store or retrieve freeform annotation records for any tool, model, or entity. Registered automatically on every handler.
-
-| Argument | Type | Description |
-|---|---|---|
-| `tool_name` | string (required) | Key to annotate — an MCP tool name (e.g. `read_public_users`), a model name (e.g. `public.users`), or any other identifier. |
-| `annotations` | object | Annotation data to persist. Omit to retrieve existing annotations instead. |
-
-**Set annotations** (calls `resolvespec_set_annotation(tool_name, annotations)`):
-```json
-{ "tool_name": "read_public_users", "annotations": { "description": "Returns active users", "owner": "platform-team" } }
-```
-**Response:**
-```json
-{ "success": true, "tool_name": "read_public_users", "action": "set" }
-```
-
-**Get annotations** (calls `resolvespec_get_annotation(tool_name)`):
-```json
-{ "tool_name": "read_public_users" }
-```
-**Response:**
-```json
-{ "success": true, "tool_name": "read_public_users", "action": "get", "annotations": { ... } }
-```
-
----
-
-### Resource — `{schema}.{entity}`
-
-Each model is also registered as an MCP resource with URI `schema.entity` (or just `entity` when schema is empty). Reading the resource returns up to 100 records as `application/json`.
+Opt-in (`Config.EnableAnnotations`). Stores/retrieves freeform annotations through `resolvespec_set_annotation` / `resolvespec_get_annotation`; runs `BeforeHandle` hooks (`annotate_set` / `annotate_get`) and a transaction.
 
 ---
 
@@ -576,6 +543,9 @@ Hooks let you intercept and modify CRUD operations at well-defined lifecycle poi
 | `BeforeCreate` / `AfterCreate` | Around insert |
 | `BeforeUpdate` / `AfterUpdate` | Around update |
 | `BeforeDelete` / `AfterDelete` | Around delete |
+| `BeforeScan` | Row pre-read for update/delete/filter writes |
+| `BeforeCall` / `AfterCall` | Around `call_function` |
+| `OnTxBegin` | Start of every transaction |
 
 ### Registering Hooks
 
@@ -605,7 +575,7 @@ handler.Hooks().RegisterMultiple(
 | `Entity` | `string` | Entity/table name |
 | `Model` | `interface{}` | Registered model instance |
 | `Options` | `common.RequestOptions` | Parsed request options (read operations) |
-| `Operation` | `string` | `"read"`, `"create"`, `"update"`, or `"delete"` |
+| `Operation` | `string` | `"read"`, `"create"`, `"update"`, `"delete"`, `"call"`, `"annotate_set"` or `"annotate_get"` |
 | `ID` | `string` | Primary key from request (read/update/delete) |
 | `Data` | `interface{}` | Input data (create/update — modifiable) |
 | `Result` | `interface{}` | Output data (set by After hooks) |
@@ -639,7 +609,7 @@ registry.ClearAll()                          // remove all hooks
 
 ## Context Helpers
 
-Request metadata is threaded through `context.Context` during handler execution. Hooks and custom tools can read it:
+The caller's `security.UserContext` reaches every tool call through the request context. Request metadata is threaded through `context.Context` during handler execution. Hooks and custom tools can read it:
 
 ```go
 schema    := resolvemcp.GetSchema(ctx)
@@ -659,7 +629,7 @@ ctx = resolvemcp.WithSchema(ctx, "tenant_a")
 
 ## Adding Custom MCP Tools
 
-Access the underlying `*server.MCPServer` to register additional tools:
+Access the underlying `*server.MCPServer` to register additional tools (they sit behind the same guard). Prefer `RegisterFunction` for database-backed actions:
 
 ```go
 mcpServer := handler.MCPServer()
@@ -675,3 +645,13 @@ The handler resolves table names in priority order:
 1. `TableNameProvider` interface — `TableName() string` (can return `"schema.table"`)
 2. `SchemaProvider` interface — `SchemaName() string` (combined with entity name)
 3. Fallback: `schema.entity` (or `schema_entity` for SQLite)
+
+---
+
+## Breaking changes
+
+- Per-model tools (`read_/create_/update_/delete_{schema}_{entity}`) and per-model resources are gone; use the meta tools.
+- `Setup*` / `NewSSEServer` / `NewStreamableHTTPHandler` take a `*security.SecurityList` and require authentication. `OptionalAuth*` helpers were removed; `*Unauthenticated` variants exist for explicit opt-out.
+- `resolvespec_annotate` is opt-in via `Config.EnableAnnotations`.
+- `Handler.Build()` is not needed.
+- Update is now a partial update by validated keys; reads are capped by the configured limits.

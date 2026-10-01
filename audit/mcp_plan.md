@@ -1,6 +1,6 @@
 # resolvemcp rewrite plan
 
-Source: `audit/pkg/resolvemcp.audit.md`. Status: plan only, no code changed.
+Source: `audit/pkg/resolvemcp.audit.md`. Status: items 1-8 and 10 implemented; item 9 (tests) mostly done, see git log.
 
 ## Goal
 
@@ -72,7 +72,7 @@ Same rules as resolvespec CRUD, plus guardrails.
 
 ### 1. API key login (`pkg/security`)
 - Existing: keystore has `ValidateKey` and `KeyStoreAuthenticator`; `Login` needs a password; no key-to-session path.
-- Add `resolvespec_login_api_key` to `SQLNames` (default + override) and a SQL script beside the existing procedures. Contract: `p_success, p_error, p_data`, input raw key; hashes, validates active/non-expired key, creates session for the key's user.
+- Add `resolvespec_login_api_key` to `lookup.ProcNames` (default + override; was `SQLNames` before the lookup refactor) and a SQL script beside the existing procedures. Contract: `p_success, p_error, p_data`, input raw key; hashes, validates active/non-expired key, creates session for the key's user.
 - Add `DatabaseAuthenticator.LoginWithAPIKey(ctx, rawKey)`; procedure first, direct-SQL fallback via `ShouldUseProcedure`.
 - Hashed lookup; same generic error for unknown, expired or inactive key; no key material in logs.
 - Expose through the chain/composite authenticators so the middleware can accept it.

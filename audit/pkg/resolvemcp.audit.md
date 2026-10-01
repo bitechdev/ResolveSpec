@@ -6,6 +6,7 @@
 | **Files** | `handler.go` (901), `tools.go` (720), `cursor.go`, `oauth2.go`, `oauth2_server.go`, `annotation.go`, `hooks.go`, `security_hooks.go`, `context.go`, `resolvemcp.go` |
 | **Tests** | `tools_test.go` (34), `tx_test.go` (207); `go test` passes. No hostile-input tests, no `-race` |
 | **Audit date** | 2026-09-30 |
+| **Status** | Rewrite implemented (meta tools, guard, limits, guardrails, function registry); see `audit/mcp_plan.md` |
 | **Axes** | thread locking/waiting, slowness, security, panic handling & logging, agent usability |
 | **Threat model** | hostile or confused MCP client (LLM agent, possibly prompt-injected); tool arguments are attacker-controlled |
 | **Depth** | targeted (request path, security wiring; verified against source) |

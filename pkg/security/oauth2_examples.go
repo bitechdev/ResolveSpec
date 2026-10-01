@@ -441,7 +441,7 @@ func ExampleOAuth2Complete() {
 }
 
 func setupOAuth2Tables(db *sql.DB) {
-	// Create tables from database_schema.sql
+	// Create tables from lookup/database_schema.sql
 	// This is a helper function - in production, use migrations
 	ctx := context.Background()
 

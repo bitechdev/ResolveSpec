@@ -35,6 +35,7 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 | `resolvespec_login` | Session-based login | DatabaseAuthenticator |
 | `resolvespec_logout` | Session invalidation | DatabaseAuthenticator |
 | `resolvespec_session` | Session validation | DatabaseAuthenticator |
+| `resolvespec_login_api_key` | Exchange a raw header/generic API key for a session (defined in `lookup/keystore_schema.sql`; direct mode reads `user_keys`) | DatabaseAuthenticator.LoginWithAPIKey |
 | `resolvespec_session_update` | Update session activity | DatabaseAuthenticator |
 | `resolvespec_refresh_token` | Token refresh | DatabaseAuthenticator |
 | `resolvespec_jwt_login` | JWT user validation | JWTAuthenticator |
@@ -50,95 +51,96 @@ Type-safe, composable security system for ResolveSpec with support for authentic
 | `resolvespec_password_reset_request` | Create password reset token | DatabaseAuthenticator |
 | `resolvespec_password_reset` | Validate token and set new password | DatabaseAuthenticator |
 
-See `database_schema.sql` for complete stored procedure definitions and examples.
+See `lookup/database_schema.sql` for complete stored procedure definitions and examples.
 
-**Not on Postgres, or don't have the procedures installed?** See [Direct Mode](#direct-mode-portable-sql-without-stored-procedures) below — every provider that calls a `resolvespec_*` procedure also has a portable Go/SQL implementation that works on SQLite, MySQL, or plain Postgres.
+**Not on Postgres, or don't have the procedures installed?** See [Database access (lookup)](#database-access-lookup) below: every provider can also work directly on tables, on SQLite, MySQL, SQL Server or plain Postgres.
 
-## Direct Mode (portable SQL without stored procedures)
+## Database access (lookup)
 
-Every database-backed provider (`DatabaseAuthenticator`, `JWTAuthenticator`, `DatabaseTwoFactorProvider`, `DatabasePasskeyProvider`, the OAuth2 methods/server, `DatabaseKeyStore`) has two code paths:
+`pkg/security` itself contains no SQL. Every database-backed provider (`DatabaseAuthenticator`, `JWTAuthenticator`, column/row security, `DatabaseTwoFactorProvider`, `DatabasePasskeyProvider`, the OAuth2 methods/server, `DatabaseKeyStore`) calls a store interface from `pkg/security/lookup`. Two backends implement each store:
 
-- **Procedure mode** — calls the configured `resolvespec_*` stored procedure (original behavior, Postgres-only).
-- **Direct mode** — reimplements the same logic in Go using plain parameterized SQL against configurable table names. Works on SQLite, MySQL, or a Postgres database where the procedures were never deployed.
+- **procedure** (`lookup/procedure`): calls the `resolvespec_*` stored procedures (`p_success` / `p_error` / `p_data` contract). Postgres only.
+- **direct** (`lookup/direct`): plain parameterized SQL on tables, rendered by a per-database dialect (`lookup/dialect`: postgres, sqlite, mysql, mssql). Table and column names are configurable.
 
-### QueryMode
+`lookup/backends.New(db, cfg, opts)` builds a `lookup.Provider` (all stores) and routes each operation to a backend. The security constructors do this for you from `lookup.Config`; pass a ready `*lookup.Provider` with `LookupProvider` / `WithLookupProvider` to share one between components.
 
-Selection is controlled per-provider by a `QueryMode`:
-
-```go
-type QueryMode int
-
-const (
-    ModeAuto      QueryMode = iota // default
-    ModeProcedure
-    ModeDirect
-)
-```
-
-- **`ModeAuto`** (default, zero value) — auto-detects per connection:
-  - SQLite/MySQL drivers → Direct mode, no probing.
-  - Postgres drivers (`lib/pq`, `pgx`) → probes `pg_proc` for the configured procedure name and uses it **only if it actually exists**; otherwise falls back to Direct mode. The result is cached per procedure name and reset on reconnect.
-  - Any other/unrecognized driver (including `sqlmock` test doubles) → defaults to Procedure mode, preserving existing behavior for callers that don't expose an identifiable driver type.
-- **`ModeProcedure`** — always calls the stored procedure, regardless of dialect.
-- **`ModeDirect`** — always uses the portable Go/SQL path, never the stored procedure.
-
-Set it via the provider's `Options` struct or `With...` chain method:
+### Choosing the mode
 
 ```go
-auth := security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
-    QueryMode: security.ModeDirect, // force Direct mode, e.g. for SQLite
-})
-
-tfaProvider := security.NewDatabaseTwoFactorProvider(sqliteDB, nil).
-    WithQueryMode(security.ModeDirect)
-```
-
-On a real SQLite/MySQL connection you can usually leave `QueryMode` unset — `ModeAuto` detects the dialect and uses Direct mode automatically.
-
-### TableNames / KeyStoreTableNames
-
-Direct mode reads/writes plain tables instead of calling procedures, so table names are configurable the same way procedure names are (`SQLNames`):
-
-```go
-type TableNames struct {
-    Users                  string // default: "users"
-    UserSessions           string // default: "user_sessions"
-    TokenBlacklist         string // default: "token_blacklist"
-    UserTOTPBackupCodes    string // default: "user_totp_backup_codes"
-    UserPasskeyCredentials string // default: "user_passkey_credentials"
-    UserPasswordResets     string // default: "user_password_resets"
-    OAuthClients           string // default: "oauth_clients"
-    OAuthCodes             string // default: "oauth_codes"
-}
-
-type KeyStoreTableNames struct {
-    UserKeys string // default: "user_keys" — used by DatabaseKeyStore
+type Config struct {
+    Dialect   string         // "postgres", "sqlite", "mysql", "mssql", or one you registered; empty = detect from the driver
+    Mode      lookup.Mode    // default for every operation
+    Overrides map[lookup.Op]lookup.Mode // per-operation mode, e.g. lookup.OpSession: lookup.ModeDirect
+    Procs     lookup.ProcNames // procedure names, empty fields keep the default
+    Schema    lookup.Schema    // table/column names, missing entries keep the default
 }
 ```
 
-`DefaultTableNames()` / `MergeTableNames()` / `ValidateTableNames()` mirror `DefaultSQLNames()` / `MergeSQLNames()` / `ValidateSQLNames()`. Set custom names via the same `Options`/`With...` surface as `QueryMode`:
+| Mode | Behaviour |
+|---|---|
+| `ModeDefault` (zero value) | stored procedure on Postgres, direct SQL on every other dialect |
+| `ModeProcedure` | always the procedure; an error on a non-Postgres dialect |
+| `ModeDirect` | always direct SQL |
+| `ModeAuto` | Postgres: probe `pg_proc` once per procedure (cached, reset on reconnect), use it if present, else direct. Other dialects: direct |
+
+An impossible combination (procedure on SQLite) fails when the provider is built, not on the first request. If the dialect is not set and cannot be detected from the driver, Postgres is assumed. A bad configuration makes every call return the error (fail closed).
 
 ```go
-auth := security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
-    TableNames: &security.TableNames{Users: "app_users"}, // only override what differs
+// SQLite or MySQL: nothing to configure, direct SQL is the default.
+auth := security.NewDatabaseAuthenticator(sqliteDB)
+
+// Postgres without the procedures installed: use tables only.
+auth = security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
+    Lookup: lookup.Config{Mode: lookup.ModeDirect},
 })
+
+// Postgres, procedures for everything except session lookups.
+auth = security.NewDatabaseAuthenticatorWithOptions(db, security.DatabaseAuthenticatorOptions{
+    Lookup: lookup.Config{Overrides: map[lookup.Op]lookup.Mode{lookup.OpSession: lookup.ModeDirect}},
+})
+
+tfa := security.NewDatabaseTwoFactorProvider(db, nil).WithLookup(lookup.Config{Mode: lookup.ModeDirect})
 ```
 
-`oauth2_methods.go` and `oauth_server_db.go` are methods on `*DatabaseAuthenticator` and reuse its `TableNames`/`QueryMode`; there's no separate config for them.
+Other components take the same `Lookup` / `LookupProvider` options (or `WithLookup` / `WithLookupProvider` on the chain-style types).
 
-### Schema
+### Custom names
 
-`database_schema_sqlite.sql` is the portable companion to `database_schema.sql` — plain `CREATE TABLE` statements only (no functions, no triggers, no `jsonb`/`bytea`/array types), covering every table Direct mode reads or writes. Use it to stand up a SQLite (or adapt for MySQL) database for Direct mode.
+```go
+cfg := lookup.Config{
+    Procs: lookup.ProcNames{Login: "myapp_login"},          // only override what differs
+    Schema: lookup.Schema{
+        lookup.EntityUsers: {Name: "app_users", Columns: map[string]string{"username": "login_name"}},
+    },
+}
+```
 
-### What's NOT covered
+Procedure names, table names and column names are validated as identifiers at construction. `Schema` entries may also set `Schema` to qualify a table (`schema.table`).
 
-`ColumnSecurityProvider`/`RowSecurityProvider` (`resolvespec_column_security` / `resolvespec_row_security`) query an external `core.secaccess`/`core.hub_link` schema this package doesn't own. Direct mode has no portable equivalent to fabricate for these and returns `security.ErrDirectModeUnsupported` — use `ConfigColumnSecurityProvider`/`ConfigRowSecurityProvider` instead when not running against Postgres with those procedures installed.
+### Schemas
+
+| File | Purpose |
+|---|---|
+| `lookup/database_schema.sql` | Postgres: tables **and** stored procedures (procedure backend) |
+| `lookup/keystore_schema.sql` | Postgres: `user_keys` table and key store procedures |
+| `lookup/ddl/{postgres,sqlite,mysql,mssql}.sql` | tables only, for the direct backend, with the default names |
+
+Read them from Go with `ddl.SQL("sqlite")` or, for drivers that reject multi-statement execution (MySQL, SQL Server), `ddl.Statements("mysql")`. Do not mix `ddl/postgres.sql` with `database_schema.sql`: the procedure schema stores passkey credential ids as `bytea` and OAuth lists as `text[]`, the direct backend stores base64 / JSON text. The `ddl` files are starting points: adjust types and collations to your deployment, and set `lookup.Config.Schema` if you rename anything.
+
+### Column and row security
+
+`ColumnSecurityProvider` / `RowSecurityProvider` read `sec_group_members` (optional), `sec_column_rules` and `sec_row_rules`, in both backends. A rule belongs to one user or one group; rules apply to the exact schema and table (case-insensitive, never a prefix); a blocking row rule wins, otherwise row templates are combined with `AND`. A non-numeric user reference is an error, and no rule means no restriction from this provider. `WithNoGroupTables()` skips the membership table.
 
 ### Behavioral notes
 
-- Direct mode matches Procedure mode's current behavior exactly, including its TODOs — e.g. passwords are compared as-is (the stored procedures don't verify bcrypt hashes yet either; see the TODO in `resolvespec_login`/`resolvespec_password_reset`).
-- Session tokens generated by Direct mode use the same `sess_<hex>_<unix-timestamp>` shape as the plpgsql procedures.
-- `bytea`/array/`jsonb` Postgres-only columns (passkey credentials, OAuth2 client scopes, keystore `meta`) are stored as base64/JSON-encoded `TEXT` in Direct mode — transparent to callers, since the Go-level API already deals in those same encodings.
+- Direct login, register, refresh, API-key login, password reset and passkey login run in one transaction.
+- Passwords are stored as bcrypt; legacy cleartext values are accepted at login and only rewritten when `UpgradePasswordHash` is enabled.
+- Session tokens use the shape `sess_<hex>_<unix-timestamp>` in both backends.
+- Direct mode stores `bytea` / array / `jsonb` values (passkey credentials, OAuth client lists, key meta) as base64 / JSON text; the Go API is unchanged.
+- OAuth authorization codes are consumed atomically.
+- Adding a database: implement `dialect.Dialect`, register it with `dialect.Register`, then set `Config.Dialect`.
+- Backend conformance: `lookup/conformance` is one behavioural suite run against every backend (`go test ./pkg/security/lookup/backends -run TestConformance`). SQLite runs always; Postgres (procedure and direct), MySQL and SQL Server run when `RESOLVESPEC_TEST_PG_DSN`, `RESOLVESPEC_TEST_PG_DIRECT_DSN`, `RESOLVESPEC_TEST_MYSQL_DSN` or `RESOLVESPEC_TEST_MSSQL_DSN` is set (see the comment in `backends/conformance_test.go`). Rows are prefixed and removed afterwards.
+- Migration from the old `SQLNames` / `TableNames` / `QueryMode` API: see `breaking_changes.md`.
 
 ## Quick Start
 
@@ -297,7 +299,7 @@ type UserContext struct {
 
 **HeaderAuthenticator** - Simple header-based authentication:
 ```go
-auth := security.NewHeaderAuthenticator()
+auth := providers.NewHeaderAuthenticator()
 // Expects: X-User-ID, X-User-Name, X-User-Level, etc.
 ```
 
@@ -307,7 +309,7 @@ auth := security.NewDatabaseAuthenticator(db)
 // Supports: Login, Logout, Session management, Token refresh
 // All operations use stored procedures: resolvespec_login, resolvespec_logout,
 // resolvespec_session, resolvespec_session_update, resolvespec_refresh_token
-// Requires: users and user_sessions tables + stored procedures (see database_schema.sql)
+// Requires: users and user_sessions tables + stored procedures (see lookup/database_schema.sql)
 ```
 
 **JWTAuthenticator** - JWT token authentication with login/logout:
@@ -318,19 +320,19 @@ auth := security.NewJWTAuthenticator("secret-key", db)
 // Note: Requires JWT library installation for token signing/verification
 ```
 
-**TwoFactorAuthenticator** - Wraps any authenticator with TOTP 2FA:
+**totp.Authenticator** - Wraps any authenticator with TOTP 2FA:
 ```go
 baseAuth := security.NewDatabaseAuthenticator(db)
 
 // Use in-memory provider (for testing)
-tfaProvider := security.NewMemoryTwoFactorProvider(nil)
+tfaProvider := totp.NewMemoryProvider(nil)
 
 // Or use database provider (for production)
 tfaProvider := security.NewDatabaseTwoFactorProvider(db, nil)
 // Requires: users table with totp fields, user_totp_backup_codes table
-// Requires: resolvespec_totp_* stored procedures (see totp_database_schema.sql)
+// Requires: resolvespec_totp_* stored procedures (see lookup/database_schema.sql)
 
-auth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+auth := totp.NewAuthenticator(baseAuth, tfaProvider, nil)
 // Supports: TOTP codes, backup codes, QR code generation
 // Compatible with Google Authenticator, Microsoft Authenticator, Authy, etc.
 ```
@@ -341,7 +343,7 @@ auth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
 ```go
 colSec := security.NewDatabaseColumnSecurityProvider(db)
 // Uses stored procedure: resolvespec_column_security
-// Queries core.secaccess and core.hub_link tables
+// Reads sec_column_rules (user rules + rules of the user's sec_group_members groups)
 ```
 
 **ConfigColumnSecurityProvider** - Static configuration:
@@ -351,7 +353,7 @@ rules := map[string][]security.ColumnSecurity{
         {Path: []string{"ssn"}, Accesstype: "mask", MaskStart: 5},
     },
 }
-colSec := security.NewConfigColumnSecurityProvider(rules)
+colSec := providers.NewConfigColumnSecurityProvider(rules)
 ```
 
 ### Row Security Providers
@@ -370,7 +372,7 @@ templates := map[string]string{
 blocked := map[string]bool{
     "public.admin_logs": true,
 }
-rowSec := security.NewConfigRowSecurityProvider(templates, blocked)
+rowSec := providers.NewConfigRowSecurityProvider(templates, blocked)
 ```
 
 ## Usage Examples
@@ -381,7 +383,7 @@ rowSec := security.NewConfigRowSecurityProvider(templates, blocked)
 func main() {
     db := setupDatabase()
 
-    // Run migrations (see database_schema.sql)
+    // Run migrations (see lookup/database_schema.sql)
     // db.Exec("CREATE TABLE users ...")
     // db.Exec("CREATE TABLE user_sessions ...")
 
@@ -475,8 +477,8 @@ func handleRefresh(securityList *security.SecurityList) http.HandlerFunc {
 ```go
 // 1. Wrap existing authenticator with 2FA support
 baseAuth := security.NewDatabaseAuthenticator(db)
-tfaProvider := security.NewMemoryTwoFactorProvider(nil) // Use custom DB implementation in production
-tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+tfaProvider := totp.NewMemoryProvider(nil) // Use custom DB implementation in production
+tfaAuth := totp.NewAuthenticator(baseAuth, tfaProvider, nil)
 
 // 2. Use as normal authenticator
 provider := security.NewCompositeSecurityProvider(tfaAuth, colSec, rowSec)
@@ -548,18 +550,18 @@ has2FA, err := tfaProvider.Get2FAStatus(userID)
 // Uses PostgreSQL stored procedures for all operations
 db := setupDatabase()
 
-// Run migrations from totp_database_schema.sql
+// Run migrations from lookup/database_schema.sql
 // - Add totp_secret, totp_enabled, totp_enabled_at to users table
 // - Create user_totp_backup_codes table
 // - Create resolvespec_totp_* stored procedures
 
 tfaProvider := security.NewDatabaseTwoFactorProvider(db, nil)
-tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, nil)
+tfaAuth := totp.NewAuthenticator(baseAuth, tfaProvider, nil)
 ```
 
 **Option 2: Implement Custom Provider**
 
-Implement `TwoFactorAuthProvider` for custom storage:
+Implement `totp.AuthProvider` for custom storage:
 
 ```go
 type DBTwoFactorProvider struct {
@@ -585,15 +587,15 @@ func (p *DBTwoFactorProvider) Get2FASecret(userID int) (string, error) {
 ### Configuration
 
 ```go
-config := &security.TwoFactorConfig{
+config := &totp.Config{
     Algorithm:  "SHA256",  // SHA1, SHA256, SHA512
     Digits:     8,         // 6 or 8
     Period:     30,        // Seconds per code
     SkewWindow: 2,         // Accept codes ±2 periods
 }
 
-totp := security.NewTOTPGenerator(config)
-tfaAuth := security.NewTwoFactorAuthenticator(baseAuth, tfaProvider, config)
+totp := totp.NewGenerator(config)
+tfaAuth := totp.NewAuthenticator(baseAuth, tfaProvider, config)
 ```
 
 ### API Response Structure
@@ -662,9 +664,9 @@ func main() {
     }
 
     // Create providers
-    auth := security.NewHeaderAuthenticator()
-    colSec := security.NewConfigColumnSecurityProvider(columnRules)
-    rowSec := security.NewConfigRowSecurityProvider(rowTemplates, nil)
+    auth := providers.NewHeaderAuthenticator()
+    colSec := providers.NewConfigColumnSecurityProvider(columnRules)
+    rowSec := providers.NewConfigRowSecurityProvider(rowTemplates, nil)
 
     // Combine providers and register hooks
     provider := security.NewCompositeSecurityProvider(auth, colSec, rowSec)
@@ -1013,7 +1015,7 @@ restheadspec.RegisterSecurityHooks(handler, securityList) // or funcspec/resolve
 
 ### DB Requirements
 
-Run the migrations in `database_schema.sql`:
+Run the migrations in `lookup/database_schema.sql`:
 - `user_password_resets` table (`user_id`, `token_hash` SHA-256, `expires_at`, `used`, `used_at`)
 - `resolvespec_password_reset_request` stored procedure
 - `resolvespec_password_reset` stored procedure
@@ -1050,13 +1052,14 @@ err = auth.CompletePasswordReset(ctx, security.PasswordResetCompleteRequest{
 - `RequestPasswordReset` always returns success even when the email/username is not found, preventing user enumeration
 - Hash the new password with bcrypt before storing (pgcrypto `crypt`/`gen_salt`) — see the TODO comment in `resolvespec_password_reset`
 
-### SQLNames
+### Procedure names
+
+Set through `lookup.Config.Procs` (`lookup.ProcNames`):
 
 ```go
-type SQLNames struct {
-    // ...
-    PasswordResetRequest  string // default: "resolvespec_password_reset_request"
-    PasswordResetComplete string // default: "resolvespec_password_reset"
+lookup.ProcNames{
+    PasswordResetRequest:  "resolvespec_password_reset_request", // default
+    PasswordResetComplete: "resolvespec_password_reset",         // default
 }
 ```
 
@@ -1151,7 +1154,7 @@ http.ListenAndServe(":8080", mux)
 
 When `PersistClients: true` or `PersistCodes: true`, the server calls the corresponding `DatabaseAuthenticator` methods. Both flags default to `false` (in-memory maps). Enable both for multi-instance deployments.
 
-Requires `oauth_clients` and `oauth_codes` tables + 6 stored procedures from `database_schema.sql`.
+Requires `oauth_clients` and `oauth_codes` tables + 6 stored procedures from `lookup/database_schema.sql`.
 
 #### New DB Types
 
@@ -1198,10 +1201,10 @@ auth.OAuthIntrospectToken(ctx, token)  // RFC 7662 — returns OAuthTokenInfo
 auth.OAuthRevokeToken(ctx, token)      // RFC 7009 — revoke session
 ```
 
-#### SQLNames Fields
+#### Procedure names
 
 ```go
-type SQLNames struct {
+type ProcNames struct {
     // ... existing fields ...
     OAuthRegisterClient string // default: "resolvespec_oauth_register_client"
     OAuthGetClient      string // default: "resolvespec_oauth_get_client"

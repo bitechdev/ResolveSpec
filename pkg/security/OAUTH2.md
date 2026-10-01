@@ -21,7 +21,7 @@ The security package provides OAuth2 authentication support for any OAuth2-compl
 ### 1. Database Setup
 
 ```sql
--- Run the schema from database_schema.sql
+-- Run the schema from lookup/database_schema.sql
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(255) NOT NULL UNIQUE,
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 );
 
 -- OAuth2 stored procedures (7 functions)
--- See database_schema.sql for full implementation
+-- See lookup/database_schema.sql for full implementation
 ```
 
 ### 2. Google OAuth2

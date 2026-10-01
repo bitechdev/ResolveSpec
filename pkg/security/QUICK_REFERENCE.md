@@ -6,7 +6,7 @@
 // Step 1: Create security providers
 auth := security.NewDatabaseAuthenticator(db) // Session-based (recommended)
 // OR: auth := security.NewJWTAuthenticator("secret-key", db)
-// OR: auth := security.NewHeaderAuthenticator()
+// OR: auth := providers.NewHeaderAuthenticator()
 // OR: auth := security.NewGoogleAuthenticator(clientID, secret, redirectURL, db) // OAuth2
 
 colSec := security.NewDatabaseColumnSecurityProvider(db)
@@ -55,7 +55,7 @@ All stored procedures return structured results:
 - Session/Login: `(p_success bool, p_error text, p_data jsonb)`
 - Security: `(p_success bool, p_error text, p_rules jsonb)`
 
-See `database_schema.sql` for complete definitions.
+See `lookup/database_schema.sql` for complete definitions.
 
 ---
 
@@ -182,7 +182,7 @@ auth := security.NewDatabaseAuthenticator(db)
 // Requires these tables:
 // - users (id, username, email, password, user_level, roles, is_active)
 // - user_sessions (session_token, user_id, expires_at, created_at, last_activity_at)
-// See database_schema.sql for full schema
+// See lookup/database_schema.sql for full schema
 
 // Features:
 // - Login with username/password
@@ -313,16 +313,15 @@ func (p *DatabaseColumnSecurityProvider) GetColumnSecurity(ctx context.Context, 
     }
 
     query := `
-        SELECT control, accesstype, jsonvalue
-        FROM core.secaccess
-        WHERE rid_hub IN (
-            SELECT rid_hub_parent FROM core.hub_link
-            WHERE rid_hub_child = ? AND parent_hubtype = 'secgroup'
-        )
-        AND control ILIKE ?
+        SELECT schema_name || '.' || table_name || '.' || column_path AS control,
+               access_type AS accesstype, COALESCE(extra_filters, '') AS jsonvalue
+        FROM sec_column_rules
+        WHERE is_active = true
+          AND lower(schema_name) = lower(?) AND lower(table_name) = lower(?)
+          AND (user_id = ? OR group_id IN (SELECT group_id FROM sec_group_members WHERE user_id = ?))
     `
 
-    err := p.db.WithContext(ctx).Raw(query, userID, fmt.Sprintf("%s.%s%%", schema, table)).Scan(&records).Error
+    err := p.db.WithContext(ctx).Raw(query, schema, table, userID, userID).Scan(&records).Error
     if err != nil {
         return nil, err
     }
@@ -378,19 +377,19 @@ func (p *ConfigRowSecurityProvider) GetRowSecurity(ctx context.Context, userID i
 
 ```go
 // Test Authenticator
-auth := security.NewHeaderAuthenticator()
+auth := providers.NewHeaderAuthenticator()
 req := httptest.NewRequest("GET", "/", nil)
 req.Header.Set("X-User-ID", "123")
 userCtx, err := auth.Authenticate(req)
 assert.Equal(t, 123, userCtx.UserID)
 
 // Test ColumnSecurityProvider
-colSec := security.NewConfigColumnSecurityProvider(rules)
+colSec := providers.NewConfigColumnSecurityProvider(rules)
 cols, err := colSec.GetColumnSecurity(context.Background(), 123, "public", "employees")
 assert.Equal(t, "mask", cols[0].Accesstype)
 
 // Test RowSecurityProvider
-rowSec := security.NewConfigRowSecurityProvider(templates, blocked)
+rowSec := providers.NewConfigRowSecurityProvider(templates, blocked)
 row, err := rowSec.GetRowSecurity(context.Background(), 123, "public", "orders")
 assert.Equal(t, "user_id = {UserID}", row.Template)
 ```

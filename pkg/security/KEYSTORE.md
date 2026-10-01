@@ -19,7 +19,7 @@ In-memory store seeded from a static list. Suitable for a small, fixed set of se
 
 ```go
 // Pre-load keys from config (KeyHash = SHA-256 hex of the raw key)
-store := security.NewConfigKeyStore([]security.UserKey{
+store := providers.NewConfigKeyStore([]security.UserKey{
     {
         UserID:  1,
         KeyType: security.KeyTypeGenericAPI,
@@ -33,7 +33,7 @@ store := security.NewConfigKeyStore([]security.UserKey{
 
 ### DatabaseKeyStore
 
-Backed by PostgreSQL stored procedures. Supports optional caching (default 2-minute TTL). Apply `keystore_schema.sql` before use.
+Backed by PostgreSQL stored procedures by default, or by the `user_keys` table in direct mode (any supported dialect). Supports optional caching (default 2-minute TTL). Apply `lookup/keystore_schema.sql` before use.
 
 ```go
 db, _ := sql.Open("postgres", dsn)
@@ -43,8 +43,8 @@ store := security.NewDatabaseKeyStore(db)
 // With options
 store = security.NewDatabaseKeyStore(db, security.DatabaseKeyStoreOptions{
     CacheTTL: 5 * time.Minute,
-    SQLNames: &security.KeyStoreSQLNames{
-        ValidateKey: "myapp_keystore_validate", // override one procedure name
+    Lookup: lookup.Config{
+        Procs: lookup.ProcNames{KeystoreValidateKey: "myapp_keystore_validate"}, // override one procedure name
     },
 })
 ```
@@ -85,9 +85,9 @@ Keys are extracted from the request in this order:
 3. `X-API-Key: <key>`
 
 ```go
-auth := security.NewKeyStoreAuthenticator(store, "") // "" = accept any key type
+auth := providers.NewKeyStoreAuthenticator(store, "") // "" = accept any key type
 // Restrict to a specific type:
-auth = security.NewKeyStoreAuthenticator(store, security.KeyTypeGenericAPI)
+auth = providers.NewKeyStoreAuthenticator(store, security.KeyTypeGenericAPI)
 ```
 
 Plug it into a handler:
@@ -109,10 +109,10 @@ On successful validation the request context receives a `UserContext` where:
 
 ## Database setup
 
-Apply `keystore_schema.sql` to your PostgreSQL database. It requires the `users` table from the main `database_schema.sql`.
+Apply `lookup/keystore_schema.sql` to your PostgreSQL database. It requires the `users` table from the main `lookup/database_schema.sql`.
 
 ```sql
-\i pkg/security/keystore_schema.sql
+\i pkg/security/lookup/keystore_schema.sql
 ```
 
 This creates:
@@ -123,27 +123,22 @@ This creates:
 - `resolvespec_keystore_delete_key(p_user_id, p_key_id)`
 - `resolvespec_keystore_validate_key(p_key_hash, p_key_type)`
 
-### Custom procedure names
+### Custom names and modes
 
 ```go
 store := security.NewDatabaseKeyStore(db, security.DatabaseKeyStoreOptions{
-    SQLNames: &security.KeyStoreSQLNames{
-        GetUserKeys: "myschema_get_keys",
-        CreateKey:   "myschema_create_key",
-        DeleteKey:   "myschema_delete_key",
-        ValidateKey: "myschema_validate_key",
+    Lookup: lookup.Config{
+        Procs: lookup.ProcNames{
+            KeystoreGetUserKeys: "myschema_get_keys",
+            KeystoreCreateKey:   "myschema_create_key",
+            KeystoreDeleteKey:   "myschema_delete_key",
+            KeystoreValidateKey: "myschema_validate_key",
+        },
     },
 })
-
-// Validate names at startup
-names := &security.KeyStoreSQLNames{
-    GetUserKeys: "myschema_get_keys",
-    // ...
-}
-if err := security.ValidateKeyStoreSQLNames(names); err != nil {
-    log.Fatal(err)
-}
 ```
+
+Names are validated when the store is first used. On Postgres the key store calls the procedures by default; on SQLite, MySQL and SQL Server (or with `Mode: lookup.ModeDirect`) it reads and writes the `user_keys` table directly (see `lookup/ddl`). Table and column names are configurable through `lookup.Config.Schema`.
 
 ## Security notes
 

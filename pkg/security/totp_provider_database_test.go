@@ -7,7 +7,7 @@ import (
 	"github.com/bitechdev/ResolveSpec/pkg/security"
 )
 
-// Note: These tests require a PostgreSQL database with the schema from totp_database_schema.sql
+// Note: These tests require a PostgreSQL database with the schema from lookup/database_schema.sql
 // Set TEST_DATABASE_URL environment variable or skip tests
 
 func setupTestDB(t *testing.T) *sql.DB {

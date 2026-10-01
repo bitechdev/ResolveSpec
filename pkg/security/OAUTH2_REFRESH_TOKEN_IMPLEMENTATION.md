@@ -43,16 +43,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 **`resolvespec_oauth_getrefreshtoken(p_refresh_token)`**
 - Gets OAuth2 session data by refresh token
 - Returns: `{user_id, access_token, token_type, expiry}`
-- Location: `database_schema.sql:714`
+- Location: `lookup/database_schema.sql:714`
 
 **`resolvespec_oauth_updaterefreshtoken(p_update_data)`**
 - Updates session with new tokens after refresh
 - Input: `{user_id, old_refresh_token, new_session_token, new_access_token, new_refresh_token, expires_at}`
-- Location: `database_schema.sql:752`
+- Location: `lookup/database_schema.sql:752`
 
 **`resolvespec_oauth_getuser(p_user_id)`**
 - Gets user data by ID for building UserContext
-- Location: `database_schema.sql:791`
+- Location: `lookup/database_schema.sql:791`
 
 ---
 

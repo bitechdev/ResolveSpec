@@ -6,7 +6,7 @@ Passkey authentication (WebAuthn/FIDO2) is now integrated into the DatabaseAuthe
 ## Setup
 
 ### Database Schema
-Run the passkey SQL schema (in database_schema.sql):
+Run the passkey SQL schema (in lookup/database_schema.sql):
 - Creates `user_passkey_credentials` table
 - Adds stored procedures for passkey operations
 

@@ -19,7 +19,7 @@ import (
 func newTestOAuthServer(t *testing.T) (*OAuthServer, *DatabaseAuthenticator) {
 	t.Helper()
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	srv := NewOAuthServer(OAuthServerConfig{Issuer: "https://auth.example.com", PersistCodes: true}, auth)
 	t.Cleanup(srv.Close)
 	return srv, auth

@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"strings"
@@ -225,6 +226,20 @@ func (g *GormAdapter) RunInTransaction(ctx context.Context, fn func(common.Datab
 
 func (g *GormAdapter) GetUnderlyingDB() interface{} {
 	return g.getDB()
+}
+
+// SQLDB implements common.SQLDBProvider. It returns nil when GORM has no *sql.DB
+// (for example a ConnPool that is not database/sql).
+func (g *GormAdapter) SQLDB() *sql.DB {
+	db := g.getDB()
+	if db == nil {
+		return nil
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil
+	}
+	return sqlDB
 }
 
 func (g *GormAdapter) DriverName() string {

@@ -223,6 +223,11 @@ func (p *PgSQLAdapter) GetUnderlyingDB() interface{} {
 	return p.db
 }
 
+// SQLDB implements common.SQLDBProvider.
+func (p *PgSQLAdapter) SQLDB() *sql.DB {
+	return p.db
+}
+
 func (p *PgSQLAdapter) DriverName() string {
 	return p.driverName
 }

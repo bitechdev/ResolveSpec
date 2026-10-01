@@ -5,16 +5,16 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	"github.com/bitechdev/ResolveSpec/pkg/cache"
 	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup/backends"
 )
 
 // DatabaseKeyStoreOptions configures DatabaseKeyStore.
@@ -24,36 +24,28 @@ type DatabaseKeyStoreOptions struct {
 	// CacheTTL is the duration to cache ValidateKey results.
 	// Default: 2 minutes.
 	CacheTTL time.Duration
-	// SQLNames provides custom procedure names. If nil, uses DefaultKeyStoreSQLNames().
-	SQLNames *KeyStoreSQLNames
-	// TableNames provides custom table names for Direct mode. If nil, uses DefaultKeyStoreTableNames().
-	TableNames *KeyStoreTableNames
-	// QueryMode selects stored-procedure vs Direct-mode SQL. Default (zero value) is ModeAuto.
-	QueryMode QueryMode
+	// Lookup selects dialect, query mode and procedure/table/column names.
+	// The zero value uses stored procedures on Postgres and direct SQL elsewhere.
+	Lookup lookup.Config
+	// LookupProvider, when set, is used instead of building one from Lookup and the db.
+	LookupProvider *lookup.Provider
 	// DBFactory is called to obtain a fresh *sql.DB when the existing connection is closed.
 	// If nil, reconnection is disabled.
 	DBFactory func() (*sql.DB, error)
 }
 
-// DatabaseKeyStore is a KeyStore backed by PostgreSQL stored procedures.
-// All DB operations go through configurable procedure names; the raw key is
-// never passed to the database.
+// DatabaseKeyStore is a KeyStore backed by the lookup package (stored procedures on
+// Postgres by default, direct SQL elsewhere). The raw key is never passed to the database.
 //
-// See keystore_schema.sql for the required table and procedure definitions.
+// See lookup/keystore_schema.sql for the required table and procedure definitions.
 //
 // Note: DeleteKey invalidates the cache entry for the deleted key. Due to the
 // cache TTL, a deleted key may continue to authenticate for up to CacheTTL
 // (default 2 minutes) if the cache entry cannot be invalidated.
 type DatabaseKeyStore struct {
-	db         *sql.DB
-	dbMu       sync.RWMutex
-	dbFactory  func() (*sql.DB, error)
-	sqlNames   *KeyStoreSQLNames
-	tableNames *KeyStoreTableNames
-	queryMode  QueryMode
-	capability *dbCapability
-	cache      *cache.Cache
-	cacheTTL   time.Duration
+	src      *lookupSource
+	cache    *cache.Cache
+	cacheTTL time.Duration
 
 	// validateLoads collapses concurrent key lookups for the same key
 	validateLoads singleflight.Group
@@ -72,42 +64,14 @@ func NewDatabaseKeyStore(db *sql.DB, opts ...DatabaseKeyStoreOptions) *DatabaseK
 	if c == nil {
 		c = cache.GetDefaultCache()
 	}
-	names := MergeKeyStoreSQLNames(DefaultKeyStoreSQLNames(), o.SQLNames)
-	tableNames := resolveKeyStoreTableNames(o.TableNames)
-	return &DatabaseKeyStore{
-		db:         db,
-		dbFactory:  o.DBFactory,
-		sqlNames:   names,
-		tableNames: tableNames,
-		queryMode:  o.QueryMode,
-		capability: newDBCapability(),
-		cache:      c,
-		cacheTTL:   o.CacheTTL,
-	}
+	src := newLookupSource(db)
+	src.cfg = o.Lookup
+	src.provider = o.LookupProvider
+	src.opts = backends.Options{DBFactory: o.DBFactory}
+	return &DatabaseKeyStore{src: src, cache: c, cacheTTL: o.CacheTTL}
 }
 
-func (ks *DatabaseKeyStore) getDB() *sql.DB {
-	ks.dbMu.RLock()
-	defer ks.dbMu.RUnlock()
-	return ks.db
-}
-
-func (ks *DatabaseKeyStore) reconnectDB() error {
-	if ks.dbFactory == nil {
-		return fmt.Errorf("no db factory configured for reconnect")
-	}
-	newDB, err := ks.dbFactory()
-	if err != nil {
-		return err
-	}
-	ks.dbMu.Lock()
-	ks.db = newDB
-	ks.dbMu.Unlock()
-	if ks.capability != nil {
-		ks.capability.reset()
-	}
-	return nil
-}
+func (ks *DatabaseKeyStore) keys() lookup.KeyStore { return ks.src.get().Keys }
 
 // CreateKey generates a raw key, stores its SHA-256 hash via the create procedure,
 // and returns the raw key once.
@@ -119,110 +83,29 @@ func (ks *DatabaseKeyStore) CreateKey(ctx context.Context, req CreateKeyRequest)
 	rawKey := base64.RawURLEncoding.EncodeToString(rawBytes)
 	hash := hashSHA256Hex(rawKey)
 
-	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.CreateKey) {
-		key, err := ks.createKeyDirect(ctx, req, hash)
-		if err != nil {
-			return nil, err
-		}
-		return &CreateKeyResponse{Key: *key, RawKey: rawKey}, nil
-	}
-
-	type createRequest struct {
-		UserID    int            `json:"user_id"`
-		KeyType   KeyType        `json:"key_type"`
-		KeyHash   string         `json:"key_hash"`
-		Name      string         `json:"name"`
-		Scopes    []string       `json:"scopes,omitempty"`
-		Meta      map[string]any `json:"meta,omitempty"`
-		ExpiresAt *time.Time     `json:"expires_at,omitempty"`
-	}
-
-	reqJSON, err := json.Marshal(createRequest{
-		UserID:    req.UserID,
-		KeyType:   req.KeyType,
-		KeyHash:   hash,
-		Name:      req.Name,
-		Scopes:    req.Scopes,
-		Meta:      req.Meta,
-		ExpiresAt: req.ExpiresAt,
-	})
+	key, err := ks.keys().Create(ctx, req, hash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal create key request: %w", err)
+		return nil, err
 	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var keyJSON sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_key::text FROM %s($1::jsonb)`, ks.sqlNames.CreateKey)
-	if err = ks.getDB().QueryRowContext(ctx, query, string(reqJSON)).Scan(&success, &errorMsg, &keyJSON); err != nil {
-		return nil, fmt.Errorf("create key procedure failed: %w", err)
-	}
-	if !success {
-		return nil, errors.New(nullStringOr(errorMsg, "create key failed"))
-	}
-
-	var key UserKey
-	if err = json.Unmarshal([]byte(keyJSON.String), &key); err != nil {
-		return nil, fmt.Errorf("failed to parse created key: %w", err)
-	}
-
-	return &CreateKeyResponse{Key: key, RawKey: rawKey}, nil
+	return &CreateKeyResponse{Key: *key, RawKey: rawKey}, nil
 }
 
 // GetUserKeys returns all active, non-expired keys for the given user.
 // Pass an empty KeyType to return all types.
 func (ks *DatabaseKeyStore) GetUserKeys(ctx context.Context, userID int, keyType KeyType) ([]UserKey, error) {
-	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.GetUserKeys) {
-		return ks.getUserKeysDirect(ctx, userID, keyType)
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var keysJSON sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_keys::text FROM %s($1, $2)`, ks.sqlNames.GetUserKeys)
-	if err := ks.getDB().QueryRowContext(ctx, query, userID, string(keyType)).Scan(&success, &errorMsg, &keysJSON); err != nil {
-		return nil, fmt.Errorf("get user keys procedure failed: %w", err)
-	}
-	if !success {
-		return nil, errors.New(nullStringOr(errorMsg, "get user keys failed"))
-	}
-
-	var keys []UserKey
-	if keysJSON.Valid && keysJSON.String != "" && keysJSON.String != "[]" {
-		if err := json.Unmarshal([]byte(keysJSON.String), &keys); err != nil {
-			return nil, fmt.Errorf("failed to parse user keys: %w", err)
-		}
-	}
-	if keys == nil {
-		keys = []UserKey{}
-	}
-	return keys, nil
+	return ks.keys().List(ctx, userID, keyType)
 }
 
 // DeleteKey soft-deletes a key after verifying ownership and invalidates its cache entry.
 // The delete procedure returns the key_hash so no separate lookup is needed.
 // Note: cache invalidation is best-effort; a cached entry may persist for up to CacheTTL.
 func (ks *DatabaseKeyStore) DeleteKey(ctx context.Context, userID int, keyID int64) error {
-	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.DeleteKey) {
-		return ks.deleteKeyDirect(ctx, userID, keyID)
+	keyHash, err := ks.keys().Delete(ctx, userID, keyID)
+	if err != nil {
+		return err
 	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var keyHash sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_key_hash FROM %s($1, $2)`, ks.sqlNames.DeleteKey)
-	if err := ks.getDB().QueryRowContext(ctx, query, userID, keyID).Scan(&success, &errorMsg, &keyHash); err != nil {
-		return fmt.Errorf("delete key procedure failed: %w", err)
-	}
-	if !success {
-		return errors.New(nullStringOr(errorMsg, "delete key failed"))
-	}
-
-	if keyHash.Valid && keyHash.String != "" && ks.cache != nil {
-		_ = ks.cache.Delete(ctx, keystoreCacheKey(keyHash.String))
+	if keyHash != "" && ks.cache != nil {
+		_ = ks.cache.Delete(ctx, keystoreCacheKey(keyHash))
 	}
 	return nil
 }
@@ -261,51 +144,16 @@ func (ks *DatabaseKeyStore) ValidateKey(ctx context.Context, rawKey string, keyT
 // validateKeyLoad validates against the database and fills the cache.
 func (ks *DatabaseKeyStore) validateKeyLoad(ctx context.Context, hash, cacheKey string, keyType KeyType) (*UserKey, error) {
 	dbtrace.Raw(ctx, "keystore.validate")
-	if !ks.capability.ShouldUseProcedure(ctx, ks.queryMode, ks.getDB(), ks.sqlNames.ValidateKey) {
-		key, err := ks.validateKeyDirect(ctx, hash, keyType)
-		if err != nil {
-			return nil, err
-		}
-		if ks.cache != nil {
-			_ = ks.cache.Set(ctx, cacheKey, *key, ks.cacheTTL)
-		}
-		return key, nil
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var keyJSON sql.NullString
-
-	runQuery := func() error {
-		query := fmt.Sprintf(`SELECT p_success, p_error, p_key::text FROM %s($1, $2)`, ks.sqlNames.ValidateKey)
-		return ks.getDB().QueryRowContext(ctx, query, hash, string(keyType)).Scan(&success, &errorMsg, &keyJSON)
-	}
-	if err := runQuery(); err != nil {
-		if isDBClosed(err) {
-			if reconnErr := ks.reconnectDB(); reconnErr == nil {
-				err = runQuery()
-			}
-			if err != nil {
-				return nil, fmt.Errorf("validate key procedure failed: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("validate key procedure failed: %w", err)
-		}
-	}
-	if !success {
-		return nil, errors.New(nullStringOr(errorMsg, "invalid or expired key"))
-	}
-
-	var key UserKey
-	if err := json.Unmarshal([]byte(keyJSON.String), &key); err != nil {
-		return nil, fmt.Errorf("failed to parse validated key: %w", err)
+	key, err := ks.keys().Validate(ctx, hash, keyType)
+	if err != nil {
+		return nil, err
 	}
 
 	if ks.cache != nil {
-		_ = ks.cache.Set(ctx, cacheKey, key, ks.cacheTTL)
+		_ = ks.cache.Set(ctx, cacheKey, *key, ks.cacheTTL)
 	}
 
-	return &key, nil
+	return key, nil
 }
 
 func keystoreCacheKey(hash string) string {

@@ -5,93 +5,46 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"sync"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
+	"github.com/bitechdev/ResolveSpec/pkg/security/totp"
 )
 
-// DatabaseTwoFactorProvider implements TwoFactorAuthProvider using PostgreSQL stored procedures
-// Procedure names are configurable via SQLNames (see DefaultSQLNames for defaults)
-// See totp_database_schema.sql for procedure definitions
+// DatabaseTwoFactorProvider implements TwoFactorAuthProvider on top of the lookup package
+// (stored procedures on Postgres by default, direct SQL elsewhere).
+// See lookup/database_schema.sql for procedure definitions
 type DatabaseTwoFactorProvider struct {
-	db         *sql.DB
-	dbMu       sync.RWMutex
-	dbFactory  func() (*sql.DB, error)
-	totpGen    *TOTPGenerator
-	sqlNames   *SQLNames
-	tableNames *TableNames
-	queryMode  QueryMode
-	capability *dbCapability
+	src     *lookupSource
+	totpGen *totp.Generator
 }
 
 // NewDatabaseTwoFactorProvider creates a new database-backed 2FA provider
-func NewDatabaseTwoFactorProvider(db *sql.DB, config *TwoFactorConfig, names ...*SQLNames) *DatabaseTwoFactorProvider {
+func NewDatabaseTwoFactorProvider(db *sql.DB, config *totp.Config) *DatabaseTwoFactorProvider {
 	if config == nil {
-		config = DefaultTwoFactorConfig()
+		config = totp.DefaultConfig()
 	}
-	return &DatabaseTwoFactorProvider{
-		db:         db,
-		totpGen:    NewTOTPGenerator(config),
-		sqlNames:   resolveSQLNames(names...),
-		tableNames: DefaultTableNames(),
-		capability: newDBCapability(),
-	}
+	return &DatabaseTwoFactorProvider{src: newLookupSource(db), totpGen: totp.NewGenerator(config)}
 }
 
 // WithDBFactory configures a factory used to reopen the database connection if it is closed.
 func (p *DatabaseTwoFactorProvider) WithDBFactory(factory func() (*sql.DB, error)) *DatabaseTwoFactorProvider {
-	p.dbFactory = factory
+	p.src.opts.DBFactory = factory
 	return p
 }
 
-// WithTableNames configures Direct-mode table names. If names is nil, defaults are used.
-func (p *DatabaseTwoFactorProvider) WithTableNames(names *TableNames) *DatabaseTwoFactorProvider {
-	p.tableNames = resolveTableNames(names)
+// WithLookup configures dialect, query mode and names. Call before first use.
+func (p *DatabaseTwoFactorProvider) WithLookup(cfg lookup.Config) *DatabaseTwoFactorProvider {
+	p.src.cfg = cfg
 	return p
 }
 
-// WithQueryMode selects stored-procedure vs Direct-mode SQL (default ModeAuto).
-func (p *DatabaseTwoFactorProvider) WithQueryMode(mode QueryMode) *DatabaseTwoFactorProvider {
-	p.queryMode = mode
+// WithLookupProvider uses an existing provider instead of building one.
+func (p *DatabaseTwoFactorProvider) WithLookupProvider(lp *lookup.Provider) *DatabaseTwoFactorProvider {
+	p.src.provider = lp
 	return p
 }
 
-func (p *DatabaseTwoFactorProvider) getDB() *sql.DB {
-	p.dbMu.RLock()
-	defer p.dbMu.RUnlock()
-	return p.db
-}
-
-func (p *DatabaseTwoFactorProvider) reconnectDB() error {
-	if p.dbFactory == nil {
-		return fmt.Errorf("no db factory configured for reconnect")
-	}
-	newDB, err := p.dbFactory()
-	if err != nil {
-		return err
-	}
-	p.dbMu.Lock()
-	p.db = newDB
-	p.dbMu.Unlock()
-	if p.capability != nil {
-		p.capability.reset()
-	}
-	return nil
-}
-
-func (p *DatabaseTwoFactorProvider) runDBOpWithReconnect(run func(*sql.DB) error) error {
-	db := p.getDB()
-	if db == nil {
-		return fmt.Errorf("database connection is nil")
-	}
-	err := run(db)
-	if isDBClosed(err) {
-		if reconnErr := p.reconnectDB(); reconnErr == nil {
-			err = run(p.getDB())
-		}
-	}
-	return err
-}
+func (p *DatabaseTwoFactorProvider) store() lookup.TOTPStore { return p.src.get().TOTP }
 
 // Generate2FASecret creates a new secret for a user
 func (p *DatabaseTwoFactorProvider) Generate2FASecret(userID int, issuer, accountName string) (*TwoFactorSecret, error) {
@@ -102,7 +55,7 @@ func (p *DatabaseTwoFactorProvider) Generate2FASecret(userID int, issuer, accoun
 
 	qrURL := p.totpGen.GenerateQRCodeURL(secret, issuer, accountName)
 
-	backupCodes, err := GenerateBackupCodes(10)
+	backupCodes, err := totp.GenerateBackupCodes(10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate backup codes: %w", err)
 	}
@@ -130,124 +83,31 @@ func (p *DatabaseTwoFactorProvider) Enable2FA(userID int, secret string, backupC
 		hashedCodes[i] = hex.EncodeToString(hash[:])
 	}
 
-	// Convert to JSON array
-	codesJSON, err := json.Marshal(hashedCodes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPEnable) {
-		return p.enable2FADirect(ctx, userID, secret, hashedCodes)
-	}
-
-	// Call stored procedure
-	var success bool
-	var errorMsg sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2, $3::jsonb)`, p.sqlNames.TOTPEnable)
-	err = p.getDB().QueryRow(query, userID, secret, string(codesJSON)).Scan(&success, &errorMsg)
-	if err != nil {
-		return fmt.Errorf("enable 2FA query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return fmt.Errorf("%s", errorMsg.String)
-		}
-		return fmt.Errorf("failed to enable 2FA")
-	}
-
-	return nil
+	return p.store().Enable(ctx, userID, secret, hashedCodes)
 }
 
 // Disable2FA deactivates 2FA for a user
 func (p *DatabaseTwoFactorProvider) Disable2FA(userID int) error {
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPDisable) {
-		return p.disable2FADirect(ctx, userID)
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1)`, p.sqlNames.TOTPDisable)
-	err := p.getDB().QueryRow(query, userID).Scan(&success, &errorMsg)
-	if err != nil {
-		return fmt.Errorf("disable 2FA query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return fmt.Errorf("%s", errorMsg.String)
-		}
-		return fmt.Errorf("failed to disable 2FA")
-	}
-
-	return nil
+	return p.store().Disable(ctx, userID)
 }
 
 // Get2FAStatus checks if user has 2FA enabled
 func (p *DatabaseTwoFactorProvider) Get2FAStatus(userID int) (bool, error) {
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPGetStatus) {
-		return p.get2FAStatusDirect(ctx, userID)
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var enabled bool
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_enabled FROM %s($1)`, p.sqlNames.TOTPGetStatus)
-	err := p.getDB().QueryRow(query, userID).Scan(&success, &errorMsg, &enabled)
-	if err != nil {
-		return false, fmt.Errorf("get 2FA status query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return false, fmt.Errorf("%s", errorMsg.String)
-		}
-		return false, fmt.Errorf("failed to get 2FA status")
-	}
-
-	return enabled, nil
+	return p.store().Status(ctx, userID)
 }
 
 // Get2FASecret retrieves the user's 2FA secret
 func (p *DatabaseTwoFactorProvider) Get2FASecret(userID int) (string, error) {
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPGetSecret) {
-		return p.get2FASecretDirect(ctx, userID)
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var secret sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_secret FROM %s($1)`, p.sqlNames.TOTPGetSecret)
-	err := p.getDB().QueryRow(query, userID).Scan(&success, &errorMsg, &secret)
-	if err != nil {
-		return "", fmt.Errorf("get 2FA secret query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return "", fmt.Errorf("%s", errorMsg.String)
-		}
-		return "", fmt.Errorf("failed to get 2FA secret")
-	}
-
-	if !secret.Valid {
-		return "", fmt.Errorf("2FA secret not found")
-	}
-
-	return secret.String, nil
+	return p.store().Secret(ctx, userID)
 }
 
 // GenerateBackupCodes creates backup codes for 2FA
 func (p *DatabaseTwoFactorProvider) GenerateBackupCodes(userID int, count int) ([]string, error) {
-	codes, err := GenerateBackupCodes(count)
+	codes, err := totp.GenerateBackupCodes(count)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate backup codes: %w", err)
 	}
@@ -260,34 +120,8 @@ func (p *DatabaseTwoFactorProvider) GenerateBackupCodes(userID int, count int) (
 	}
 
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPRegenerateBackup) {
-		if err := p.regenerateBackupCodesDirect(ctx, userID, hashedCodes); err != nil {
-			return nil, err
-		}
-		return codes, nil
-	}
-
-	// Convert to JSON array
-	codesJSON, err := json.Marshal(hashedCodes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
-	// Call stored procedure
-	var success bool
-	var errorMsg sql.NullString
-
-	query := fmt.Sprintf(`SELECT p_success, p_error FROM %s($1, $2::jsonb)`, p.sqlNames.TOTPRegenerateBackup)
-	err = p.getDB().QueryRow(query, userID, string(codesJSON)).Scan(&success, &errorMsg)
-	if err != nil {
-		return nil, fmt.Errorf("regenerate backup codes query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return nil, fmt.Errorf("%s", errorMsg.String)
-		}
-		return nil, fmt.Errorf("failed to regenerate backup codes")
+	if err := p.store().RegenerateBackupCodes(ctx, userID, hashedCodes); err != nil {
+		return nil, err
 	}
 
 	// Return unhashed codes to user (only time they see them)
@@ -301,26 +135,5 @@ func (p *DatabaseTwoFactorProvider) ValidateBackupCode(userID int, code string) 
 	codeHash := hex.EncodeToString(hash[:])
 
 	ctx := context.Background()
-	if !p.capability.ShouldUseProcedure(ctx, p.queryMode, p.getDB(), p.sqlNames.TOTPValidateBackupCode) {
-		return p.validateBackupCodeDirect(ctx, userID, codeHash)
-	}
-
-	var success bool
-	var errorMsg sql.NullString
-	var valid bool
-
-	query := fmt.Sprintf(`SELECT p_success, p_error, p_valid FROM %s($1, $2)`, p.sqlNames.TOTPValidateBackupCode)
-	err := p.getDB().QueryRow(query, userID, codeHash).Scan(&success, &errorMsg, &valid)
-	if err != nil {
-		return false, fmt.Errorf("validate backup code query failed: %w", err)
-	}
-
-	if !success {
-		if errorMsg.Valid {
-			return false, fmt.Errorf("%s", errorMsg.String)
-		}
-		return false, nil
-	}
-
-	return valid, nil
+	return p.store().ValidateBackupCode(ctx, userID, codeHash)
 }

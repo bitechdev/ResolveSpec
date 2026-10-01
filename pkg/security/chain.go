@@ -55,3 +55,18 @@ func (c *ChainAuthenticator) Logout(ctx context.Context, req LogoutRequest) erro
 func (c *ChainAuthenticator) LogoutWithCookie(ctx context.Context, req LogoutRequest, w http.ResponseWriter) error {
 	return c.authenticators[0].LogoutWithCookie(ctx, req, w)
 }
+
+// LoginWithAPIKey tries each authenticator that supports API key login and
+// returns the first success. Failures collapse to one generic error.
+func (c *ChainAuthenticator) LoginWithAPIKey(ctx context.Context, rawKey string, claims map[string]any) (*LoginResponse, error) {
+	for _, a := range c.authenticators {
+		l, ok := a.(APIKeyLoginable)
+		if !ok {
+			continue
+		}
+		if resp, err := l.LoginWithAPIKey(ctx, rawKey, claims); err == nil {
+			return resp, nil
+		}
+	}
+	return nil, errInvalidAPIKey
+}

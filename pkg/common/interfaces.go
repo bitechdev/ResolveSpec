@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -36,6 +37,15 @@ type Database interface {
 	// All adapters normalise vendor-specific strings (e.g. Bun's "pg", GORM's
 	// "sqlserver") to the values above before returning.
 	DriverName() string
+}
+
+// SQLDBProvider is implemented by adapters that wrap a *sql.DB (directly or through an ORM).
+// It lets packages that work on database/sql, such as pkg/security/lookup, reuse the
+// connection an application already configured. Transaction adapters do not implement it.
+type SQLDBProvider interface {
+	// SQLDB returns the current underlying *sql.DB. After an adapter reconnects it
+	// returns the new handle, so do not cache it across reconnects.
+	SQLDB() *sql.DB
 }
 
 // SelectQuery interface for building SELECT queries (compatible with both GORM and Bun)

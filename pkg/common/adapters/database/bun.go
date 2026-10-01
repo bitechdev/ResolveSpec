@@ -275,6 +275,14 @@ func (b *BunAdapter) GetUnderlyingDB() interface{} {
 	return b.getDB()
 }
 
+// SQLDB implements common.SQLDBProvider.
+func (b *BunAdapter) SQLDB() *sql.DB {
+	if db := b.getDB(); db != nil {
+		return db.DB
+	}
+	return nil
+}
+
 func (b *BunAdapter) DriverName() string {
 	// Normalize Bun's dialect name to match the project's canonical vocabulary.
 	// Bun returns "pg" for PostgreSQL; the rest of the project uses "postgres".

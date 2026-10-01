@@ -88,6 +88,14 @@ func (c *CompositeSecurityProvider) RefreshToken(ctx context.Context, refreshTok
 	return nil, fmt.Errorf("authenticator does not support token refresh")
 }
 
+// LoginWithAPIKey implements APIKeyLoginable if the authenticator supports it
+func (c *CompositeSecurityProvider) LoginWithAPIKey(ctx context.Context, rawKey string, claims map[string]any) (*LoginResponse, error) {
+	if l, ok := c.auth.(APIKeyLoginable); ok {
+		return l.LoginWithAPIKey(ctx, rawKey, claims)
+	}
+	return nil, fmt.Errorf("authenticator does not support API key login")
+}
+
 // ValidateToken implements Validatable if the authenticator supports it
 func (c *CompositeSecurityProvider) ValidateToken(ctx context.Context, token string) (bool, error) {
 	if validatable, ok := c.auth.(Validatable); ok {

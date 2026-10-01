@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
 
 	"golang.org/x/oauth2"
 )
@@ -234,92 +235,20 @@ func (a *DatabaseAuthenticator) getOAuth2Provider(providerName string) (*OAuth2P
 
 // oauth2GetOrCreateUser finds or creates a user based on OAuth2 info using stored procedure
 func (a *DatabaseAuthenticator) oauth2GetOrCreateUser(ctx context.Context, userCtx *UserContext, providerName string) (int, error) {
-	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthGetOrCreateUser) {
-		return a.oauth2GetOrCreateUserDirect(ctx, userCtx, providerName)
-	}
-
-	userData := map[string]interface{}{
-		"username":      userCtx.UserName,
-		"email":         userCtx.Email,
-		"remote_id":     userCtx.RemoteID,
-		"user_level":    userCtx.UserLevel,
-		"roles":         userCtx.Roles,
-		"auth_provider": providerName,
-	}
-
-	userJSON, err := json.Marshal(userData)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal user data: %w", err)
-	}
-
-	var success bool
-	var errMsg *string
-	var userID *int
-
-	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT p_success, p_error, p_user_id
-		FROM %s($1::jsonb)
-	`, a.sqlNames.OAuthGetOrCreateUser), userJSON).Scan(&success, &errMsg, &userID)
-
-	if err != nil {
-		return 0, fmt.Errorf("failed to get or create user: %w", err)
-	}
-
-	if !success {
-		if errMsg != nil {
-			return 0, fmt.Errorf("%s", *errMsg)
-		}
-		return 0, fmt.Errorf("failed to get or create user")
-	}
-
-	if userID == nil {
-		return 0, fmt.Errorf("user ID not returned")
-	}
-
-	return *userID, nil
+	return a.src.get().OAuthUser.GetOrCreateUser(ctx, userCtx, providerName)
 }
 
 // oauth2CreateSession creates a new OAuth2 session using stored procedure
 func (a *DatabaseAuthenticator) oauth2CreateSession(ctx context.Context, sessionToken string, userID int, token *oauth2.Token, expiresAt time.Time, providerName string) error {
-	if !a.capability.ShouldUseProcedure(ctx, a.queryMode, a.getDB(), a.sqlNames.OAuthCreateSession) {
-		return a.oauth2CreateSessionDirect(ctx, sessionToken, userID, token, expiresAt, providerName)
-	}
-
-	sessionData := map[string]interface{}{
-		"session_token": sessionToken,
-		"user_id":       userID,
-		"access_token":  token.AccessToken,
-		"refresh_token": token.RefreshToken,
-		"token_type":    token.TokenType,
-		"expires_at":    expiresAt,
-		"auth_provider": providerName,
-	}
-
-	sessionJSON, err := json.Marshal(sessionData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal session data: %w", err)
-	}
-
-	var success bool
-	var errMsg *string
-
-	err = a.getDB().QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT p_success, p_error
-		FROM %s($1::jsonb)
-	`, a.sqlNames.OAuthCreateSession), sessionJSON).Scan(&success, &errMsg)
-
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	if !success {
-		if errMsg != nil {
-			return fmt.Errorf("%s", *errMsg)
-		}
-		return fmt.Errorf("failed to create session")
-	}
-
-	return nil
+	return a.src.get().OAuthUser.CreateSession(ctx, lookup.OAuthSession{
+		SessionToken: sessionToken,
+		UserID:       userID,
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		TokenType:    token.TokenType,
+		ExpiresAt:    expiresAt,
+		Provider:     providerName,
+	})
 }
 
 // validateState validates state using in-memory storage
@@ -420,7 +349,7 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	}
 
 	// Get session by refresh token from database
-	session, err := a.oauthGetByRefreshToken(ctx, refreshToken)
+	session, err := a.src.get().OAuthUser.GetByRefreshToken(ctx, refreshToken)
 	if err != nil {
 		return nil, err
 	}
@@ -447,12 +376,12 @@ func (a *DatabaseAuthenticator) OAuth2RefreshToken(ctx context.Context, refreshT
 	}
 
 	// Update session in database with new tokens
-	if err := a.oauthUpdateRefreshTokenRecord(ctx, session.UserID, refreshToken, newSessionToken, newToken.AccessToken, newToken.RefreshToken, newToken.Expiry); err != nil {
+	if err := a.src.get().OAuthUser.UpdateRefreshToken(ctx, session.UserID, refreshToken, newSessionToken, newToken.AccessToken, newToken.RefreshToken, newToken.Expiry); err != nil {
 		return nil, err
 	}
 
 	// Get user data
-	userCtx, err := a.oauthGetUserByID(ctx, session.UserID)
+	userCtx, err := a.src.get().OAuthUser.GetUser(ctx, session.UserID)
 	if err != nil {
 		return nil, err
 	}

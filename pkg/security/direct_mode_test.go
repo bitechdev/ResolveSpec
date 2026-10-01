@@ -5,37 +5,41 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
+
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup/ddl"
 )
+
+// directConfig forces the direct (table) backend for every operation.
+var directConfig = lookup.Config{Mode: lookup.ModeDirect}
 
 func futureTime() time.Time {
 	return time.Now().Add(1 * time.Hour)
 }
 
 // newDirectTestDB opens a fresh in-memory SQLite database and applies the
-// portable Direct-mode schema (database_schema_sqlite.sql), giving every
+// portable Direct-mode schema (lookup/ddl/sqlite.sql), giving every
 // Direct-mode test a real, isolated database to exercise end-to-end.
 func newDirectTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	db, err := sql.Open("sqlite3", "file::memory:?cache=shared")
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
 	db.SetMaxOpenConns(1) // keep the shared in-memory db single-connection so state isn't lost
 	t.Cleanup(func() { _ = db.Close() })
 
-	schemaPath := filepath.Join("database_schema_sqlite.sql")
-	schema, err := os.ReadFile(schemaPath)
+	schema, err := ddl.SQL("sqlite")
 	if err != nil {
 		t.Fatalf("failed to read schema: %v", err)
 	}
-	if _, err := db.Exec(string(schema)); err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("failed to apply schema: %v", err)
 	}
 	return db
@@ -49,7 +53,7 @@ func authenticatedRequest(token string) *http.Request {
 
 func TestDirectMode_RegisterThenLogin(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	regResp, err := auth.Register(ctx, RegisterRequest{
@@ -105,7 +109,7 @@ func TestDirectMode_RegisterThenLogin(t *testing.T) {
 
 func TestDirectMode_SessionLifecycle(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	loginResp, err := auth.Register(ctx, RegisterRequest{Username: "bob", Password: "p", Email: "bob@example.com"})
@@ -140,7 +144,7 @@ func TestDirectMode_SessionLifecycle(t *testing.T) {
 
 func TestDirectMode_PasswordReset(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	if _, err := auth.Register(ctx, RegisterRequest{Username: "carol", Password: "old", Email: "carol@example.com"}); err != nil {
@@ -167,8 +171,8 @@ func TestDirectMode_PasswordReset(t *testing.T) {
 
 func TestDirectMode_JWTLoginAndLogout(t *testing.T) {
 	db := newDirectTestDB(t)
-	jwtAuth := NewJWTAuthenticator("secret", db).WithQueryMode(ModeDirect)
-	directAuth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	jwtAuth := NewJWTAuthenticator("secret", db).WithLookup(directConfig)
+	directAuth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	if _, err := directAuth.Register(ctx, RegisterRequest{Username: "dave", Password: "p", Email: "dave@example.com"}); err != nil {
@@ -190,7 +194,7 @@ func TestDirectMode_JWTLoginAndLogout(t *testing.T) {
 
 func TestDirectMode_TOTPEnableAndValidateBackupCode(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	regResp, err := auth.Register(ctx, RegisterRequest{Username: "erin", Password: "p", Email: "erin@example.com"})
@@ -199,7 +203,7 @@ func TestDirectMode_TOTPEnableAndValidateBackupCode(t *testing.T) {
 	}
 	userID := regResp.User.UserID
 
-	totp := NewDatabaseTwoFactorProvider(db, nil).WithQueryMode(ModeDirect)
+	totp := NewDatabaseTwoFactorProvider(db, nil).WithLookup(directConfig)
 
 	if err := totp.Enable2FA(userID, "SECRET123", []string{"code1", "code2"}); err != nil {
 		t.Fatalf("Enable2FA() error = %v", err)
@@ -248,7 +252,7 @@ func TestDirectMode_TOTPEnableAndValidateBackupCode(t *testing.T) {
 
 func TestDirectMode_PasskeyStoreAndFetch(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	regResp, err := auth.Register(ctx, RegisterRequest{Username: "frank", Password: "p", Email: "frank@example.com"})
@@ -258,7 +262,7 @@ func TestDirectMode_PasskeyStoreAndFetch(t *testing.T) {
 	userID := regResp.User.UserID
 
 	passkeys := NewDatabasePasskeyProvider(db, DatabasePasskeyProviderOptions{
-		RPID: "example.com", RPName: "Example", RPOrigin: "https://example.com", QueryMode: ModeDirect,
+		RPID: "example.com", RPName: "Example", RPOrigin: "https://example.com", Lookup: directConfig,
 	})
 
 	cred, err := passkeys.CompleteRegistration(ctx, userID, PasskeyRegistrationResponse{
@@ -317,7 +321,7 @@ func TestDirectMode_PasskeyStoreAndFetch(t *testing.T) {
 
 func TestDirectMode_OAuthGetOrCreateUserAndSession(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	userCtx := &UserContext{UserName: "gina", Email: "gina@example.com", Roles: []string{"user"}}
@@ -341,7 +345,7 @@ func TestDirectMode_OAuthGetOrCreateUserAndSession(t *testing.T) {
 
 func TestDirectMode_KeyStoreCreateAndValidate(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	regResp, err := auth.Register(ctx, RegisterRequest{Username: "henry", Password: "p", Email: "henry@example.com"})
@@ -349,7 +353,7 @@ func TestDirectMode_KeyStoreCreateAndValidate(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	ks := NewDatabaseKeyStore(db, DatabaseKeyStoreOptions{QueryMode: ModeDirect})
+	ks := NewDatabaseKeyStore(db, DatabaseKeyStoreOptions{Lookup: directConfig})
 
 	createResp, err := ks.CreateKey(ctx, CreateKeyRequest{
 		UserID:  regResp.User.UserID,
@@ -399,7 +403,7 @@ func TestDirectMode_KeyStoreCreateAndValidate(t *testing.T) {
 
 func TestDirectMode_OAuthServerClientAndCode(t *testing.T) {
 	db := newDirectTestDB(t)
-	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect})
+	auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig})
 	ctx := context.Background()
 
 	client := &OAuthServerClient{
@@ -489,7 +493,7 @@ func TestDirectMode_OAuthServerClientAndCode(t *testing.T) {
 func TestDirectMode_LegacyPlaintextUpgradeIsOptIn(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		db := newDirectTestDB(t)
-		auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{QueryMode: ModeDirect, UpgradePasswordHash: enabled})
+		auth := NewDatabaseAuthenticatorWithOptions(db, DatabaseAuthenticatorOptions{Lookup: directConfig, UpgradePasswordHash: enabled})
 		ctx := context.Background()
 
 		if _, err := db.Exec(`DELETE FROM users`); err != nil {
@@ -518,18 +522,6 @@ func TestDirectMode_LegacyPlaintextUpgradeIsOptIn(t *testing.T) {
 	}
 }
 
-func TestVerifyPasswordEdgeCases(t *testing.T) {
-	h, _ := hashPassword("pw")
-	if ok, _ := verifyPassword(h, "pw"); !ok {
-		t.Error("bcrypt match failed")
-	}
-	if ok, _ := verifyPassword("", "pw"); ok {
-		t.Error("empty stored must not match")
-	}
-	if ok, _ := verifyPassword("pw", ""); ok {
-		t.Error("empty supplied must not match")
-	}
-	if _, err := hashPassword(string(make([]byte, 73))); err == nil {
-		t.Error("73-byte password must be rejected")
-	}
+func isBcryptHash(s string) bool {
+	return strings.HasPrefix(s, "$2a$") || strings.HasPrefix(s, "$2b$") || strings.HasPrefix(s, "$2y$")
 }

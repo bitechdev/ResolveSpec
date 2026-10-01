@@ -1,21 +1,14 @@
 package security
 
 import (
-	"encoding/hex"
-	"fmt"
-	"regexp"
-	"sort"
-
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/security/lookup"
 )
 
 // TxSettingsFunc returns the transaction-local settings (e.g. RLS GUCs such as
 // "app.user_id") to stamp on a transaction. It runs once per transaction, at
 // OnTxBegin, before any other SQL. Returning an error rolls the transaction back.
 type TxSettingsFunc func(secCtx SecurityContext) (map[string]string, error)
-
-// settingNameRE matches a custom GUC name: two or more dot-separated identifiers.
-var settingNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$`)
 
 // SetTxSettings sets the function that provides transaction-local settings for
 // every transaction opened by a spec that registered its security hooks with this
@@ -54,33 +47,7 @@ func StampTxSettings(secCtx SecurityContext, list *SecurityList, tx common.Datab
 
 // ApplyTxSettings sets each entry as a transaction-local setting on tx, in name
 // order. Postgres only; any other driver with a non-empty map is an error so a
-// missing RLS stamp fails closed.
+// missing RLS stamp fails closed. The SQL lives in lookup.ApplyTxSettings.
 func ApplyTxSettings(secCtx SecurityContext, tx common.Database, settings map[string]string) error {
-	if len(settings) == 0 {
-		return nil
-	}
-	if tx == nil {
-		return fmt.Errorf("tx settings: no transaction")
-	}
-	if drv := tx.DriverName(); drv != "postgres" && drv != "pgsql" {
-		return fmt.Errorf("tx settings: unsupported driver %q", drv)
-	}
-	names := make([]string, 0, len(settings))
-	for name := range settings {
-		if !settingNameRE.MatchString(name) {
-			return fmt.Errorf("tx settings: invalid setting name %q", name)
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		// The value is hex-encoded so it needs no quoting and cannot be read as a
-		// bind placeholder by any adapter.
-		query := fmt.Sprintf("SELECT set_config('%s', convert_from(decode('%s', 'hex'), 'UTF8'), true)",
-			name, hex.EncodeToString([]byte(settings[name])))
-		if _, err := tx.Exec(secCtx.GetContext(), query); err != nil {
-			return fmt.Errorf("tx settings: set %s: %w", name, err)
-		}
-	}
-	return nil
+	return lookup.ApplyTxSettings(secCtx.GetContext(), tx, settings)
 }

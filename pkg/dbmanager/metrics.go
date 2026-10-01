@@ -4,10 +4,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
-	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
+	"github.com/bitechdev/ResolveSpec/pkg/logger"
 )
 
 var (

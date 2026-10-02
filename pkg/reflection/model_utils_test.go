@@ -1920,3 +1920,46 @@ func TestMapToStruct_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveNonWritableColumns_Generated(t *testing.T) {
+	type m struct {
+		ID    int    `bun:"id,pk"`
+		Email string `bun:"email"`
+		Norm  string `bun:"email_normalized,generated"`
+		Scan  string `bun:"scan_col,scanonly"`
+	}
+	vals := map[string]interface{}{"id": 1, "email": "A", "email_normalized": "a", "scan_col": "x", "dynamic": 1}
+	RemoveNonWritableColumns(&m{}, vals)
+	if _, ok := vals["email_normalized"]; ok {
+		t.Error("generated column not removed")
+	}
+	if _, ok := vals["scan_col"]; ok {
+		t.Error("scanonly column not removed")
+	}
+	if len(vals) != 3 {
+		t.Errorf("unexpected keys: %v", vals)
+	}
+}
+
+func TestNonWritableColumns(t *testing.T) {
+	type base struct {
+		Created string `bun:"created_at,scanonly"`
+	}
+	type m struct {
+		base
+		ID    int    `bun:"id,pk"`
+		Email string `bun:"email"`
+		Norm  string `bun:"email_normalized,generated"`
+		Ro    string `gorm:"column:ro;->"`
+	}
+	got := NonWritableColumns(&m{})
+	want := map[string]bool{"created_at": true, "email_normalized": true, "ro": true}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for _, c := range got {
+		if !want[c] {
+			t.Errorf("unexpected %s", c)
+		}
+	}
+}

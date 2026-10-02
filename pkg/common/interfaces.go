@@ -81,6 +81,8 @@ type InsertQuery interface {
 	Table(table string) InsertQuery
 	Value(column string, value interface{}) InsertQuery
 	OnConflict(action string) InsertQuery
+	// ExcludeColumn omits columns from a Model()-based INSERT (e.g. generated columns).
+	ExcludeColumn(columns ...string) InsertQuery
 	Returning(columns ...string) InsertQuery
 
 	// Execution
@@ -94,6 +96,8 @@ type UpdateQuery interface {
 	Table(table string) UpdateQuery
 	Set(column string, value interface{}) UpdateQuery
 	SetMap(values map[string]interface{}) UpdateQuery
+	// ExcludeColumn omits columns from a Model()-based UPDATE (e.g. generated columns).
+	ExcludeColumn(columns ...string) UpdateQuery
 	Where(query string, args ...interface{}) UpdateQuery
 	Returning(columns ...string) UpdateQuery
 

@@ -656,7 +656,7 @@ func isColumnWritableInType(typ reflect.Type, columnName string) (found bool, wr
 		// Check bun tag for scanonly
 		bunTag := field.Tag.Get("bun")
 		if bunTag != "" {
-			if isBunFieldScanOnly(bunTag) {
+			if isBunFieldScanOnly(bunTag) || isBunFieldGenerated(bunTag) {
 				return true, false
 			}
 		}
@@ -687,6 +687,70 @@ func isBunFieldScanOnly(tag string) bool {
 		}
 	}
 	return false
+}
+
+// isBunFieldGenerated checks if a bun tag marks the column as database-generated
+// (GENERATED ALWAYS AS ... STORED), which can be read but never written.
+// Example: "email_normalized,generated" -> true
+func isBunFieldGenerated(tag string) bool {
+	for _, part := range strings.Split(tag, ",") {
+		if strings.TrimSpace(part) == "generated" {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveNonWritableColumns deletes from values every key that maps to a
+// non-writable model column (bun scanonly/generated, gorm read-only). Used
+// before writing a read-merged record back with UPDATE ... SET.
+func RemoveNonWritableColumns(model any, values map[string]interface{}) {
+	for key := range values {
+		if !IsColumnWritable(model, key) {
+			delete(values, key)
+		}
+	}
+}
+
+// NonWritableColumns returns the column names of the model that cannot be
+// written (bun scanonly/generated, gorm read-only), including embedded structs.
+func NonWritableColumns(model any) []string {
+	t := reflect.TypeOf(model)
+	for t != nil && (t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return nil
+	}
+	var cols []string
+	collectNonWritable(t, &cols)
+	return cols
+}
+
+func collectNonWritable(typ reflect.Type, cols *[]string) {
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				collectNonWritable(ft, cols)
+				continue
+			}
+		}
+		bunTag, gormTag := field.Tag.Get("bun"), field.Tag.Get("gorm")
+		if bunTag == "-" || gormTag == "-" {
+			continue
+		}
+		if (bunTag != "" && (isBunFieldScanOnly(bunTag) || isBunFieldGenerated(bunTag))) ||
+			(gormTag != "" && isGormFieldReadOnly(gormTag)) {
+			if name := getColumnNameFromField(field); name != "" {
+				*cols = append(*cols, name)
+			}
+		}
+	}
 }
 
 // isGormFieldReadOnly checks if a gorm tag indicates the field is read-only

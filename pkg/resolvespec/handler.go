@@ -824,6 +824,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			}
 			responseData = v
 
+			reflection.RemoveNonWritableColumns(model, v)
 			query := tx.NewInsert().Table(tableName)
 			for key, value := range v {
 				query = query.Value(key, common.ConvertSliceForBun(value))
@@ -971,6 +972,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					item = modifiedData
 				}
 
+				reflection.RemoveNonWritableColumns(model, item)
 				txQuery := tx.NewInsert().Table(tableName)
 				for key, value := range item {
 					txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
@@ -1127,6 +1129,7 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 					itemMap = modifiedData
 				}
 
+				reflection.RemoveNonWritableColumns(model, itemMap)
 				txQuery := tx.NewInsert().Table(tableName)
 				for key, value := range itemMap {
 					txQuery = txQuery.Value(key, common.ConvertSliceForBun(value))
@@ -1322,6 +1325,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 			// Overwrite with every key present in the request (including "" and null unless disallowed)
 			common.MergeUpdateValues(existingMap, updates, h.disallowNulls)
+			reflection.RemoveNonWritableColumns(model, existingMap)
 
 			// Build update query with merged data
 			query := tx.NewUpdate().Table(tableName).SetMap(existingMap)
@@ -1507,6 +1511,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 					// Overwrite with every key present in the request (including "" and null unless disallowed)
 					common.MergeUpdateValues(existingMap, item, h.disallowNulls)
+					reflection.RemoveNonWritableColumns(model, existingMap)
 
 					txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 					if _, err := txQuery.Exec(ctx); err != nil {
@@ -1662,6 +1667,7 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, url
 
 						// Overwrite with every key present in the request (including "" and null unless disallowed)
 						common.MergeUpdateValues(existingMap, itemMap, h.disallowNulls)
+						reflection.RemoveNonWritableColumns(model, existingMap)
 
 						txQuery := tx.NewUpdate().Table(tableName).SetMap(existingMap).Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), itemID)
 						if _, err := txQuery.Exec(ctx); err != nil {

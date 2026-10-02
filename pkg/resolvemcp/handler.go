@@ -559,6 +559,7 @@ func (h *Handler) executeCreate(ctx context.Context, schema, entity string, data
 			if len(cols) == 0 {
 				return invalidArg("no writable fields in data")
 			}
+			reflection.RemoveNonWritableColumns(model, cols)
 			q := tx.NewInsert().Table(tableName)
 			for key, value := range cols {
 				q = q.Value(key, value)
@@ -726,6 +727,7 @@ func (h *Handler) executeUpdate(ctx context.Context, schema, entity, id string, 
 			existingMap[key] = v
 		}
 
+		reflection.RemoveNonWritableColumns(model, setCols)
 		q := tx.NewUpdate().Table(tableName).SetMap(setCols).
 			Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), id)
 		res, err := q.Exec(ctx)

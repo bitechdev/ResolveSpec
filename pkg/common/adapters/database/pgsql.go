@@ -691,6 +691,13 @@ func (p *PgSQLInsertQuery) OnConflict(action string) common.InsertQuery {
 	return p
 }
 
+func (p *PgSQLInsertQuery) ExcludeColumn(columns ...string) common.InsertQuery {
+	for _, col := range columns {
+		delete(p.values, col)
+	}
+	return p
+}
+
 func (p *PgSQLInsertQuery) Returning(columns ...string) common.InsertQuery {
 	p.returning = columns
 	return p
@@ -847,6 +854,13 @@ func (p *PgSQLUpdateQuery) Set(column string, value interface{}) common.UpdateQu
 		p.setOrder = append(p.setOrder, column)
 	}
 	p.sets[column] = value
+	return p
+}
+
+func (p *PgSQLUpdateQuery) ExcludeColumn(columns ...string) common.UpdateQuery {
+	for _, col := range columns {
+		delete(p.sets, col)
+	}
 	return p
 }
 

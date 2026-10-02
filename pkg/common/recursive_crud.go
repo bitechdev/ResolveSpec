@@ -116,7 +116,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 	case "insert", "create", "add":
 		// Only perform insert if we have data to insert
 		if hasData {
-			id, err := p.processInsert(ctx, regularData, tableName)
+			id, err := p.processInsert(ctx, regularData, model, tableName)
 			if err != nil {
 				logger.Error("Insert failed for table=%s, data=%+v, error=%v", tableName, regularData, err)
 				return nil, fmt.Errorf("insert failed: %w", err)
@@ -148,7 +148,7 @@ func (p *NestedCUDProcessor) ProcessNestedCUD(
 			return result, nil
 		}
 		if hasData {
-			rows, err := p.processUpdate(ctx, regularData, tableName, data[pkName])
+			rows, err := p.processUpdate(ctx, regularData, model, tableName, data[pkName])
 			if err != nil {
 				logger.Error("Update failed for table=%s, id=%v, data=%+v, error=%v", tableName, data[pkName], regularData, err)
 				return nil, fmt.Errorf("update failed: %w", err)
@@ -295,10 +295,12 @@ func (p *NestedCUDProcessor) injectForeignKeys(data map[string]interface{}, mode
 func (p *NestedCUDProcessor) processInsert(
 	ctx context.Context,
 	data map[string]interface{},
+	model interface{},
 	tableName string,
 ) (interface{}, error) {
 	logger.Debug("Inserting into %s with data: %+v", tableName, data)
 
+	reflection.RemoveNonWritableColumns(model, data)
 	query := p.db.NewInsert().Table(tableName)
 
 	for key, value := range data {
@@ -335,6 +337,7 @@ func (p *NestedCUDProcessor) processSelect(ctx context.Context, tableName string
 func (p *NestedCUDProcessor) processUpdate(
 	ctx context.Context,
 	data map[string]interface{},
+	model interface{},
 	tableName string,
 	id interface{},
 ) (int64, error) {
@@ -345,6 +348,7 @@ func (p *NestedCUDProcessor) processUpdate(
 
 	logger.Debug("Updating %s with ID %v, data: %+v", tableName, id, data)
 
+	reflection.RemoveNonWritableColumns(model, data)
 	query := p.db.NewUpdate().Table(tableName).SetMap(data).Where(fmt.Sprintf("%s = ?", QuoteIdent(reflection.GetPrimaryKeyName(tableName))), id)
 
 	result, err := query.Exec(ctx)

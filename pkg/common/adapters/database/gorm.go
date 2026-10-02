@@ -751,6 +751,13 @@ func (g *GormInsertQuery) OnConflict(action string) common.InsertQuery {
 	return g
 }
 
+func (g *GormInsertQuery) ExcludeColumn(columns ...string) common.InsertQuery {
+	if len(columns) > 0 {
+		g.db = g.db.Omit(columns...)
+	}
+	return g
+}
+
 func (g *GormInsertQuery) Returning(columns ...string) common.InsertQuery {
 	g.returningColumns = columns
 	return g
@@ -926,6 +933,13 @@ func (g *GormUpdateQuery) SetMap(values map[string]interface{}) common.UpdateQue
 		g.updates = filteredValues
 	} else {
 		g.updates = values
+	}
+	return g
+}
+
+func (g *GormUpdateQuery) ExcludeColumn(columns ...string) common.UpdateQuery {
+	if len(columns) > 0 {
+		g.db = g.db.Omit(columns...)
 	}
 	return g
 }

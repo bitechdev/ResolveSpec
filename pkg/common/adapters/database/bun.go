@@ -1507,6 +1507,13 @@ func (b *BunInsertQuery) OnConflict(action string) common.InsertQuery {
 	return b
 }
 
+func (b *BunInsertQuery) ExcludeColumn(columns ...string) common.InsertQuery {
+	if len(columns) > 0 {
+		b.query = b.query.ExcludeColumn(columns...)
+	}
+	return b
+}
+
 func (b *BunInsertQuery) Returning(columns ...string) common.InsertQuery {
 	if len(columns) > 0 {
 		b.query = b.query.Returning(strings.Join(columns, ", "))
@@ -1615,6 +1622,13 @@ func (b *BunUpdateQuery) SetMap(values map[string]interface{}) common.UpdateQuer
 			continue
 		}
 		b.query = b.query.Set(column+" = ?", common.ConvertSliceForBun(value))
+	}
+	return b
+}
+
+func (b *BunUpdateQuery) ExcludeColumn(columns ...string) common.UpdateQuery {
+	if len(columns) > 0 {
+		b.query = b.query.ExcludeColumn(columns...)
 	}
 	return b
 }

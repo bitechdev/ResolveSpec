@@ -99,6 +99,7 @@ func (m *mockInsertQuery) Value(column string, value interface{}) InsertQuery {
 	return m
 }
 func (m *mockInsertQuery) OnConflict(action string) InsertQuery { return m }
+func (m *mockInsertQuery) ExcludeColumn(columns ...string) InsertQuery { return m }
 func (m *mockInsertQuery) Returning(columns ...string) InsertQuery { return m }
 func (m *mockInsertQuery) Exec(ctx context.Context) (Result, error) {
 	m.db.insertCalls = append(m.db.insertCalls, m.values)
@@ -131,6 +132,7 @@ func (m *mockUpdateQuery) SetMap(values map[string]interface{}) UpdateQuery {
 	return m
 }
 func (m *mockUpdateQuery) Where(condition string, args ...interface{}) UpdateQuery { return m }
+func (m *mockUpdateQuery) ExcludeColumn(columns ...string) UpdateQuery { return m }
 func (m *mockUpdateQuery) Returning(columns ...string) UpdateQuery { return m }
 func (m *mockUpdateQuery) Exec(ctx context.Context) (Result, error) {
 	// Record the update call

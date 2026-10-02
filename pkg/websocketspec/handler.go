@@ -758,6 +758,9 @@ func (h *Handler) create(hookCtx *HookContext) (interface{}, error) {
 
 	// Insert record
 	query := hookCtx.Tx.NewInsert().Model(hookCtx.ModelPtr).Table(hookCtx.TableName)
+	if generated := reflection.NonWritableColumns(hookCtx.Model); len(generated) > 0 {
+		query = query.ExcludeColumn(generated...)
+	}
 	if _, err := query.Exec(hookCtx.Context); err != nil {
 		return nil, fmt.Errorf("failed to create record: %w", err)
 	}
@@ -785,6 +788,8 @@ func (h *Handler) update(hookCtx *HookContext) error {
 	// Only the keys present in the request are written. "" and null overwrite
 	// the stored value unless disallowNulls is set, in which case null is skipped.
 	values := common.MergeUpdateValues(make(map[string]interface{}, len(updates)), updates, h.disallowNulls)
+
+	reflection.RemoveNonWritableColumns(hookCtx.Model, values)
 
 	if len(values) > 0 {
 		query := hookCtx.Tx.NewUpdate().Table(hookCtx.TableName).SetMap(values).

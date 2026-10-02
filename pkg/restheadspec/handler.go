@@ -1410,6 +1410,9 @@ func (h *Handler) handleCreate(ctx context.Context, w common.ResponseWriter, dat
 			if provider, ok := modelValue.(common.TableNameProvider); !ok || provider.TableName() == "" {
 				query = query.Table(tableName)
 			}
+			if generated := reflection.NonWritableColumns(model); len(generated) > 0 {
+				query = query.ExcludeColumn(generated...)
+			}
 			fields := reflection.GetSQLModelColumns(model)
 			query = query.Returning(fields...)
 
@@ -1657,6 +1660,9 @@ func (h *Handler) handleUpdate(ctx context.Context, w common.ResponseWriter, id 
 
 		// Create update query using Model() to preserve custom types and driver.Valuer interfaces
 		query := tx.NewUpdate().Model(modelInstance)
+		if generated := reflection.NonWritableColumns(model); len(generated) > 0 {
+			query = query.ExcludeColumn(generated...)
+		}
 		query = query.Where(fmt.Sprintf("%s = ?", common.QuoteIdent(pkName)), targetID)
 
 		// Execute BeforeScan hooks - pass query chain so hooks can modify it

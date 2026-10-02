@@ -194,6 +194,7 @@ func (h *Handler) executeWhere(ctx context.Context, req whereRequest) (_ *whereR
 		cond := fmt.Sprintf("%s IN (%s)", common.QuoteIdent(pkName), strings.Join(inList, ", "))
 		var affected int64
 		if req.op == "update" {
+			reflection.RemoveNonWritableColumns(model, setCols)
 			r, err := tx.NewUpdate().Table(tableName).SetMap(setCols).Where(cond, ids...).Exec(ctx)
 			if err != nil {
 				return fmt.Errorf("error updating records: %w", err)

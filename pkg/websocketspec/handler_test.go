@@ -226,6 +226,11 @@ func (m *MockInsertQuery) OnConflict(action string) common.InsertQuery {
 	return args.Get(0).(common.InsertQuery)
 }
 
+func (m *MockInsertQuery) ExcludeColumn(columns ...string) common.InsertQuery {
+	args := m.Called(columns)
+	return args.Get(0).(common.InsertQuery)
+}
+
 func (m *MockInsertQuery) Returning(columns ...string) common.InsertQuery {
 	args := m.Called(columns)
 	return args.Get(0).(common.InsertQuery)
@@ -251,6 +256,11 @@ type MockUpdateQuery struct {
 
 func (m *MockUpdateQuery) Model(model interface{}) common.UpdateQuery {
 	args := m.Called(model)
+	return args.Get(0).(common.UpdateQuery)
+}
+
+func (m *MockUpdateQuery) ExcludeColumn(columns ...string) common.UpdateQuery {
+	args := m.Called(columns)
 	return args.Get(0).(common.UpdateQuery)
 }
 

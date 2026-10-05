@@ -417,6 +417,14 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 	if id == "" {
 		options.SingleRecordAsObject = false
+	} else {
+		// The primary key is already filtered, so never return more than one
+		// record regardless of limit/offset/cursor headers or joins.
+		one := 1
+		options.Limit = &one
+		options.Offset = nil
+		options.CursorForward = ""
+		options.CursorBackward = ""
 	}
 
 	// Validate and unwrap model type to get base struct
@@ -726,7 +734,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 			sanitizedOr = common.EnsureOuterParentheses(sanitizedOr)
 		}
 
-		if grouper, ok := query.(common.WhereGrouper); ok && sanitizedOr != "" && common.Hardening().SQLStrict {
+		if grouper, ok := query.(common.WhereGrouper); ok && sanitizedOr != "" {
 			query = grouper.WhereGroup(func(q common.SelectQuery) common.SelectQuery {
 				return applyUserConds(q).WhereOr(sanitizedOr)
 			})

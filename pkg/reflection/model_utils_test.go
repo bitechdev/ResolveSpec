@@ -497,13 +497,13 @@ func TestIsColumnWritableWithEmbedded(t *testing.T) {
 
 // Test models with relations for GetSQLModelColumns
 type User struct {
-	ID          int       `bun:"id,pk" json:"id"`
-	Name        string    `bun:"name" json:"name"`
-	Email       string    `bun:"email" json:"email"`
-	ProfileData string    `json:"profile_data"` // No bun/gorm tag
-	Posts       []Post    `bun:"rel:has-many,join:id=user_id" json:"posts"`
-	Profile     *Profile  `bun:"rel:has-one,join:id=user_id" json:"profile"`
-	RowNumber   int64     `bun:",scanonly" json:"_rownumber"`
+	ID          int      `bun:"id,pk" json:"id"`
+	Name        string   `bun:"name" json:"name"`
+	Email       string   `bun:"email" json:"email"`
+	ProfileData string   `json:"profile_data"` // No bun/gorm tag
+	Posts       []Post   `bun:"rel:has-many,join:id=user_id" json:"posts"`
+	Profile     *Profile `bun:"rel:has-one,join:id=user_id" json:"profile"`
+	RowNumber   int64    `bun:",scanonly" json:"_rownumber"`
 }
 
 type Post struct {
@@ -528,8 +528,8 @@ type Tag struct {
 
 // Model with scan-only embedded struct
 type EntityWithScanOnlyEmbedded struct {
-	ID          int    `bun:"id,pk" json:"id"`
-	Name        string `bun:"name" json:"name"`
+	ID          int               `bun:"id,pk" json:"id"`
+	Name        string            `bun:"name" json:"name"`
 	AdhocBuffer `bun:",scanonly"` // Entire embedded struct is scan-only
 }
 
@@ -1086,17 +1086,17 @@ func TestGetColumnTypeFromModel_SqlNullWrapper(t *testing.T) {
 
 // Models for relation testing
 type Author struct {
-	ID    int     `bun:"id,pk" json:"id"`
-	Name  string  `bun:"name" json:"name"`
-	Books []Book  `bun:"rel:has-many,join:id=author_id" json:"books"`
+	ID    int    `bun:"id,pk" json:"id"`
+	Name  string `bun:"name" json:"name"`
+	Books []Book `bun:"rel:has-many,join:id=author_id" json:"books"`
 }
 
 type Book struct {
-	ID         int        `bun:"id,pk" json:"id"`
-	Title      string     `bun:"title" json:"title"`
-	AuthorID   int        `bun:"author_id" json:"author_id"`
-	Author     *Author    `bun:"rel:belongs-to,join:author_id=id" json:"author"`
-	Publisher  *Publisher `bun:"rel:has-one,join:id=book_id" json:"publisher"`
+	ID        int        `bun:"id,pk" json:"id"`
+	Title     string     `bun:"title" json:"title"`
+	AuthorID  int        `bun:"author_id" json:"author_id"`
+	Author    *Author    `bun:"rel:belongs-to,join:author_id=id" json:"author"`
+	Publisher *Publisher `bun:"rel:has-one,join:id=book_id" json:"publisher"`
 }
 
 type Publisher struct {
@@ -1106,9 +1106,9 @@ type Publisher struct {
 }
 
 type Student struct {
-	ID      int       `gorm:"column:id;primaryKey" json:"id"`
-	Name    string    `gorm:"column:name" json:"name"`
-	Courses []Course  `gorm:"many2many:student_courses" json:"courses"`
+	ID      int      `gorm:"column:id;primaryKey" json:"id"`
+	Name    string   `gorm:"column:name" json:"name"`
+	Courses []Course `gorm:"many2many:student_courses" json:"courses"`
 }
 
 type Course struct {
@@ -1119,11 +1119,11 @@ type Course struct {
 
 // Recursive relation model
 type Category struct {
-	ID         int         `bun:"id,pk" json:"id"`
-	Name       string      `bun:"name" json:"name"`
-	ParentID   *int        `bun:"parent_id" json:"parent_id"`
-	Parent     *Category   `bun:"rel:belongs-to,join:parent_id=id" json:"parent"`
-	Children   []Category  `bun:"rel:has-many,join:id=parent_id" json:"children"`
+	ID       int        `bun:"id,pk" json:"id"`
+	Name     string     `bun:"name" json:"name"`
+	ParentID *int       `bun:"parent_id" json:"parent_id"`
+	Parent   *Category  `bun:"rel:belongs-to,join:parent_id=id" json:"parent"`
+	Children []Category `bun:"rel:has-many,join:id=parent_id" json:"children"`
 }
 
 func TestGetRelationType(t *testing.T) {
@@ -1299,7 +1299,7 @@ func TestGetPrimaryKeyValue_EdgeCases(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "model without primary key tags - fallback to ID field",
+			name: "model without primary key tags - fallback to ID field",
 			model: struct {
 				ID   int
 				Name string
@@ -1307,7 +1307,7 @@ func TestGetPrimaryKeyValue_EdgeCases(t *testing.T) {
 			expected: 99,
 		},
 		{
-			name:     "model without ID field",
+			name: "model without ID field",
 			model: struct {
 				Name string
 			}{Name: "Test"},
@@ -1508,10 +1508,10 @@ func TestGetSQLModelColumns_EdgeCases(t *testing.T) {
 
 // Test models with table:, rel:, join: tags for ExtractColumnFromBunTag
 type BunSpecialTagsModel struct {
-	Table     string     `bun:"table:users"`
-	Relation  []Post     `bun:"rel:has-many"`
-	Join      string     `bun:"join:id=user_id"`
-	NormalCol string     `bun:"normal_col"`
+	Table     string `bun:"table:users"`
+	Relation  []Post `bun:"rel:has-many"`
+	Join      string `bun:"join:id=user_id"`
+	NormalCol string `bun:"normal_col"`
 }
 
 func TestExtractColumnFromBunTag_SpecialTags(t *testing.T) {
@@ -1592,8 +1592,8 @@ func TestGetRelationType_GORMFallback(t *testing.T) {
 func TestGetRelationType_AdditionalCases(t *testing.T) {
 	// Test model with GORM has-one (pointer without foreignKey or with references)
 	type Address struct {
-		ID     int  `gorm:"column:id;primaryKey"`
-		UserID int  `gorm:"column:user_id"`
+		ID     int `gorm:"column:id;primaryKey"`
+		UserID int `gorm:"column:user_id"`
 	}
 
 	type UserWithAddress struct {
@@ -1609,7 +1609,7 @@ func TestGetRelationType_AdditionalCases(t *testing.T) {
 
 	type Employee struct {
 		ID        int
-		Company   Company  // Single struct (not pointer, not slice) - belongs-to
+		Company   Company    // Single struct (not pointer, not slice) - belongs-to
 		Coworkers []Employee // Slice without bun/gorm tags - has-many
 	}
 
@@ -1961,5 +1961,33 @@ func TestNonWritableColumns(t *testing.T) {
 		if !want[c] {
 			t.Errorf("unexpected %s", c)
 		}
+	}
+}
+
+func TestNonWritableColumns_EmbeddedScanOnlyBuffer(t *testing.T) {
+	type buffer struct {
+		CQL1      string `json:"cql1,omitempty" gorm:"->" bun:",scanonly"`
+		RowNumber int64  `json:"_rownumber,omitempty" gorm:"-" bun:",scanonly"`
+	}
+	type m struct {
+		ID     int    `json:"id" bun:"id,pk"`
+		Note   string `json:"note" bun:"note,type:citext,"`
+		buffer `json:",omitempty" bun:",scanonly"`
+	}
+	got := NonWritableColumns(&m{})
+	has := map[string]bool{}
+	for _, c := range got {
+		has[c] = true
+	}
+	if !has["cql1"] {
+		t.Errorf("cql1 should be non-writable, got %v", got)
+	}
+	if has["id"] || has["note"] {
+		t.Errorf("writable columns reported as non-writable: %v", got)
+	}
+	vals := map[string]interface{}{"id": 1, "note": "x", "cql1": "y"}
+	RemoveNonWritableColumns(&m{}, vals)
+	if _, ok := vals["cql1"]; ok || len(vals) != 2 {
+		t.Errorf("unexpected values: %v", vals)
 	}
 }

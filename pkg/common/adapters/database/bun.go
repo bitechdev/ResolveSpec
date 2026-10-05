@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/schema"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
 	"github.com/bitechdev/ResolveSpec/pkg/dbtrace"
@@ -1507,8 +1508,30 @@ func (b *BunInsertQuery) OnConflict(action string) common.InsertQuery {
 	return b
 }
 
+// bunWritableExcludes drops columns bun already leaves out of INSERT/UPDATE
+// (scanonly fields) or does not know, since bun's ExcludeColumn errors with
+// "can't find column" for anything that is not in the table's writable fields.
+func bunWritableExcludes(model bun.Model, columns []string) []string {
+	tm, ok := model.(interface{ Table() *schema.Table })
+	if !ok || tm.Table() == nil {
+		return columns
+	}
+	table := tm.Table()
+	writable := make(map[string]struct{}, len(table.Fields))
+	for _, f := range table.Fields {
+		writable[f.Name] = struct{}{}
+	}
+	out := make([]string, 0, len(columns))
+	for _, c := range columns {
+		if _, ok := writable[c]; ok || c == "*" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (b *BunInsertQuery) ExcludeColumn(columns ...string) common.InsertQuery {
-	if len(columns) > 0 {
+	if columns = bunWritableExcludes(b.query.GetModel(), columns); len(columns) > 0 {
 		b.query = b.query.ExcludeColumn(columns...)
 	}
 	return b
@@ -1627,7 +1650,7 @@ func (b *BunUpdateQuery) SetMap(values map[string]interface{}) common.UpdateQuer
 }
 
 func (b *BunUpdateQuery) ExcludeColumn(columns ...string) common.UpdateQuery {
-	if len(columns) > 0 {
+	if columns = bunWritableExcludes(b.query.GetModel(), columns); len(columns) > 0 {
 		b.query = b.query.ExcludeColumn(columns...)
 	}
 	return b

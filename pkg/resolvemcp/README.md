@@ -442,6 +442,33 @@ The text appears in `list_tables` and `describe_table`. The server also sends a 
 
 `handler.ExportCatalog(path)` writes the usage guide, tools, limits and every table (columns, types, keys, relations, allowed operations, descriptions) to disk, JSON for a `.json` path and Markdown otherwise. The file is replaced atomically. It lists every table with at least one allowed operation, regardless of caller, so keep it out of public directories. Call it after registering models (for example at startup, or from a `go generate` step).
 
+## Read-only mode
+
+Set `Config.ReadOnly: true` to disable every write:
+
+```go
+handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{ReadOnly: true})
+```
+
+- The insert, update, delete and annotation tools are not registered, so the agent never sees them. `list_functions`/`call_function` are off too, because a registered function may change data, unless you set `AllowFunctionCalls` (below).
+- `list_tables` and `describe_table` report only `select`; `describe_table` also sets `read_only: true` and lists no writable columns.
+- The MCP server instructions (and the exported catalogue) say the server is read-only and tell the agent not to attempt writes.
+- A write that reaches a handler anyway is refused with a `forbidden` error ("this server is read-only: writes are disabled").
+
+### Function calls and the allowlist
+
+```go
+// Read-only server that may still run two named functions
+resolvemcp.Config{
+    ReadOnly:           true,
+    AllowFunctionCalls: true, // keep list_functions / call_function on a read-only server
+    AllowedFunctions:   []string{"report_totals", "search_customers"},
+}
+```
+
+- `AllowFunctionCalls` only matters with `ReadOnly`; without it, functions are always available. Set it only for functions that do not change data.
+- `AllowedFunctions` works with or without `ReadOnly`. When empty, every registered function is allowed. When set, only the named functions are listed and callable; any other is reported as `unknown function`, so its existence is not revealed. Per-function `Authorize` still applies on top.
+
 ## MCP Tools
 
 Fixed set, independent of the models. `table` is `schema.entity`. Errors return `{"success":false,"error":{"code","message"}}` with codes `invalid_argument`, `not_found`, `forbidden`, `limit_exceeded`, `internal` (internal details are logged, the client gets a reference id).

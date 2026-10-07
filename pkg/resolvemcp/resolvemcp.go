@@ -51,6 +51,25 @@ type Config struct {
 	// host, with at most 32 distinct base URLs cached; prefer setting BaseURL.
 	AllowedHosts []string
 
+	// ReadOnly disables every write. The insert, update, delete and annotation tools are not
+	// registered, list_tables and describe_table report only the select operation (no
+	// writable columns), a write attempted anyway is refused with a "forbidden" error, and
+	// the server instructions tell the agent it cannot write. list_functions/call_function
+	// are also off, because a registered function may change data, unless AllowFunctionCalls
+	// is set.
+	ReadOnly bool
+
+	// AllowFunctionCalls keeps list_functions and call_function available on a ReadOnly
+	// server. Only set it for functions that do not change data; pair it with
+	// AllowedFunctions to name them. It has no effect when ReadOnly is false (functions are
+	// always available then).
+	AllowFunctionCalls bool
+
+	// AllowedFunctions restricts list_functions and call_function to the named functions.
+	// Empty allows every registered function. A function outside the list is reported as
+	// unknown, so its existence is not revealed.
+	AllowedFunctions []string
+
 	// EnableAnnotations registers the resolvespec_annotate tool. Off by default: annotations
 	// are free text that agents read back, so enabling the tool opens a write channel into
 	// agent-visible text. When on, every call runs the BeforeHandle hooks (operation

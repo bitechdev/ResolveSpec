@@ -108,6 +108,15 @@ func (h *Handler) function(name string) (Function, bool) {
 	return f, ok
 }
 
+// functionAllowed reports whether Config.AllowedFunctions lets the function through.
+func (h *Handler) functionAllowed(name string) bool {
+	if h.allowedFns == nil {
+		return true
+	}
+	_, ok := h.allowedFns[name]
+	return ok
+}
+
 // visibleFunctions returns the functions the caller may call, sorted by name.
 func (h *Handler) visibleFunctions(ctx context.Context) []Function {
 	h.functions.mu.RLock()
@@ -119,6 +128,9 @@ func (h *Handler) visibleFunctions(ctx context.Context) []Function {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	visible := out[:0]
 	for _, f := range out {
+		if !h.functionAllowed(f.Name) {
+			continue
+		}
 		if f.Authorize == nil || f.Authorize(ctx) == nil {
 			visible = append(visible, f)
 		}
@@ -236,7 +248,7 @@ func (h *Handler) executeCall(ctx context.Context, name string, rawArgs map[stri
 	defer cancel()
 
 	f, ok := h.function(name)
-	if !ok {
+	if !ok || !h.functionAllowed(name) {
 		return nil, invalidArg("unknown function %q", truncate(name))
 	}
 	hookCtx := &HookContext{Context: ctx, Handler: h, Entity: name, Operation: "call_function", Tx: h.db}

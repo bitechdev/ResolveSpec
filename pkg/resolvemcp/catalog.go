@@ -24,12 +24,35 @@ const usageGuide = `This server exposes database tables through a fixed set of t
 5. Use list_functions / call_function for registered functions.
 Read the error message when a call fails: it says which argument was wrong.`
 
+// readOnlyGuide replaces usageGuide on a read-only server.
+const readOnlyGuide = `This server exposes database tables through a fixed set of tools. It is READ-ONLY: you cannot insert, update or delete data or write annotations, and no tool for that exists. Do not attempt a write; tell the user it is not possible through this server.
+1. Call list_tables to see the tables you may read and what they hold.
+2. Call describe_table for a table before using it: columns, types, primary key, relations (preloadable) and limits.
+3. Read with select_table (filters, sort, columns, preloads). Results are paged; use limit/offset or cursors, and include_count only when you need a total.
+Read the error message when a call fails: it says which argument was wrong.`
+
+// readOnlyFunctionsGuide is the extra step of a read-only server that still allows functions.
+const readOnlyFunctionsGuide = `
+4. Use list_functions / call_function for the registered functions. Only call functions that fit a read-only server; the server decides what is allowed.`
+
+// guideFor returns the usage guide for the server mode.
+func guideFor(readOnly, functions bool) string {
+	if !readOnly {
+		return usageGuide
+	}
+	if functions {
+		return readOnlyGuide + readOnlyFunctionsGuide
+	}
+	return readOnlyGuide
+}
+
 // Catalog is a snapshot of what the server offers: the usage guide, the tools, the limits
 // and every table with its columns, relations, allowed operations and descriptions.
 type Catalog struct {
 	GeneratedAt time.Time      `json:"generated_at"`
 	Server      string         `json:"server"`
 	Version     string         `json:"version"`
+	ReadOnly    bool           `json:"read_only"`
 	Guide       string         `json:"guide"`
 	Limits      CatalogLimits  `json:"limits"`
 	Tools       []CatalogTool  `json:"tools"`
@@ -122,7 +145,8 @@ func (h *Handler) BuildCatalog() Catalog {
 		GeneratedAt: time.Now().UTC(),
 		Server:      h.name,
 		Version:     h.version,
-		Guide:       usageGuide,
+		ReadOnly:    h.config.ReadOnly,
+		Guide:       guideFor(h.config.ReadOnly, h.config.AllowFunctionCalls),
 		Limits: CatalogLimits{
 			DefaultLimit:    h.config.DefaultLimit,
 			MaxLimit:        h.config.MaxLimit,
@@ -143,7 +167,7 @@ func (h *Handler) BuildCatalog() Catalog {
 	for name, model := range h.registry.GetAllModels() {
 		schema, entity, _ := splitTable(name)
 		rules := h.modelRules(schema, entity)
-		ops := opsFor(rules)
+		ops := h.opsFor(rules)
 		if len(ops) == 0 {
 			continue
 		}
@@ -155,7 +179,7 @@ func (h *Handler) BuildCatalog() Catalog {
 		for mt != nil && (mt.Kind() == reflect.Pointer || mt.Kind() == reflect.Slice) {
 			mt = mt.Elem()
 		}
-		if mt != nil && mt.Kind() == reflect.Struct {
+		if !h.config.ReadOnly && mt != nil && mt.Kind() == reflect.Struct {
 			for k := range reflectionJSONColumns(mt) {
 				writable[k] = true
 			}
@@ -234,6 +258,9 @@ func (h *Handler) ExportCatalog(path string) error {
 func (c Catalog) Markdown() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s API catalogue\n\nGenerated %s.\n\n", c.Server, c.GeneratedAt.Format(time.RFC3339))
+	if c.ReadOnly {
+		sb.WriteString("**This server is read-only.**\n\n")
+	}
 	sb.WriteString("## How to use\n\n" + c.Guide + "\n\n")
 	fmt.Fprintf(&sb, "## Limits\n\ndefault limit %d, max limit %d, max offset %d, max batch %d, max preload depth %d, max rows per filter write %d.\n\n",
 		c.Limits.DefaultLimit, c.Limits.MaxLimit, c.Limits.MaxOffset, c.Limits.MaxBatch, c.Limits.MaxPreloadDepth, c.Limits.MaxWriteRows)

@@ -24,6 +24,7 @@ import (
 
 // Handler exposes registered database models as MCP tools and resources.
 type Handler struct {
+	allowedFns map[string]struct{} // nil: every function is allowed
 	db         common.Database
 	registry   common.ModelRegistry
 	hooks      *HookRegistry
@@ -43,14 +44,20 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		db:        db,
 		registry:  registry,
 		hooks:     NewHookRegistry(),
-		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0", server.WithInstructions(usageGuide)),
+		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0", server.WithInstructions(guideFor(cfg.ReadOnly, cfg.AllowFunctionCalls))),
 		config:    cfg.withDefaults(),
 		confirms:  newConfirmStore(),
 		name:      "resolvemcp",
 		version:   "1.0.0",
 	}
+	if len(cfg.AllowedFunctions) > 0 {
+		h.allowedFns = make(map[string]struct{}, len(cfg.AllowedFunctions))
+		for _, n := range cfg.AllowedFunctions {
+			h.allowedFns[n] = struct{}{}
+		}
+	}
 	registerMetaTools(h)
-	if cfg.EnableAnnotations {
+	if cfg.EnableAnnotations && !cfg.ReadOnly {
 		registerAnnotationTool(h)
 	}
 	return h

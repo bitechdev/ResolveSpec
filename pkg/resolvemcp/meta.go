@@ -56,6 +56,16 @@ func registerMetaTools(h *Handler) {
 		mcp.WithBoolean("include_count", mcp.Description("Also return the total number of matching rows (slower on large tables).")),
 	), h.handleSelect)
 
+	if !h.config.ReadOnly {
+		registerWriteTools(h, tableArg, idArg, filtersArg, dryRunArg, confirmArg)
+	}
+	if !h.config.ReadOnly || h.config.AllowFunctionCalls {
+		registerFunctionTools(h, readOnly)
+	}
+}
+
+// registerWriteTools adds the tools that change table rows.
+func registerWriteTools(h *Handler, tableArg, idArg, filtersArg, dryRunArg, confirmArg mcp.ToolOption) {
 	h.mcpServer.AddTool(mcp.NewTool("insert_into_table",
 		mcp.WithDescription("Insert one row (object) or several rows (array, one transaction, capped). Unknown or read-only fields are rejected."),
 		tableArg, mcp.WithObject("data", mcp.Required(), mcp.Description("A row object or an array of row objects.")),
@@ -73,7 +83,10 @@ func registerMetaTools(h *Handler) {
 		mcp.WithDestructiveHintAnnotation(true),
 		tableArg, idArg, filtersArg, dryRunArg, confirmArg,
 	), h.handleDelete)
+}
 
+// registerFunctionTools adds list_functions and call_function.
+func registerFunctionTools(h *Handler, readOnly mcp.ToolOption) {
 	h.mcpServer.AddTool(mcp.NewTool("list_functions", readOnly,
 		mcp.WithDescription("List the functions you can call with call_function, with their parameters.")),
 		h.handleListFunctions)
@@ -111,10 +124,14 @@ func (h *Handler) modelRules(schema, entity string) modelregistry.ModelRules {
 	return modelregistry.DefaultModelRules()
 }
 
-func opsFor(r modelregistry.ModelRules) []string {
+// opsFor lists the operations the rules allow. A read-only server allows select only.
+func (h *Handler) opsFor(r modelregistry.ModelRules) []string {
 	var ops []string
 	if r.CanRead {
 		ops = append(ops, opSelect)
+	}
+	if h.config.ReadOnly {
+		return ops
 	}
 	if r.CanCreate {
 		ops = append(ops, opInsert)
@@ -140,9 +157,12 @@ func (h *Handler) resolveTable(args map[string]any, op string) (schema, entity s
 	if _, err := h.registry.GetModelByEntity(schema, entity); err != nil {
 		return "", "", invalidArg("unknown table %q; see list_tables", truncate(table))
 	}
+	if op != "" && op != opSelect && h.config.ReadOnly {
+		return "", "", NewClientError(CodeForbidden, "this server is read-only: writes are disabled")
+	}
 	if op != "" {
 		allowed := false
-		for _, o := range opsFor(h.modelRules(schema, entity)) {
+		for _, o := range h.opsFor(h.modelRules(schema, entity)) {
 			if o == op {
 				allowed = true
 			}
@@ -163,7 +183,7 @@ func (h *Handler) handleListTables(ctx context.Context, _ mcp.CallToolRequest) (
 	var tables []table
 	for name := range h.registry.GetAllModels() {
 		schema, entity, _ := splitTable(name)
-		if ops := opsFor(h.modelRules(schema, entity)); len(ops) > 0 {
+		if ops := h.opsFor(h.modelRules(schema, entity)); len(ops) > 0 {
 			tables = append(tables, table{Table: name, Description: h.modelDocs(schema, entity).Description, Operations: ops})
 		}
 	}
@@ -181,7 +201,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		return toolError("describe_table", invalidArg("unknown table")), nil
 	}
 	rules := h.modelRules(schema, entity)
-	if len(opsFor(rules)) == 0 {
+	if len(h.opsFor(rules)) == 0 {
 		return toolError("describe_table", invalidArg("unknown table %q; see list_tables", buildModelName(schema, entity))), nil
 	}
 	info := buildModelInfo(schema, entity, model)
@@ -192,7 +212,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		modelType = modelType.Elem()
 	}
 	writable := map[string]bool{}
-	if modelType != nil && modelType.Kind() == reflect.Struct {
+	if !h.config.ReadOnly && modelType != nil && modelType.Kind() == reflect.Struct {
 		for jsonKey := range reflection.BuildJSONToDBColumnMap(modelType) {
 			writable[jsonKey] = true
 		}
@@ -230,7 +250,8 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		"columns":          cols,
 		"relations":        info.relationNames,
 		"writable_columns": writableNames,
-		"operations":       opsFor(rules),
+		"operations":       h.opsFor(rules),
+		"read_only":        h.config.ReadOnly,
 		"filter_operators": filterOperators,
 		"limits": map[string]any{
 			"default_limit":     h.config.DefaultLimit,

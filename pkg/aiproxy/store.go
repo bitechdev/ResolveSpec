@@ -38,7 +38,8 @@ func (p *Proxy) Reload(ctx context.Context, store UpstreamStore) error {
 	var retired []*target
 
 	p.mu.Lock()
-	for _, d := range defs {
+	for i := range defs {
+		d := defs[i]
 		name := d.Upstream.Name
 		if _, dup := next[name]; dup {
 			errs = append(errs, fmt.Errorf("aiproxy: duplicate stored upstream %q", name))

@@ -15,9 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/bitechdev/ResolveSpec/pkg/logger"
 	"github.com/bitechdev/ResolveSpec/pkg/security"
-	"github.com/tidwall/gjson"
 )
 
 type ctxKey struct{}
@@ -198,7 +199,7 @@ func (p *Proxy) buildProxy(t *target) *httputil.ReverseProxy {
 			}
 			if resp.StatusCode == http.StatusUnauthorized {
 				logger.Warn("aiproxy: upstream %q rejected its credentials", t.up.Name)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				body, _ := json.Marshal(errorBody("bad_gateway", "upstream rejected the proxy credentials"))
 				resp.StatusCode, resp.Status = http.StatusBadGateway, "502 Bad Gateway"
 				resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -226,7 +227,7 @@ func (p *Proxy) buildProxy(t *target) *httputil.ReverseProxy {
 
 // inspect reads JSON request bodies to extract/enforce model and tools.
 // It returns a non-zero status when the request must be rejected.
-func (p *Proxy) inspect(t *target, r *http.Request, hc *HookContext) (int, string, string) {
+func (p *Proxy) inspect(t *target, r *http.Request, hc *HookContext) (status int, errType, msg string) {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
 	default:
@@ -246,7 +247,7 @@ func (p *Proxy) inspect(t *target, r *http.Request, hc *HookContext) (int, strin
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, p.cfg.MaxBodyBytes+1))
-	r.Body.Close()
+	_ = r.Body.Close()
 	if err != nil {
 		return http.StatusBadRequest, "invalid_request_error", "could not read request body"
 	}

@@ -1,18 +1,3 @@
-// Package resolvemcp exposes registered database models as Model Context Protocol (MCP) tools
-// and resources over HTTP/SSE transport.
-//
-// It mirrors the resolvespec package patterns:
-//   - Same model registration API
-//   - Same filter, sort, cursor pagination, preload options
-//   - Same lifecycle hook system
-//
-// Usage:
-//
-//	handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{BaseURL: "http://localhost:8080"})
-//	handler.RegisterModel("public", "users", &User{})
-//
-//	r := mux.NewRouter()
-//	resolvemcp.SetupMuxRoutes(r, handler, securityList) // requires an authenticated caller
 package resolvemcp
 
 import (

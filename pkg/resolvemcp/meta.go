@@ -156,14 +156,15 @@ func (h *Handler) resolveTable(args map[string]any, op string) (schema, entity s
 
 func (h *Handler) handleListTables(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	type table struct {
-		Table      string   `json:"table"`
-		Operations []string `json:"operations"`
+		Table       string   `json:"table"`
+		Description string   `json:"description,omitempty"`
+		Operations  []string `json:"operations"`
 	}
 	var tables []table
 	for name := range h.registry.GetAllModels() {
 		schema, entity, _ := splitTable(name)
 		if ops := opsFor(h.modelRules(schema, entity)); len(ops) > 0 {
-			tables = append(tables, table{Table: name, Operations: ops})
+			tables = append(tables, table{Table: name, Description: h.modelDocs(schema, entity).Description, Operations: ops})
 		}
 	}
 	sort.Slice(tables, func(i, j int) bool { return tables[i].Table < tables[j].Table })
@@ -184,6 +185,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		return toolError("describe_table", invalidArg("unknown table %q; see list_tables", buildModelName(schema, entity))), nil
 	}
 	info := buildModelInfo(schema, entity, model)
+	docs := h.modelDocs(schema, entity)
 
 	modelType := reflect.TypeOf(model)
 	for modelType != nil && (modelType.Kind() == reflect.Pointer || modelType.Kind() == reflect.Slice) {
@@ -203,6 +205,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		PrimaryKey bool   `json:"primary_key,omitempty"`
 		Unique     bool   `json:"unique,omitempty"`
 		Writable   bool   `json:"writable"`
+		Comment    string `json:"description,omitempty"`
 	}
 	cols := make([]column, 0, len(info.columns))
 	var writableNames []string
@@ -212,7 +215,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 			typ = c.goType
 		}
 		w := writable[c.jsonName]
-		cols = append(cols, column{Name: c.jsonName, Type: typ, Nullable: c.nullable, PrimaryKey: c.isPrimary, Unique: c.isUnique, Writable: w})
+		cols = append(cols, column{Name: c.jsonName, Type: typ, Nullable: c.nullable, PrimaryKey: c.isPrimary, Unique: c.isUnique, Writable: w, Comment: columnDescription(docs, c)})
 		if w && !c.isPrimary {
 			writableNames = append(writableNames, c.jsonName)
 		}
@@ -220,6 +223,9 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 	return marshalResult(map[string]any{
 		"success":          true,
 		"table":            info.fullName,
+		"description":      docs.Description,
+		"purpose":          docs.Purpose,
+		"tags":             docs.Tags,
 		"primary_key":      info.pkName,
 		"columns":          cols,
 		"relations":        info.relationNames,

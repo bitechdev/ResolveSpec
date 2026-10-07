@@ -392,6 +392,56 @@ handler.SetModelRules("public", "users", modelregistry.ModelRules{
 
 ---
 
+## Describing the API for agents
+
+Give agents context about what each table is for:
+
+```go
+// 1. Explicitly, in code
+handler.SetModelDescription("public", "users", modelregistry.ModelInfo{
+    Description: "Application accounts",
+    Purpose:     "Look up who a person is",
+    Tags:        []string{"identity"},
+    Columns:     map[string]string{"email": "Login address, unique"},
+})
+
+// 2. From an external JSON map (keyed by "schema.entity"); entries here win
+n, err := handler.LoadModelDescriptions("docs/model-descriptions.json")
+```
+
+Example `docs/model-descriptions.json` (every key is optional; unknown keys are rejected):
+
+```json
+{
+  "public.users": {
+    "description": "Application accounts, one row per person who can sign in.",
+    "purpose": "Look up who someone is. Use public.orders for what they bought.",
+    "tags": ["identity", "pii"],
+    "columns": {
+      "id": "Internal account id",
+      "email": "Login address, unique and lower-cased",
+      "created_at": "When the account was created (UTC)"
+    }
+  },
+  "public.orders": {
+    "description": "Customer orders.",
+    "columns": {
+      "status": "One of: pending, paid, shipped, cancelled"
+    }
+  }
+}
+```
+
+Keys are `schema.entity` names as registered with `RegisterModel`. Column keys are the JSON column names shown by `describe_table`. An entry replaces any info set earlier for that table, and columns it leaves out still fall back to field tags.
+
+Fallbacks when nothing is set for a table or column, in order: the model's `ModelDescription() string` method (table), then field tags (column): `comment`, `note`, `desc` or `description` tags, then `comment:` inside the `gorm` or `bun` tag.
+
+The text appears in `list_tables` and `describe_table`. The server also sends a short usage guide as MCP `instructions` on connect.
+
+### Catalogue file
+
+`handler.ExportCatalog(path)` writes the usage guide, tools, limits and every table (columns, types, keys, relations, allowed operations, descriptions) to disk, JSON for a `.json` path and Markdown otherwise. The file is replaced atomically. It lists every table with at least one allowed operation, regardless of caller, so keep it out of public directories. Call it after registering models (for example at startup, or from a `go generate` step).
+
 ## MCP Tools
 
 Fixed set, independent of the models. `table` is `schema.entity`. Errors return `{"success":false,"error":{"code","message"}}` with codes `invalid_argument`, `not_found`, `forbidden`, `limit_exceeded`, `internal` (internal details are logged, the client gets a reference id).

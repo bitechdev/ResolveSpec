@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/bitechdev/ResolveSpec/pkg/common"
+	"github.com/bitechdev/ResolveSpec/pkg/modelregistry"
 	"github.com/bitechdev/ResolveSpec/pkg/reflection"
 )
 
@@ -30,6 +31,7 @@ type columnInfo struct {
 	isUnique  bool
 	isFK      bool
 	nullable  bool
+	comment   string // from struct tags (gorm/bun comment:, comment/note/desc tags)
 }
 
 // buildModelInfo extracts column metadata and pre-builds the schema documentation string.
@@ -100,7 +102,12 @@ func buildModelInfo(schema, entity string, model interface{}) modelInfo {
 		isPrimary := d.SQLKey == "primary_key" ||
 			(info.pkName != "" && (sqlName == info.pkName || jsonName == info.pkName))
 
+		comment := ""
+		if found {
+			comment = modelregistry.FieldComment(fieldType)
+		}
 		ci := columnInfo{
+			comment:   comment,
 			jsonName:  jsonName,
 			sqlName:   sqlName,
 			goType:    goType,

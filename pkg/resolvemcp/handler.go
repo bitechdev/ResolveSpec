@@ -43,7 +43,7 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		db:        db,
 		registry:  registry,
 		hooks:     NewHookRegistry(),
-		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0"),
+		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0", server.WithInstructions(usageGuide)),
 		config:    cfg.withDefaults(),
 		confirms:  newConfirmStore(),
 		name:      "resolvemcp",

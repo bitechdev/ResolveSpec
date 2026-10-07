@@ -41,6 +41,7 @@ func DefaultModelRules() ModelRules {
 type DefaultModelRegistry struct {
 	models map[string]interface{}
 	rules  map[string]ModelRules
+	info   map[string]ModelInfo
 	mutex  sync.RWMutex
 }
 

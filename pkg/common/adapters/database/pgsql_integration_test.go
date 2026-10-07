@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package database
@@ -18,11 +19,11 @@ import (
 
 // Integration test models
 type IntegrationUser struct {
-	ID        int       `db:"id"`
-	Name      string    `db:"name"`
-	Email     string    `db:"email"`
-	Age       int       `db:"age"`
-	CreatedAt time.Time `db:"created_at"`
+	ID        int                `db:"id"`
+	Name      string             `db:"name"`
+	Email     string             `db:"email"`
+	Age       int                `db:"age"`
+	CreatedAt time.Time          `db:"created_at"`
 	Posts     []*IntegrationPost `bun:"rel:has-many,join:id=user_id"`
 }
 
@@ -46,10 +47,10 @@ func (p IntegrationPost) TableName() string {
 }
 
 type IntegrationComment struct {
-	ID        int       `db:"id"`
-	Content   string    `db:"content"`
-	PostID    int       `db:"post_id"`
-	CreatedAt time.Time `db:"created_at"`
+	ID        int              `db:"id"`
+	Content   string           `db:"content"`
+	PostID    int              `db:"post_id"`
+	CreatedAt time.Time        `db:"created_at"`
 	Post      *IntegrationPost `bun:"rel:belongs-to,join:post_id=id"`
 }
 

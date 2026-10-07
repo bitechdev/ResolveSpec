@@ -25,10 +25,10 @@ func newMockDatabase() *mockDatabase {
 	}
 }
 
-func (m *mockDatabase) NewSelect() SelectQuery                       { return &mockSelectQuery{} }
-func (m *mockDatabase) NewInsert() InsertQuery                       { return &mockInsertQuery{db: m} }
-func (m *mockDatabase) NewUpdate() UpdateQuery                       { return &mockUpdateQuery{db: m} }
-func (m *mockDatabase) NewDelete() DeleteQuery                       { return &mockDeleteQuery{db: m} }
+func (m *mockDatabase) NewSelect() SelectQuery { return &mockSelectQuery{} }
+func (m *mockDatabase) NewInsert() InsertQuery { return &mockInsertQuery{db: m} }
+func (m *mockDatabase) NewUpdate() UpdateQuery { return &mockUpdateQuery{db: m} }
+func (m *mockDatabase) NewDelete() DeleteQuery { return &mockDeleteQuery{db: m} }
 func (m *mockDatabase) RunInTransaction(ctx context.Context, fn func(Database) error) error {
 	return fn(m)
 }
@@ -57,27 +57,31 @@ func (m *mockDatabase) DriverName() string {
 // Mock SelectQuery
 type mockSelectQuery struct{}
 
-func (m *mockSelectQuery) Model(model interface{}) SelectQuery                { return m }
-func (m *mockSelectQuery) Table(name string) SelectQuery                      { return m }
-func (m *mockSelectQuery) Column(columns ...string) SelectQuery               { return m }
-func (m *mockSelectQuery) ColumnExpr(query string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) Where(condition string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) WhereOr(query string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) Join(query string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) LeftJoin(query string, args ...interface{}) SelectQuery { return m }
+func (m *mockSelectQuery) Model(model interface{}) SelectQuery                            { return m }
+func (m *mockSelectQuery) Table(name string) SelectQuery                                  { return m }
+func (m *mockSelectQuery) Column(columns ...string) SelectQuery                           { return m }
+func (m *mockSelectQuery) ColumnExpr(query string, args ...interface{}) SelectQuery       { return m }
+func (m *mockSelectQuery) Where(condition string, args ...interface{}) SelectQuery        { return m }
+func (m *mockSelectQuery) WhereOr(query string, args ...interface{}) SelectQuery          { return m }
+func (m *mockSelectQuery) Join(query string, args ...interface{}) SelectQuery             { return m }
+func (m *mockSelectQuery) LeftJoin(query string, args ...interface{}) SelectQuery         { return m }
 func (m *mockSelectQuery) Preload(relation string, conditions ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) PreloadRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery { return m }
-func (m *mockSelectQuery) JoinRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery { return m }
-func (m *mockSelectQuery) Order(order string) SelectQuery                     { return m }
-func (m *mockSelectQuery) OrderExpr(order string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) Limit(n int) SelectQuery                            { return m }
-func (m *mockSelectQuery) Offset(n int) SelectQuery                           { return m }
-func (m *mockSelectQuery) Group(group string) SelectQuery                     { return m }
+func (m *mockSelectQuery) PreloadRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery {
+	return m
+}
+func (m *mockSelectQuery) JoinRelation(relation string, apply ...func(SelectQuery) SelectQuery) SelectQuery {
+	return m
+}
+func (m *mockSelectQuery) Order(order string) SelectQuery                           { return m }
+func (m *mockSelectQuery) OrderExpr(order string, args ...interface{}) SelectQuery  { return m }
+func (m *mockSelectQuery) Limit(n int) SelectQuery                                  { return m }
+func (m *mockSelectQuery) Offset(n int) SelectQuery                                 { return m }
+func (m *mockSelectQuery) Group(group string) SelectQuery                           { return m }
 func (m *mockSelectQuery) Having(condition string, args ...interface{}) SelectQuery { return m }
-func (m *mockSelectQuery) Scan(ctx context.Context, dest interface{}) error  { return nil }
-func (m *mockSelectQuery) ScanModel(ctx context.Context) error               { return nil }
-func (m *mockSelectQuery) Count(ctx context.Context) (int, error)            { return 0, nil }
-func (m *mockSelectQuery) Exists(ctx context.Context) (bool, error)          { return false, nil }
+func (m *mockSelectQuery) Scan(ctx context.Context, dest interface{}) error         { return nil }
+func (m *mockSelectQuery) ScanModel(ctx context.Context) error                      { return nil }
+func (m *mockSelectQuery) Count(ctx context.Context) (int, error)                   { return 0, nil }
+func (m *mockSelectQuery) Exists(ctx context.Context) (bool, error)                 { return false, nil }
 
 // Mock InsertQuery
 type mockInsertQuery struct {
@@ -98,9 +102,9 @@ func (m *mockInsertQuery) Value(column string, value interface{}) InsertQuery {
 	m.values[column] = value
 	return m
 }
-func (m *mockInsertQuery) OnConflict(action string) InsertQuery { return m }
+func (m *mockInsertQuery) OnConflict(action string) InsertQuery        { return m }
 func (m *mockInsertQuery) ExcludeColumn(columns ...string) InsertQuery { return m }
-func (m *mockInsertQuery) Returning(columns ...string) InsertQuery { return m }
+func (m *mockInsertQuery) Returning(columns ...string) InsertQuery     { return m }
 func (m *mockInsertQuery) Exec(ctx context.Context) (Result, error) {
 	m.db.insertCalls = append(m.db.insertCalls, m.values)
 	m.db.lastID++
@@ -132,8 +136,8 @@ func (m *mockUpdateQuery) SetMap(values map[string]interface{}) UpdateQuery {
 	return m
 }
 func (m *mockUpdateQuery) Where(condition string, args ...interface{}) UpdateQuery { return m }
-func (m *mockUpdateQuery) ExcludeColumn(columns ...string) UpdateQuery { return m }
-func (m *mockUpdateQuery) Returning(columns ...string) UpdateQuery { return m }
+func (m *mockUpdateQuery) ExcludeColumn(columns ...string) UpdateQuery             { return m }
+func (m *mockUpdateQuery) Returning(columns ...string) UpdateQuery                 { return m }
 func (m *mockUpdateQuery) Exec(ctx context.Context) (Result, error) {
 	// Record the update call
 	m.db.updateCalls = append(m.db.updateCalls, m.setValues)
@@ -171,9 +175,13 @@ func (m *mockResult) RowsAffected() int64          { return m.rowsAffected }
 type mockModelRegistry struct{}
 
 func (m *mockModelRegistry) GetModel(name string) (interface{}, error) { return nil, nil }
-func (m *mockModelRegistry) GetModelByEntity(schema, entity string) (interface{}, error) { return nil, nil }
+func (m *mockModelRegistry) GetModelByEntity(schema, entity string) (interface{}, error) {
+	return nil, nil
+}
 func (m *mockModelRegistry) RegisterModel(name string, model interface{}) error { return nil }
-func (m *mockModelRegistry) GetAllModels() map[string]interface{} { return make(map[string]interface{}) }
+func (m *mockModelRegistry) GetAllModels() map[string]interface{} {
+	return make(map[string]interface{})
+}
 
 // Mock RelationshipInfoProvider
 type mockRelationshipProvider struct {
@@ -198,9 +206,9 @@ func (m *mockRelationshipProvider) RegisterRelation(modelTypeName, relationName 
 
 // Test Models
 type Department struct {
-	ID        int64        `json:"id" bun:"id,pk"`
-	Name      string       `json:"name"`
-	Employees []*Employee  `json:"employees,omitempty"`
+	ID        int64       `json:"id" bun:"id,pk"`
+	Name      string      `json:"name"`
+	Employees []*Employee `json:"employees,omitempty"`
 }
 
 func (d Department) TableName() string { return "departments" }
@@ -227,9 +235,9 @@ func (t Task) TableName() string { return "tasks" }
 func (t Task) GetIDName() string { return "ID" }
 
 type Comment struct {
-	ID      int64  `json:"id" bun:"id,pk"`
-	Text    string `json:"text"`
-	TaskID  int64  `json:"task_id"`
+	ID     int64  `json:"id" bun:"id,pk"`
+	Text   string `json:"text"`
+	TaskID int64  `json:"task_id"`
 }
 
 func (c Comment) TableName() string { return "comments" }

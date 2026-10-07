@@ -26,11 +26,11 @@ func (u TestUser) TableName() string {
 }
 
 type TestPost struct {
-	ID       int        `db:"id"`
-	Title    string     `db:"title"`
-	Content  string     `db:"content"`
-	UserID   int        `db:"user_id"`
-	User     *TestUser  `bun:"rel:belongs-to,join:user_id=id"`
+	ID       int           `db:"id"`
+	Title    string        `db:"title"`
+	Content  string        `db:"content"`
+	UserID   int           `db:"user_id"`
+	User     *TestUser     `bun:"rel:belongs-to,join:user_id=id"`
 	Comments []TestComment `bun:"rel:has-many,join:id=post_id"`
 }
 

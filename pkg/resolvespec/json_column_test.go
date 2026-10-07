@@ -142,7 +142,7 @@ func TestApplyFilter_JSONColumn(t *testing.T) {
 	q := &jsonCapQuery{}
 	h.applyFilter(q, common.FilterOption{
 		Column: "data->>'tier'", Operator: "in", Value: []string{"a", "b"}, LogicOperator: "OR",
-	}, model)
+	}, model, "")
 	c := q.only(t)
 	if c.method != "WhereOr" || c.query != `("data" #>> ?::text[]) IN (?,?)` {
 		t.Fatalf("call = %+v", c)

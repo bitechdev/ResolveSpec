@@ -164,6 +164,9 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	// Parse options from headers - this now includes relation name resolution
 	options := h.parseOptionsFromHeaders(r, model)
 
+	// Accept "<main table or alias>.<column>" for model columns before validation drops them
+	common.NormalizeMainTableFilters(model, tableName, &options.RequestOptions)
+
 	// Validate and filter columns in options (log warnings for invalid columns)
 	validator := common.NewColumnValidator(model)
 	options = h.filterExtendedOptions(validator, options, model)

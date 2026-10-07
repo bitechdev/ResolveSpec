@@ -172,6 +172,9 @@ func (h *Handler) Handle(w common.ResponseWriter, r common.Request, params map[s
 	// Add request-scoped data to context
 	ctx = WithRequestData(ctx, schema, entity, tableName, model, modelPtr)
 
+	// Accept "<main table or alias>.<column>" for model columns before validation drops them
+	common.NormalizeMainTableFilters(model, tableName, &req.Options)
+
 	// Validate and filter columns in options (log warnings for invalid columns)
 	validator := common.NewColumnValidator(model)
 	req.Options = validator.FilterRequestOptions(req.Options)
@@ -411,7 +414,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 		}
 
 		// Apply filters with proper grouping for OR logic
-		query = h.applyFilters(query, options.Filters, model)
+		query = h.applyFilters(query, options.Filters, model, common.MainTableAlias(model, tableName))
 
 		// Apply custom operators
 		for _, customOp := range options.CustomOperators {
@@ -558,7 +561,7 @@ func (h *Handler) handleRead(ctx context.Context, w common.ResponseWriter, id st
 
 			// Apply the same filters as the main query
 			for _, filter := range options.Filters {
-				rowNumQuery = h.applyFilter(rowNumQuery, filter, model)
+				rowNumQuery = h.applyFilter(rowNumQuery, filter, model, common.MainTableAlias(model, tableName))
 			}
 
 			// Apply custom operators
@@ -1932,7 +1935,7 @@ func (h *Handler) executeDelete(ctx context.Context, tx common.Database, hookCtx
 // applyFilters applies all filters with proper grouping for OR logic
 // Groups consecutive OR filters together to ensure proper query precedence
 // Example: [A, B(OR), C(OR), D(AND)] => WHERE (A OR B OR C) AND D
-func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
+func (h *Handler) applyFilters(query common.SelectQuery, filters []common.FilterOption, model interface{}, alias string) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
@@ -1952,11 +1955,11 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 			}
 
 			// Apply the OR group as a single grouped WHERE clause
-			query = h.applyFilterGroup(query, orGroup, model)
+			query = h.applyFilterGroup(query, orGroup, model, alias)
 			i = j
 		} else {
 			// Single filter with AND logic (or first filter)
-			condition, args := h.buildFilterCondition(filters[i], model)
+			condition, args := h.buildFilterConditionAlias(filters[i], model, alias)
 			if condition != "" {
 				query = query.Where(condition, args...)
 			}
@@ -1969,7 +1972,7 @@ func (h *Handler) applyFilters(query common.SelectQuery, filters []common.Filter
 
 // applyFilterGroup applies a group of filters that should be OR'd together
 // Always wraps them in parentheses and applies as a single WHERE clause
-func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption, model interface{}) common.SelectQuery {
+func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.FilterOption, model interface{}, alias string) common.SelectQuery {
 	if len(filters) == 0 {
 		return query
 	}
@@ -1979,7 +1982,7 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 	var args []interface{}
 
 	for _, filter := range filters {
-		condition, filterArgs := h.buildFilterCondition(filter, model)
+		condition, filterArgs := h.buildFilterConditionAlias(filter, model, alias)
 		if condition != "" {
 			conditions = append(conditions, condition)
 			args = append(args, filterArgs...)
@@ -2005,12 +2008,21 @@ func (h *Handler) applyFilterGroup(query common.SelectQuery, filters []common.Fi
 // or the dotted data.x shorthand for a JSON column) resolve to a safe,
 // parameterised expression before the ordinary operator handling below.
 func (h *Handler) buildFilterCondition(filter common.FilterOption, model interface{}) (conditionString string, conditionArgs []interface{}) {
+	return h.buildFilterConditionAlias(filter, model, "")
+}
+
+// buildFilterConditionAlias is buildFilterCondition with plain model columns
+// qualified by the main table alias, so joins from preloads can't make them ambiguous.
+func (h *Handler) buildFilterConditionAlias(filter common.FilterOption, model interface{}, alias string) (conditionString string, conditionArgs []interface{}) {
 	var condition string
 	var args []interface{}
 
 	if cond, jargs, ok := common.BuildJSONFilterCondition(model, "", filter.Column, filter.Operator, filter.Value); ok {
 		return cond, jargs
 	}
+
+	rawColumn := filter.Column
+	filter.Column = common.QualifyModelColumn(model, alias, filter.Column)
 
 	switch filter.Operator {
 	case "eq", "=":
@@ -2032,10 +2044,10 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption, model interfa
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, model))
+		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, rawColumn, model))
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, model))
+		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, rawColumn, model))
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)
@@ -2073,14 +2085,14 @@ func (h *Handler) buildFilterCondition(filter common.FilterOption, model interfa
 // CAST(... AS TEXT) would switch to case-sensitive matching and defeat a
 // citext index. Every other column is cast to TEXT so LIKE/ILIKE also works
 // against date/time/timestamp and numeric columns.
-func likeColumn(column string, model interface{}) string {
-	if reflection.IsCitextColumn(model, column) {
+func likeColumn(column, rawColumn string, model interface{}) string {
+	if reflection.IsCitextColumn(model, rawColumn) {
 		return column
 	}
 	return fmt.Sprintf("CAST(%s AS TEXT)", column)
 }
 
-func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, model interface{}) common.SelectQuery {
+func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOption, model interface{}, alias string) common.SelectQuery {
 	// Determine which method to use based on LogicOperator
 	useOrLogic := strings.EqualFold(filter.LogicOperator, "OR")
 
@@ -2093,6 +2105,9 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		}
 		return query.Where(cond, jargs...)
 	}
+
+	rawColumn := filter.Column
+	filter.Column = common.QualifyModelColumn(model, alias, filter.Column)
 
 	switch filter.Operator {
 	case "eq", "=":
@@ -2114,10 +2129,10 @@ func (h *Handler) applyFilter(query common.SelectQuery, filter common.FilterOpti
 		condition = fmt.Sprintf("%s <= ?", filter.Column)
 		args = []interface{}{filter.Value}
 	case "like":
-		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, model))
+		condition = fmt.Sprintf("%s LIKE ?", likeColumn(filter.Column, rawColumn, model))
 		args = []interface{}{filter.Value}
 	case "ilike":
-		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, model))
+		condition = fmt.Sprintf("%s ILIKE ?", likeColumn(filter.Column, rawColumn, model))
 		args = []interface{}{filter.Value}
 	case "in":
 		condition, args = common.BuildInCondition(filter.Column, filter.Value)
@@ -2523,7 +2538,7 @@ func (h *Handler) applyPreloads(model interface{}, query common.SelectQuery, pre
 
 			if len(preload.Filters) > 0 {
 				for _, filter := range preload.Filters {
-					sq = h.applyFilter(sq, filter, nil)
+					sq = h.applyFilter(sq, filter, nil, "")
 				}
 			}
 			if len(preload.Sort) > 0 {

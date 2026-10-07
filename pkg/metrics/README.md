@@ -48,10 +48,58 @@ metrics.SetProvider(provider)
 | `Namespace` | `string` | `""` | Prefix for all metric names |
 | `HTTPRequestBuckets` | `[]float64` | See below | Histogram buckets for HTTP duration (seconds) |
 | `DBQueryBuckets` | `[]float64` | See below | Histogram buckets for DB query duration (seconds) |
+| `HTTPMaxPaths` | `int` | `1024` | Max distinct `path` label values; extras become `"other"` (negative disables) |
+| `HTTPPathNormalizer` | `func(*http.Request) string` | `nil` | Custom request → `path` label mapping (return `""` to use the default) |
+
+**HTTP `path` label:** the middleware uses, in order: `HTTPPathNormalizer`, the matched `http.ServeMux` pattern (`r.Pattern`, e.g. `/users/{id}`), then the raw path with numeric/UUID/hex/opaque-token segments replaced by `:id`. For routers other than `ServeMux`, supply `HTTPPathNormalizer` with your route template. The `HTTPMaxPaths` cap applies on top.
 
 **Default HTTP Request Buckets:** `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]`
 
 **Default DB Query Buckets:** `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]`
+
+### Enabled flag and JSON pull
+
+`Config.Enabled` is honoured: a disabled provider records nothing, `Middleware` passes requests straight through, `Handler()`/`JSONHandler()` answer 404, and push loops are not started (manual pushes return an error). Note a `&metrics.Config{}` literal has `Enabled: false`; use `DefaultConfig()` or set `Enabled: true`. `NewPrometheusProvider(nil)` is enabled.
+
+`provider.JSONHandler()` serves the same JSON as the push `json` format on `GET`/`HEAD`:
+
+```go
+http.Handle("/metrics", provider.Handler())          // Prometheus text
+http.Handle("/metrics.json", provider.JSONHandler()) // JSON
+```
+
+### Resetting Stats
+
+- `provider.Reset()` clears counters, histograms and the cache-size gauge (live gauges such as in-flight requests are kept). Package-level `metrics.Reset()` does the same for the current provider if it implements `metrics.Resetter`.
+- `provider.PushAndReset()` pushes to the Pushgateway and resets only if the push succeeded (errors if no Pushgateway is configured).
+- `Config.PushgatewayResetOnPush: true` makes the automatic push loop do this on every tick.
+- `provider.ResetHandler()` is a `POST`-only endpoint (`?push=true` to push first). It has no auth: mount it on an internal route.
+
+```go
+http.Handle("/metrics/reset", provider.ResetHandler())
+```
+
+Note: the normal `/metrics` scrape is read-only and never clears anything. Observations recorded between a push and its reset are lost. Prometheus handles the counter drop as a reset, but if you reset often, prefer `increase()`/`rate()` over raw counter values.
+
+### Custom Push Endpoint (Optional)
+
+POST metrics to your own server, optionally clearing local stats after a 2xx reply:
+
+```go
+provider := metrics.NewPrometheusProvider(&metrics.Config{
+    PushEndpointURL:            "https://collector.example.com/metrics",
+    PushEndpointFormat:         "json", // or "text" (Prometheus exposition, default)
+    PushEndpointHeaders:        map[string]string{"Authorization": "Bearer token"},
+    PushEndpointInterval:       30,     // seconds; 0 = manual only
+    PushEndpointTimeout:        10,     // seconds (default 10)
+    PushEndpointResetOnSuccess: true,   // clear local stats after a 2xx
+})
+
+err := provider.PushToEndpoint(ctx) // manual push; also honours ResetOnSuccess
+provider.StopAutoPush()             // stops the Pushgateway and endpoint loops
+```
+
+The `json` body is a list of `{name, help, type, metrics:[{labels, value | count, sum, buckets}]}`. Failures (non-2xx, network, timeout) are logged and never reset stats, so the next tick retries with the accumulated data. The payload covers everything in the default Prometheus registry, including Go runtime metrics.
 
 ### Pushgateway Configuration (Optional)
 
@@ -457,10 +505,9 @@ scrape_configs:
    - ✅ Good: `method`, `status_code`
    - ❌ Bad: `user_id`, `timestamp`
 
-2. **Path Normalization**: Normalize dynamic paths
+2. **Path Normalization**: Done automatically for the `path` label (see Configuration Options)
    ```go
-   // Instead of /api/users/123
-   // Use /api/users/:id
+   // /api/users/123 is recorded as /api/users/:id
    ```
 
 3. **Metric Naming**: Follow Prometheus conventions

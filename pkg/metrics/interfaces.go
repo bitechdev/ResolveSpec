@@ -47,6 +47,21 @@ type Provider interface {
 	Handler() http.Handler
 }
 
+// Resetter is optionally implemented by providers that can clear their recorded stats.
+type Resetter interface {
+	Reset()
+}
+
+// Reset clears the current provider's stats if it supports resetting.
+// It returns false if the provider does not implement Resetter.
+func Reset() bool {
+	if r, ok := GetProvider().(Resetter); ok {
+		r.Reset()
+		return true
+	}
+	return false
+}
+
 // globalProvider is the global metrics provider, protected by globalProviderMu.
 var (
 	globalProviderMu sync.RWMutex

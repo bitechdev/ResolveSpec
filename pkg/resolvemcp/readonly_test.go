@@ -13,7 +13,7 @@ import (
 func newReadOnlyHandler(t *testing.T) *Handler {
 	t.Helper()
 	h := NewHandler(database.NewPgSQLAdapter(nil), modelregistry.NewModelRegistry(),
-		Config{ReadOnly: true, EnableAnnotations: true})
+		Config{EnableAnnotations: true})
 	if err := h.RegisterModel("public", "items", &docItem{}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func newFnHandler(t *testing.T, cfg Config) *Handler {
 }
 
 func TestReadOnlyAllowFunctionCalls(t *testing.T) {
-	h := newFnHandler(t, Config{ReadOnly: true, AllowFunctionCalls: true})
+	h := newFnHandler(t, Config{AllowFunctionCalls: true})
 	tools := h.mcpServer.ListTools()
 	if tools["list_functions"] == nil || tools["call_function"] == nil {
 		t.Error("function tools must be registered")
@@ -145,5 +145,24 @@ func TestAllowedFunctions(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestReadOnlyDefaultsOnAndCanBeDisabled(t *testing.T) {
+	if !(Config{}).withDefaults().readOnly {
+		t.Error("ReadOnly must default to on")
+	}
+	if !(Config{ReadOnly: Bool(true)}).withDefaults().readOnly {
+		t.Error("explicit true")
+	}
+	if (Config{ReadOnly: Bool(false)}).withDefaults().readOnly {
+		t.Error("Bool(false) must enable writes")
+	}
+	h := NewHandler(database.NewPgSQLAdapter(nil), modelregistry.NewModelRegistry(), Config{ReadOnly: Bool(false)})
+	if h.mcpServer.ListTools()["insert_into_table"] == nil {
+		t.Error("write tools must register when ReadOnly is Bool(false)")
+	}
+	if strings.Contains(h.BuildCatalog().Guide, "READ-ONLY") {
+		t.Error("guide must not claim read-only")
 	}
 }

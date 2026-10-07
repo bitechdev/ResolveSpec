@@ -145,8 +145,8 @@ func (h *Handler) BuildCatalog() Catalog {
 		GeneratedAt: time.Now().UTC(),
 		Server:      h.name,
 		Version:     h.version,
-		ReadOnly:    h.config.ReadOnly,
-		Guide:       guideFor(h.config.ReadOnly, h.config.AllowFunctionCalls),
+		ReadOnly:    h.config.readOnly,
+		Guide:       guideFor(h.config.readOnly, h.config.AllowFunctionCalls),
 		Limits: CatalogLimits{
 			DefaultLimit:    h.config.DefaultLimit,
 			MaxLimit:        h.config.MaxLimit,
@@ -179,7 +179,7 @@ func (h *Handler) BuildCatalog() Catalog {
 		for mt != nil && (mt.Kind() == reflect.Pointer || mt.Kind() == reflect.Slice) {
 			mt = mt.Elem()
 		}
-		if !h.config.ReadOnly && mt != nil && mt.Kind() == reflect.Struct {
+		if !h.config.readOnly && mt != nil && mt.Kind() == reflect.Struct {
 			for k := range reflectionJSONColumns(mt) {
 				writable[k] = true
 			}

@@ -191,7 +191,7 @@ func TestAnnotationToolIsOptIn(t *testing.T) {
 	if h.mcpServer.GetTool(annotationToolName) != nil {
 		t.Fatal("annotation tool must be off by default")
 	}
-	on := NewHandler(h.db, modelregistry.NewModelRegistry(), Config{EnableAnnotations: true})
+	on := NewHandler(h.db, modelregistry.NewModelRegistry(), Config{EnableAnnotations: true, ReadOnly: Bool(false)})
 	if on.mcpServer.GetTool(annotationToolName) == nil {
 		t.Fatal("annotation tool missing when enabled")
 	}

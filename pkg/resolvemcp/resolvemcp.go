@@ -51,17 +51,20 @@ type Config struct {
 	// host, with at most 32 distinct base URLs cached; prefer setting BaseURL.
 	AllowedHosts []string
 
-	// ReadOnly disables every write. The insert, update, delete and annotation tools are not
-	// registered, list_tables and describe_table report only the select operation (no
-	// writable columns), a write attempted anyway is refused with a "forbidden" error, and
-	// the server instructions tell the agent it cannot write. list_functions/call_function
-	// are also off, because a registered function may change data, unless AllowFunctionCalls
-	// is set.
-	ReadOnly bool
+	// ReadOnly disables every write and is ON when left nil: set it to Bool(false) to allow
+	// writes. When on, the insert, update, delete and annotation tools are not registered,
+	// list_tables and describe_table report only the select operation (no writable columns),
+	// a write attempted anyway is refused with a "forbidden" error, and the server
+	// instructions tell the agent it cannot write. list_functions/call_function are also
+	// off, because a registered function may change data, unless AllowFunctionCalls is set.
+	ReadOnly *bool
+
+	// readOnly is ReadOnly after defaults (nil means true).
+	readOnly bool
 
 	// AllowFunctionCalls keeps list_functions and call_function available on a ReadOnly
 	// server. Only set it for functions that do not change data; pair it with
-	// AllowedFunctions to name them. It has no effect when ReadOnly is false (functions are
+	// AllowedFunctions to name them. It has no effect when writes are enabled (ReadOnly set to Bool(false)) (functions are
 	// always available then).
 	AllowFunctionCalls bool
 
@@ -76,6 +79,9 @@ type Config struct {
 	// "annotate_set" / "annotate_get") and the writes run in a transaction with OnTxBegin.
 	EnableAnnotations bool
 }
+
+// Bool returns a pointer to v, for the optional boolean fields of Config.
+func Bool(v bool) *bool { return &v }
 
 // withDefaults fills the zero limit fields.
 func (c Config) withDefaults() Config {
@@ -93,6 +99,7 @@ func (c Config) withDefaults() Config {
 	if c.DefaultLimit > c.MaxLimit {
 		c.DefaultLimit = c.MaxLimit
 	}
+	c.readOnly = c.ReadOnly == nil || *c.ReadOnly
 	if c.QueryTimeout <= 0 {
 		c.QueryTimeout = 30 * time.Second
 	}

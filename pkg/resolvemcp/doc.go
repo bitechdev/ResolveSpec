@@ -17,6 +17,9 @@
 //
 // The same guide is sent to MCP clients as the server instructions.
 //
+// The server is read-only by default (Config.ReadOnly nil means on); set
+// ReadOnly: resolvemcp.Bool(false) to enable the write tools.
+//
 // # Setting it up
 //
 //	handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{BaseURL: "http://localhost:8080"})

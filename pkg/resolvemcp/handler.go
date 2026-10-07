@@ -44,7 +44,7 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		db:        db,
 		registry:  registry,
 		hooks:     NewHookRegistry(),
-		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0", server.WithInstructions(guideFor(cfg.ReadOnly, cfg.AllowFunctionCalls))),
+		mcpServer: server.NewMCPServer("resolvemcp", "1.0.0", server.WithInstructions(guideFor(cfg.withDefaults().readOnly, cfg.AllowFunctionCalls))),
 		config:    cfg.withDefaults(),
 		confirms:  newConfirmStore(),
 		name:      "resolvemcp",
@@ -57,7 +57,7 @@ func NewHandler(db common.Database, registry common.ModelRegistry, cfg Config) *
 		}
 	}
 	registerMetaTools(h)
-	if cfg.EnableAnnotations && !cfg.ReadOnly {
+	if cfg.EnableAnnotations && !h.config.readOnly {
 		registerAnnotationTool(h)
 	}
 	return h

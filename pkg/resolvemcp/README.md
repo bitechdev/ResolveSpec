@@ -16,6 +16,8 @@ import (
 handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{
     BaseURL:  "http://localhost:8080",
     BasePath: "/mcp",
+    // Read-only by default; uncomment to allow writes:
+    // ReadOnly: resolvemcp.Bool(false),
 })
 
 securityList, _ := security.NewSecurityList(provider)
@@ -444,11 +446,13 @@ The text appears in `list_tables` and `describe_table`. The server also sends a 
 
 ## Read-only mode
 
-Set `Config.ReadOnly: true` to disable every write:
+The server is **read-only unless you enable writes**: `Config.ReadOnly` is a `*bool` and an unset (nil) value means on. To allow inserts, updates and deletes:
 
 ```go
-handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{ReadOnly: true})
+handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{ReadOnly: resolvemcp.Bool(false)})
 ```
+
+While read-only is on:
 
 - The insert, update, delete and annotation tools are not registered, so the agent never sees them. `list_functions`/`call_function` are off too, because a registered function may change data, unless you set `AllowFunctionCalls` (below).
 - `list_tables` and `describe_table` report only `select`; `describe_table` also sets `read_only: true` and lists no writable columns.
@@ -460,14 +464,14 @@ handler := resolvemcp.NewHandlerWithGORM(db, resolvemcp.Config{ReadOnly: true})
 ```go
 // Read-only server that may still run two named functions
 resolvemcp.Config{
-    ReadOnly:           true,
+    // ReadOnly is on by default
     AllowFunctionCalls: true, // keep list_functions / call_function on a read-only server
     AllowedFunctions:   []string{"report_totals", "search_customers"},
 }
 ```
 
-- `AllowFunctionCalls` only matters with `ReadOnly`; without it, functions are always available. Set it only for functions that do not change data.
-- `AllowedFunctions` works with or without `ReadOnly`. When empty, every registered function is allowed. When set, only the named functions are listed and callable; any other is reported as `unknown function`, so its existence is not revealed. Per-function `Authorize` still applies on top.
+- `AllowFunctionCalls` only matters while read-only is on; with writes enabled (`ReadOnly: resolvemcp.Bool(false)`), functions are always available. Set it only for functions that do not change data.
+- `AllowedFunctions` works in either mode. When empty, every registered function is allowed. When set, only the named functions are listed and callable; any other is reported as `unknown function`, so its existence is not revealed. Per-function `Authorize` still applies on top.
 
 ## MCP Tools
 
@@ -729,6 +733,7 @@ The handler resolves table names in priority order:
 
 ## Breaking changes
 
+- The server is read-only by default. Writes (insert/update/delete), annotations and function calls need `Config{ReadOnly: resolvemcp.Bool(false)}` (function calls can also be kept on a read-only server with `AllowFunctionCalls`).
 - Per-model tools (`read_/create_/update_/delete_{schema}_{entity}`) and per-model resources are gone; use the meta tools.
 - `Setup*` / `NewSSEServer` / `NewStreamableHTTPHandler` take a `*security.SecurityList` and require authentication. `OptionalAuth*` helpers were removed; `*Unauthenticated` variants exist for explicit opt-out.
 - `resolvespec_annotate` is opt-in via `Config.EnableAnnotations`.

@@ -29,7 +29,7 @@ func newTxHarness(t *testing.T) (*Handler, sqlmock.Sqlmock, context.Context) {
 	// connection and fails on the context timeout.
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	h := NewHandler(database.NewPgSQLAdapter(db), modelregistry.NewModelRegistry(), Config{})
+	h := NewHandler(database.NewPgSQLAdapter(db), modelregistry.NewModelRegistry(), Config{ReadOnly: Bool(false)})
 	if err := h.RegisterModel("public", "items", &txItem{}); err != nil {
 		t.Fatal(err)
 	}

@@ -56,10 +56,10 @@ func registerMetaTools(h *Handler) {
 		mcp.WithBoolean("include_count", mcp.Description("Also return the total number of matching rows (slower on large tables).")),
 	), h.handleSelect)
 
-	if !h.config.ReadOnly {
+	if !h.config.readOnly {
 		registerWriteTools(h, tableArg, idArg, filtersArg, dryRunArg, confirmArg)
 	}
-	if !h.config.ReadOnly || h.config.AllowFunctionCalls {
+	if !h.config.readOnly || h.config.AllowFunctionCalls {
 		registerFunctionTools(h, readOnly)
 	}
 }
@@ -130,7 +130,7 @@ func (h *Handler) opsFor(r modelregistry.ModelRules) []string {
 	if r.CanRead {
 		ops = append(ops, opSelect)
 	}
-	if h.config.ReadOnly {
+	if h.config.readOnly {
 		return ops
 	}
 	if r.CanCreate {
@@ -157,7 +157,7 @@ func (h *Handler) resolveTable(args map[string]any, op string) (schema, entity s
 	if _, err := h.registry.GetModelByEntity(schema, entity); err != nil {
 		return "", "", invalidArg("unknown table %q; see list_tables", truncate(table))
 	}
-	if op != "" && op != opSelect && h.config.ReadOnly {
+	if op != "" && op != opSelect && h.config.readOnly {
 		return "", "", NewClientError(CodeForbidden, "this server is read-only: writes are disabled")
 	}
 	if op != "" {
@@ -212,7 +212,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		modelType = modelType.Elem()
 	}
 	writable := map[string]bool{}
-	if !h.config.ReadOnly && modelType != nil && modelType.Kind() == reflect.Struct {
+	if !h.config.readOnly && modelType != nil && modelType.Kind() == reflect.Struct {
 		for jsonKey := range reflection.BuildJSONToDBColumnMap(modelType) {
 			writable[jsonKey] = true
 		}
@@ -251,7 +251,7 @@ func (h *Handler) handleDescribeTable(_ context.Context, req mcp.CallToolRequest
 		"relations":        info.relationNames,
 		"writable_columns": writableNames,
 		"operations":       h.opsFor(rules),
-		"read_only":        h.config.ReadOnly,
+		"read_only":        h.config.readOnly,
 		"filter_operators": filterOperators,
 		"limits": map[string]any{
 			"default_limit":     h.config.DefaultLimit,

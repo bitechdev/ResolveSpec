@@ -47,6 +47,14 @@ type Provider interface {
 	Handler() http.Handler
 }
 
+// AIProxyRecorder is optionally implemented by providers that record aiproxy traffic.
+// pkg/aiproxy uses it when the global provider implements it.
+type AIProxyRecorder interface {
+	// RecordAIProxy records one proxied (or refused) request. statusClass is "2xx".."5xx",
+	// outcome is ok, upstream_error, denied or rate_limited, model may be empty.
+	RecordAIProxy(upstream, kind, model, statusClass, outcome string, duration time.Duration, promptTokens, completionTokens int64)
+}
+
 // Resetter is optionally implemented by providers that can clear their recorded stats.
 type Resetter interface {
 	Reset()

@@ -32,6 +32,9 @@ type PrometheusProvider struct {
 	eventDuration    *prometheus.HistogramVec
 	eventQueueSize   prometheus.Gauge
 	panicsTotal      *prometheus.CounterVec
+	aiRequests       *prometheus.CounterVec
+	aiDuration       *prometheus.HistogramVec
+	aiTokens         *prometheus.CounterVec
 
 	pathLimiter    *pathLimiter
 	pathNormalizer func(*http.Request) string
@@ -161,6 +164,28 @@ func NewPrometheusProvider(cfg *Config) *PrometheusProvider {
 				Help: "Total number of panics",
 			},
 			[]string{"method"},
+		),
+		aiRequests: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: metricName("aiproxy_requests_total"),
+				Help: "Total number of requests handled by the AI proxy",
+			},
+			[]string{"upstream", "kind", "model", "status", "outcome"},
+		),
+		aiDuration: promauto.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    metricName("aiproxy_request_duration_seconds"),
+				Help:    "AI proxy request duration in seconds",
+				Buckets: cfg.HTTPRequestBuckets,
+			},
+			[]string{"upstream", "kind"},
+		),
+		aiTokens: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: metricName("aiproxy_tokens_total"),
+				Help: "Tokens reported by AI proxy upstreams",
+			},
+			[]string{"upstream", "model", "type"},
 		),
 
 		pathLimiter:    newPathLimiter(cfg.HTTPMaxPaths),
@@ -310,6 +335,21 @@ func (p *PrometheusProvider) RecordPanic(methodName string) {
 	p.panicsTotal.WithLabelValues(methodName).Inc()
 }
 
+// RecordAIProxy implements AIProxyRecorder
+func (p *PrometheusProvider) RecordAIProxy(upstream, kind, model, statusClass, outcome string, duration time.Duration, promptTokens, completionTokens int64) {
+	if !p.enabled {
+		return
+	}
+	p.aiRequests.WithLabelValues(upstream, kind, model, statusClass, outcome).Inc()
+	p.aiDuration.WithLabelValues(upstream, kind).Observe(duration.Seconds())
+	if promptTokens > 0 {
+		p.aiTokens.WithLabelValues(upstream, model, "prompt").Add(float64(promptTokens))
+	}
+	if completionTokens > 0 {
+		p.aiTokens.WithLabelValues(upstream, model, "completion").Add(float64(completionTokens))
+	}
+}
+
 // Handler implements Provider interface
 // It responds 404 when metrics are disabled.
 func (p *PrometheusProvider) Handler() http.Handler {
@@ -437,6 +477,9 @@ func (p *PrometheusProvider) Reset() {
 	p.eventProcessed.Reset()
 	p.eventDuration.Reset()
 	p.panicsTotal.Reset()
+	p.aiRequests.Reset()
+	p.aiDuration.Reset()
+	p.aiTokens.Reset()
 	p.pathLimiter.reset()
 }
 
